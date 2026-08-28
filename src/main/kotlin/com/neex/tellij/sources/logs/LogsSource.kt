@@ -95,6 +95,8 @@ class PodmanTailStep(private val container: String, private val filter: LogFilte
         val deadline = System.currentTimeMillis() + windowMs
         var matched = 0
         var lastRaw: String? = null
+        val grouper = EntryGrouper(filter)
+        fun emit(lines: List<String>) { for (l in lines) { out.appendLine(l); matched++ } }
         try {
             while (!ctx.isCancelled) {
                 val left = deadline - System.currentTimeMillis()
@@ -102,15 +104,18 @@ class PodmanTailStep(private val container: String, private val filter: LogFilte
                 val line = queue.poll(minOf(100L, left), TimeUnit.MILLISECONDS)
                 if (line != null) {
                     lastRaw = line
-                    if (filter.matches(line)) { out.appendLine(line); matched++ }
+                    emit(grouper.feed(line))
                 } else if (!process.isAlive && queue.isEmpty()) {
                     // The container stopping ends the follow with 0; anything else is podman complaining.
                     if (process.exitValue() != 0) {
                         throw StepError("podman logs exited with ${process.exitValue()}: ${lastRaw ?: ""}".trim(), "podman ps --filter name=$container")
                     }
                     break
+                } else {
+                    emit(grouper.flush())
                 }
             }
+            if (!ctx.isCancelled) emit(grouper.flush())
         } finally {
             process.destroyForcibly()
             reader.join(1000)

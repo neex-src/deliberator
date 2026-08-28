@@ -29,6 +29,11 @@ dependencies {
         pluginVerifier()
     }
     testImplementation("junit:junit:4.13.2")
+
+    // Client libraries, packed into the plugin. Kept lean on purpose (see DECISIONS.md).
+    implementation("org.postgresql:postgresql:42.7.7") {
+        exclude(group = "org.checkerframework")
+    }
 }
 
 intellijPlatform {

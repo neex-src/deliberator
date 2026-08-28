@@ -25,24 +25,52 @@ class LogFilter(private val matchers: List<(String) -> Boolean>) {
 }
 
 /**
+ * Groups a header line with the indented lines that follow it (a Postgres statement, a Java stack
+ * trace) so the filter sees — and the buffer shows — whole entries. An entry completes when the
+ * next non-indented line arrives or when the source goes idle ([flush]).
+ */
+class EntryGrouper(private val filter: LogFilter) {
+    private val pending = ArrayList<String>()
+
+    fun feed(line: String): List<String> {
+        if (pending.isNotEmpty() && line.isNotEmpty() && (line[0] == ' ' || line[0] == '\t')) {
+            pending += line
+            return emptyList()
+        }
+        val out = flush()
+        pending += line
+        return out
+    }
+
+    fun flush(): List<String> {
+        if (pending.isEmpty()) return emptyList()
+        val entry = pending.toList()
+        pending.clear()
+        return if (entry.any { filter.matches(it) }) entry else emptyList()
+    }
+}
+
+/**
  * Offset-armed tail of a growing file. [arm] remembers the current size; every [poll] returns the
  * complete lines appended since. A file that shrank was rotated or truncated — we restart from 0.
  * Bytes after the last newline wait in [partial] until their line completes.
  */
-class FileTail(val path: Path, private val filter: LogFilter = LogFilter.ALL) {
+class FileTail(val path: Path, filter: LogFilter = LogFilter.ALL) {
     private var offset = 0L
     private val partial = StringBuilder()
+    private val grouper = EntryGrouper(filter)
 
     fun arm() {
         offset = if (Files.isRegularFile(path)) Files.size(path) else 0L
         partial.setLength(0)
     }
 
+    /** New complete entries; a poll that finds nothing new completes the entry in progress. */
     fun poll(): List<String> {
-        if (!Files.isRegularFile(path)) return emptyList()
+        if (!Files.isRegularFile(path)) return grouper.flush()
         val size = Files.size(path)
         if (size < offset) { offset = 0; partial.setLength(0) }
-        if (size == offset) return emptyList()
+        if (size == offset) return grouper.flush()
         val bytes = ByteArray((size - offset).toInt())
         RandomAccessFile(path.toFile(), "r").use { raf ->
             raf.seek(offset)
@@ -56,7 +84,7 @@ class FileTail(val path: Path, private val filter: LogFilter = LogFilter.ALL) {
             if (nl < 0) break
             val line = partial.substring(0, nl).trimEnd('\r')
             partial.delete(0, nl + 1)
-            if (filter.matches(line)) out += line
+            out += grouper.feed(line)
         }
         return out
     }

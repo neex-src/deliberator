@@ -5,6 +5,8 @@
 # @connect kafka local bootstrap=localhost:9092 simulate=true latency=400ms
 # @connect logs consumer file=logs/consumer.log
 # @connect logs echo podman=tellij-echo
+# @connect sql pg url=jdbc:postgresql://localhost:5432/demo user=demo password={{env.PG_PASSWORD}}
+# @connect logs pg podman=tellij-pg
 
 ### kafka orders
 # @key {{orderId}}
@@ -13,6 +15,19 @@
 ### logs consumer
 # @filter {{orderId}}
 # @for 8s
+
+### sql pg seed — what the consumer would have stored
+insert into orders (id, customer, amount, source)
+values ('{{orderId}}', '{{customer}}', 42.5, 'workbench')
+on conflict (id) do nothing
+
+### sql pg
+# @limit 20
+select id, customer, amount, source, received_at from orders where id = '{{orderId}}'
+
+### logs pg
+# @filter {{orderId}}
+# @for 6s
 
 ### kafka payments
 { "orderId": "{{orderId}}", "status": "PAID", "paidAt": "{{now}}" }
