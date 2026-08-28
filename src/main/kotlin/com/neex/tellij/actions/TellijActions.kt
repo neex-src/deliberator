@@ -54,6 +54,31 @@ class ClearResultsAction : TellijAction() {
     override fun perform(editor: Editor) = WorkbenchService.clearResults(editor)
 }
 
+class ClearBlockResultAction : TellijAction() {
+    override fun perform(editor: Editor) = WorkbenchService.clearBlockResult(editor)
+}
+
+class RunFromCaretAction : TellijAction() {
+    override fun perform(editor: Editor) = WorkbenchService.runFromCaret(editor)
+}
+
+class CollapseResultsAction : TellijAction() {
+    override fun perform(editor: Editor) = WorkbenchService.setAllResultsExpanded(editor, false)
+}
+
+class ExpandResultsAction : TellijAction() {
+    override fun perform(editor: Editor) = WorkbenchService.setAllResultsExpanded(editor, true)
+}
+
+/** The "Tellij" submenu of the editor's right-click menu; only shows up in `.tellij` editors. */
+class TellijEditorMenu : com.intellij.openapi.actionSystem.DefaultActionGroup(), DumbAware {
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+    override fun update(e: AnActionEvent) {
+        val editor = e.getData(CommonDataKeys.EDITOR)
+        e.presentation.isEnabledAndVisible = editor != null && WorkbenchService.isTellij(editor)
+    }
+}
+
 /**
  * Ctrl+Enter is also EditorSplitLine's chord. Inside a `.tellij` editor our actions win; anywhere
  * else the promoter stays out of the way.
@@ -66,12 +91,19 @@ class TellijActionPromoter : ActionPromoter {
     }
 }
 
-/** Esc stops a live run in this document; with nothing running, stock Esc is untouched. */
+/**
+ * Esc stops a live run in this document; with nothing running it collapses the result section
+ * under the caret; otherwise stock Esc is untouched.
+ */
 class TellijEscapeHandler(private val original: EditorActionHandler) : EditorActionHandler() {
     override fun doExecute(editor: Editor, caret: Caret?, dataContext: DataContext?) {
-        if (!WorkbenchService.stop(editor)) original.execute(editor, caret, dataContext)
+        if (WorkbenchService.stop(editor)) return
+        if (WorkbenchService.isTellij(editor) && WorkbenchService.collapseResultAtCaret(editor)) return
+        original.execute(editor, caret, dataContext)
     }
 
     override fun isEnabledForCaret(editor: Editor, caret: Caret, dataContext: DataContext?): Boolean =
-        RunSession.liveFor(editor.document) != null || original.isEnabled(editor, caret, dataContext)
+        RunSession.liveFor(editor.document) != null ||
+            (WorkbenchService.isTellij(editor) && com.neex.tellij.editor.TellijFoldingBuilder.regionAt(editor, caret.offset)?.isExpanded == true) ||
+            original.isEnabled(editor, caret, dataContext)
 }
