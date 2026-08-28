@@ -10,4 +10,47 @@
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+
+    <extensionPoints>
+        <extensionPoint qualifiedName="com.neex.tellij.sourceKind"
+                        interface="com.neex.tellij.spi.SourceKind" dynamic="true"/>
+    </extensionPoints>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType name="Tellij" implementationClass="com.neex.tellij.lang.TellijFileType"
+                  fieldName="INSTANCE" language="Tellij" extensions="tellij"/>
+        <lang.syntaxHighlighterFactory language="Tellij"
+                  implementationClass="com.neex.tellij.lang.TellijHighlighterFactory"/>
+        <editorFactoryListener implementation="com.neex.tellij.editor.TellijEditorTracker"/>
+        <editorActionHandler action="EditorEscape"
+                  implementationClass="com.neex.tellij.actions.TellijEscapeHandler" order="first"/>
+        <actionPromoter implementation="com.neex.tellij.actions.TellijActionPromoter"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.neex.tellij">
+        <sourceKind implementation="com.neex.tellij.sources.kafka.KafkaSource"/>
+    </extensions>
+
+    <actions>
+        <action id="com.neex.tellij.RunBlock" class="com.neex.tellij.actions.RunBlockAction"
+                text="Tellij: Run Block at Caret"
+                description="Execute the workbench block under the caret and write its result below it">
+            <keyboard-shortcut keymap="$default" first-keystroke="control ENTER"/>
+        </action>
+        <action id="com.neex.tellij.RunAll" class="com.neex.tellij.actions.RunAllAction"
+                text="Tellij: Run All Blocks"
+                description="Execute every block top to bottom; log tails are armed first">
+            <keyboard-shortcut keymap="$default" first-keystroke="control shift ENTER"/>
+        </action>
+        <action id="com.neex.tellij.Stop" class="com.neex.tellij.actions.StopAction"
+                text="Tellij: Stop Run"
+                description="Cancel the running workbench session (Esc does the same)">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt shift F2"/>
+        </action>
+        <action id="com.neex.tellij.ClearResults" class="com.neex.tellij.actions.ClearResultsAction"
+                text="Tellij: Clear Results"
+                description="Remove every result section from the file">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt shift BACK_SPACE"/>
+        </action>
+    </actions>
 </idea-plugin>
