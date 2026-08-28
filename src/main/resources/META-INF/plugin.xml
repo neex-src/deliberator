@@ -33,6 +33,7 @@
         <sourceKind implementation="com.neex.tellij.sources.sql.SqlSource"/>
         <sourceKind implementation="com.neex.tellij.sources.sqs.SqsSource"/>
         <sourceKind implementation="com.neex.tellij.sources.http.HttpSource"/>
+        <sourceKind implementation="com.neex.tellij.sources.mongo.MongoSource"/>
     </extensions>
 
     <actions>

@@ -7,6 +7,7 @@
 # @connect logs consumer file=logs/consumer.log
 # @connect sql pg url=jdbc:postgresql://localhost:5432/demo user=demo password={{env.PG_PASSWORD}}
 # @connect logs pg podman=tellij-pg
+# @connect mongo local uri=mongodb://localhost:27017/demo
 # @connect logs echo podman=tellij-echo
 
 ### kafka orders
@@ -35,6 +36,10 @@ Accept: application/json
 
 ### sql pg
 select count(*) as orders_with_status from orders where status = '{{status}}'
+
+### mongo events
+# @sort { "receivedAt": 1 }
+{ "orderId": "{{orderId}}" }
 
 ### logs pg
 # @filter {{orderId}}

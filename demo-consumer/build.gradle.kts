@@ -20,6 +20,7 @@ dependencies {
     implementation("software.amazon.awssdk:sqs")
     implementation("software.amazon.awssdk:url-connection-client")
     implementation("org.postgresql:postgresql:42.7.7")
+    implementation("org.mongodb:mongodb-driver-sync:5.5.1")
     implementation("com.google.code.gson:gson:2.13.1")
     runtimeOnly("org.slf4j:slf4j-simple:2.0.17")
 }
