@@ -1,0 +1,13 @@
+<idea-plugin>
+    <id>com.neex.tellij</id>
+    <name>Tellij Workbench</name>
+    <vendor email="dev@neex.dev">NEEX</vendor>
+    <description><![CDATA[
+        One editor buffer for the whole microservice test loop: publish an event (Kafka/SQS),
+        watch the consumer's logs stream in below it, query the database, call an HTTP endpoint —
+        all as plain, searchable text in the same <code>.tellij</code> file, connected by the same
+        <code>{{variables}}</code>.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+</idea-plugin>
