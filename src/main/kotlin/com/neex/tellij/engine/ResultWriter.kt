@@ -43,16 +43,19 @@ object ResultWriter {
 
     /** Removes every result section together with the blank lines that separate it from its block. */
     fun removeAll(document: Document): Int {
-        val text = document.immutableCharSequence
-        val model = WorkbenchParser.parse(text)
+        val model = WorkbenchParser.parse(document.immutableCharSequence)
         var n = 0
-        for (block in model.blocks.asReversed()) {
-            val r = block.result ?: continue
-            var from = r.start
-            while (from > block.separator.end && text[from - 1].isWhitespace()) from--
-            document.deleteString(from, r.end)
-            n++
-        }
+        for (block in model.blocks.asReversed()) if (remove(document, block)) n++
         return n
+    }
+
+    /** Removes one block's section (and the blank lines before it); false if it had none. */
+    fun remove(document: Document, block: Block): Boolean {
+        val r = block.result ?: return false
+        val text = document.immutableCharSequence
+        var from = r.start
+        while (from > block.separator.end && text[from - 1].isWhitespace()) from--
+        document.deleteString(from, r.end)
+        return true
     }
 }

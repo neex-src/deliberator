@@ -1,5 +1,7 @@
 # Tellij workbench — one order through the demo stack (demo/up.sh).
 # Ctrl+Enter runs the block under the caret, Ctrl+Shift+Enter runs everything, Esc stops.
+# Ctrl+Alt+Shift+Enter runs from the caret down. Esc / Ctrl+Alt+Shift+- fold results, Ctrl+Alt+Shift+= unfold.
+# Ctrl+Alt+Backspace clears the result under the caret, Ctrl+Alt+Shift+Backspace clears them all.
 # @var orderId = ord-{{uuid}}
 # @var customer = alice
 # @connect kafka local bootstrap=localhost:9092

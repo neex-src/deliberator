@@ -19,8 +19,10 @@
     <extensions defaultExtensionNs="com.intellij">
         <fileType name="Tellij" implementationClass="com.neex.tellij.lang.TellijFileType"
                   fieldName="INSTANCE" language="Tellij" extensions="tellij"/>
+        <lang.parserDefinition language="Tellij" implementationClass="com.neex.tellij.lang.TellijParserDefinition"/>
         <lang.syntaxHighlighterFactory language="Tellij"
                   implementationClass="com.neex.tellij.lang.TellijHighlighterFactory"/>
+        <lang.foldingBuilder language="Tellij" implementationClass="com.neex.tellij.editor.TellijFoldingBuilder"/>
         <editorFactoryListener implementation="com.neex.tellij.editor.TellijEditorTracker"/>
         <editorActionHandler action="EditorEscape"
                   implementationClass="com.neex.tellij.actions.TellijEscapeHandler" order="first"/>
@@ -53,9 +55,42 @@
             <keyboard-shortcut keymap="$default" first-keystroke="control alt shift F2"/>
         </action>
         <action id="com.neex.tellij.ClearResults" class="com.neex.tellij.actions.ClearResultsAction"
-                text="Tellij: Clear Results"
+                text="Tellij: Clear All Results"
                 description="Remove every result section from the file">
             <keyboard-shortcut keymap="$default" first-keystroke="control alt shift BACK_SPACE"/>
         </action>
+        <action id="com.neex.tellij.RunFromCaret" class="com.neex.tellij.actions.RunFromCaretAction"
+                text="Tellij: Run From Caret Down"
+                description="Execute the block at the caret and every block below it, keeping the variable snapshot">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt shift ENTER"/>
+        </action>
+        <action id="com.neex.tellij.ClearBlockResult" class="com.neex.tellij.actions.ClearBlockResultAction"
+                text="Tellij: Clear Result of Block at Caret"
+                description="Remove the result section of the block under the caret">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt BACK_SPACE"/>
+        </action>
+        <action id="com.neex.tellij.CollapseResults" class="com.neex.tellij.actions.CollapseResultsAction"
+                text="Tellij: Collapse All Results"
+                description="Fold every result section to its header line (Esc folds the one at the caret)">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt shift MINUS"/>
+        </action>
+        <action id="com.neex.tellij.ExpandResults" class="com.neex.tellij.actions.ExpandResultsAction"
+                text="Tellij: Expand All Results"
+                description="Unfold every result section">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt shift EQUALS"/>
+        </action>
+        <group id="com.neex.tellij.EditorMenu" class="com.neex.tellij.actions.TellijEditorMenu" text="Tellij" popup="true">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <reference ref="com.neex.tellij.RunBlock"/>
+            <reference ref="com.neex.tellij.RunFromCaret"/>
+            <reference ref="com.neex.tellij.RunAll"/>
+            <reference ref="com.neex.tellij.Stop"/>
+            <separator/>
+            <reference ref="com.neex.tellij.CollapseResults"/>
+            <reference ref="com.neex.tellij.ExpandResults"/>
+            <separator/>
+            <reference ref="com.neex.tellij.ClearBlockResult"/>
+            <reference ref="com.neex.tellij.ClearResults"/>
+        </group>
     </actions>
 </idea-plugin>
