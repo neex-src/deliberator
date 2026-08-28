@@ -18,7 +18,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Fake source: body "lines N" streams N lines, "fail X" throws, "tail" loops until cancelled. */
-class FakeSource(override val id: String = "fake", val events: MutableList<String> = CopyOnWriteArrayList()) : SourceKind {
+open class FakeSource(override val id: String = "fake", val events: MutableList<String> = CopyOnWriteArrayList()) : SourceKind {
     override fun connect(decl: ConnectDecl, ctx: ConnectContext): Connection = object : Connection {
         override val decl = decl
         override fun close() { events += "close ${decl.name}" }
@@ -48,6 +48,12 @@ class FakeSource(override val id: String = "fake", val events: MutableList<Strin
                     events += "end $name"
                 }
             }
+            "capture" -> object : Step {
+                override fun run(ctx: RunContext, out: ResultSink) { val (k, v) = words[1].split("="); ctx.capture(k, v); out.appendLine("captured $k") }
+            }
+            "echo" -> object : Step {
+                override fun run(ctx: RunContext, out: ResultSink) { out.appendLine(words.drop(1).joinToString(" ")) }
+            }
             "badstep" -> throw StepError("bad step", "fix it")
             else -> throw StepError("unknown fake body '${req.body}'")
         }
@@ -66,7 +72,11 @@ class MemorySink(val name: String) : ResultSink {
 
 class TestContext : RunContext {
     val flag = AtomicBoolean(false)
-    override val vars = Vars(emptyMap())
+    val captures = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private var version = 0
+    override val vars = Vars(emptyMap()).withCaptures(captures)
+    override val captureVersion: Int get() = version
+    override fun capture(name: String, value: String) { captures[name] = value; version++ }
     override val isCancelled get() = flag.get()
     override fun sleep(ms: Long) { val end = System.currentTimeMillis() + ms; while (!isCancelled && System.currentTimeMillis() < end) Thread.sleep(5) }
 }
@@ -75,10 +85,13 @@ class RunnerTest {
 
     private fun run(text: String, source: FakeSource = FakeSource(), ctx: TestContext = TestContext(), before: (Map<String, MemorySink>) -> Unit = {}): Map<String, MemorySink> {
         val model = WorkbenchParser.parse(text)
-        val plan = Runner.plan(text, model, model.blocks, Vars(emptyMap()), null) { if (it == source.id) source else null }
+        val resolve: (String) -> SourceKind? = { if (it == source.id) source else null }
+        val plan = Runner.plan(text, model, model.blocks, ctx.vars, null, resolve)
         val sinks = model.blocks.associate { (it.name ?: "?") to MemorySink(it.name ?: "?") }
         before(sinks)
-        Runner.execute(plan, ctx, { sinks.getValue(it.name ?: "?") }) { r -> Thread(r).start() }
+        Runner.execute(plan, ctx, { sinks.getValue(it.name ?: "?") }, { r -> Thread(r).start() }) { block ->
+            Runner.plan(text, model, listOf(block), ctx.vars, null, resolve, plan.connectionMap, ctx.captureVersion).entries[0]
+        }
         return sinks
     }
 
@@ -128,6 +141,23 @@ class RunnerTest {
         }
         assertEquals("stopped", sinks.getValue("t").terminal)
         assertTrue(sinks.getValue("a").lines.size < 100)
+    }
+
+    @Test
+    fun capturesFeedLaterBlocksThroughReplanning() {
+        val sinks = run("# @connect fake f\n### fake a\ncapture id=42\n### fake b\necho got {{id}}\n### fake c\necho still {{id}} and {{nope}}\n")
+        assertEquals("done", sinks.getValue("a").terminal)
+        assertEquals(listOf("# captured: id=42", "got 42"), sinks.getValue("b").lines)
+        assertEquals("done", sinks.getValue("b").terminal)
+        assertTrue(sinks.getValue("c").terminal!!, sinks.getValue("c").terminal!!.startsWith("fail:unknown variable {{nope}}"))
+    }
+
+    @Test
+    fun defaultConnectionWhenNoneDeclared() {
+        val src = object : FakeSource("dflt") { override fun defaultConnection() = com.neex.tellij.model.ConnectDecl("dflt", "default", emptyMap(), -1) }
+        val sinks = run("### dflt a\nlines 1\n", src)
+        assertEquals("done", sinks.getValue("a").terminal)
+        assertTrue(src.events.contains("close default"))
     }
 
     @Test

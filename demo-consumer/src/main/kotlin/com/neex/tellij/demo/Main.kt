@@ -35,6 +35,7 @@ object Config {
     val pgUser: String = env("PG_USER", "demo")
     val pgPassword: String = env("PG_PASSWORD", "demo")
     val logFile: String = env("LOG_FILE", "consumer.log")
+    val httpPort: Int = env("HTTP_PORT", "8085").toInt()
     private fun env(k: String, d: String) = System.getenv(k)?.takeIf { it.isNotBlank() } ?: d
 }
 
@@ -64,6 +65,19 @@ object Store {
         jdbc().prepareStatement("insert into orders (id, customer, amount, source) values (?, ?, ?, ?) on conflict (id) do nothing").use {
             it.setString(1, id); it.setString(2, customer); if (amount != null) it.setDouble(3, amount) else it.setNull(3, java.sql.Types.NUMERIC); it.setString(4, source)
             it.executeUpdate()
+        }
+
+    fun find(id: String): com.google.gson.JsonObject? =
+        jdbc().prepareStatement("select id, customer, amount, status, source, received_at from orders where id = ?").use {
+            it.setString(1, id)
+            it.executeQuery().use { rs ->
+                if (!rs.next()) return null
+                com.google.gson.JsonObject().apply {
+                    addProperty("orderId", rs.getString("id")); addProperty("customer", rs.getString("customer"))
+                    addProperty("amount", rs.getBigDecimal("amount")); addProperty("status", rs.getString("status"))
+                    addProperty("source", rs.getString("source")); addProperty("receivedAt", rs.getTimestamp("received_at").toInstant().toString())
+                }
+            }
         }
 
     fun updateStatus(id: String, status: String): Int =
@@ -156,8 +170,30 @@ fun sqsLoop() {
     }
 }
 
+/** `GET /orders/{id}` and `GET /health` — the service's tiny API, so the workbench can ask it. */
+fun httpServer() {
+    val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress(Config.httpPort), 0)
+    fun respond(ex: com.sun.net.httpserver.HttpExchange, code: Int, json: String) {
+        val bytes = json.toByteArray()
+        ex.responseHeaders.add("Content-Type", "application/json")
+        ex.sendResponseHeaders(code, bytes.size.toLong())
+        ex.responseBody.use { it.write(bytes) }
+    }
+    server.createContext("/health") { ex -> respond(ex, 200, "{\"status\":\"ok\"}") }
+    server.createContext("/orders/") { ex ->
+        val id = ex.requestURI.path.removePrefix("/orders/")
+        val row = runCatching { Store.find(id) }.getOrNull()
+        val code = if (row != null) 200 else 404
+        Log.line("http ${ex.requestMethod} /orders/$id -> $code")
+        respond(ex, code, row?.toString() ?: "{\"error\":\"not found\",\"orderId\":\"$id\"}")
+    }
+    server.start()
+    Log.line("http listening on :${Config.httpPort} (GET /orders/{id}, GET /health)")
+}
+
 fun main() {
     Log.line("demo-consumer up kafka=${Config.bootstrap}/${Config.topic} sqs=${Config.sqsEndpoint}/${Config.sqsQueue} pg=${Config.pgUrl}")
+    httpServer()
     val k = thread(name = "kafka") { kafkaLoop() }
     thread(name = "sqs") { sqsLoop() }
     k.join()

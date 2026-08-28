@@ -28,6 +28,14 @@ select id, customer, amount, status, source, received_at from orders where id = 
 # @delay 1s
 select id, status from orders where id = '{{orderId}}'
 
+### http
+# @capture status = $.status
+GET http://localhost:8085/orders/{{orderId}}
+Accept: application/json
+
+### sql pg
+select count(*) as orders_with_status from orders where status = '{{status}}'
+
 ### logs pg
 # @filter {{orderId}}
 # @for 5s

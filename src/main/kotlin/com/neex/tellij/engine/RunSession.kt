@@ -36,8 +36,18 @@ class VarsSnapshot(val vars: Vars, val headerHash: Int)
 class RunSession private constructor(
     val project: Project,
     val document: Document,
-    override val vars: Vars,
+    snapshot: Vars,
 ) : Disposable, RunContext {
+
+    private val captures = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val captureCount = java.util.concurrent.atomic.AtomicInteger(0)
+    override val vars: Vars = snapshot.withCaptures(captures)
+    override val captureVersion: Int get() = captureCount.get()
+
+    override fun capture(name: String, value: String) {
+        captures[name] = value
+        captureCount.incrementAndGet()
+    }
 
     private val cancelled = AtomicBoolean(false)
     @Volatile var finished = false
@@ -151,9 +161,12 @@ class RunSession private constructor(
             }
             BlockGutter.refreshAll(document)
 
+            val baseDir = directoryOf(document)
             session.spawn {
                 try {
-                    Runner.execute(plan, session, { session.sinks.getValue(it.index) }, session::spawn)
+                    Runner.execute(plan, session, { session.sinks.getValue(it.index) }, session::spawn) { block ->
+                        Runner.plan(text, model, listOf(block), session.vars, baseDir, SourceRegistry::byId, plan.connectionMap, session.captureVersion).entries[0]
+                    }
                 } finally {
                     ApplicationManager.getApplication().invokeLater({ session.finish() }, ModalityState.nonModal())
                 }
