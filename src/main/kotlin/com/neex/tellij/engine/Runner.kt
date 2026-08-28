@@ -16,10 +16,16 @@ import com.neex.tellij.spi.StepRequest
 import com.neex.tellij.vars.Vars
 import java.util.concurrent.atomic.AtomicInteger
 
-/** A block resolved to a step, or to the error that resolution produced (reported in its section). */
-class PlanEntry(val block: Block, val step: Step?, val error: StepError?)
+/**
+ * A block resolved to a step, or to the error that resolution produced (reported in its section).
+ * [captureVersion] is the context's version when it was planned; [captured] the captured values
+ * its text uses (shown in the section so the substituted body is accountable).
+ */
+class PlanEntry(val block: Block, val step: Step?, val error: StepError?, val captureVersion: Int = 0, val captured: Map<String, String> = emptyMap())
 
-class Plan(val entries: List<PlanEntry>, val connections: List<Connection>)
+class Plan(val entries: List<PlanEntry>, val connectionMap: MutableMap<String, Connection>) {
+    val connections: List<Connection> get() = connectionMap.values.toList()
+}
 
 /**
  * The pure execution engine: no threads of its own, no platform. Resolution is eager, so a typo in
@@ -28,26 +34,36 @@ class Plan(val entries: List<PlanEntry>, val connections: List<Connection>)
  */
 object Runner {
 
-    fun plan(text: CharSequence, model: WorkbenchModel, blocks: List<Block>, vars: Vars, baseDir: java.nio.file.Path?, resolve: (String) -> SourceKind?): Plan {
-        val connections = LinkedHashMap<String, Connection>()
+    fun plan(
+        text: CharSequence,
+        model: WorkbenchModel,
+        blocks: List<Block>,
+        vars: Vars,
+        baseDir: java.nio.file.Path?,
+        resolve: (String) -> SourceKind?,
+        connections: MutableMap<String, Connection> = LinkedHashMap(),
+        captureVersion: Int = 0,
+    ): Plan {
         val connectCtx = ConnectContext(vars, baseDir)
         val entries = blocks.map { block ->
+            val blockText = text.subSequence(block.range.start, block.result?.start ?: block.range.end)
+            val captured = vars.referencedCaptures(blockText)
             try {
                 val kind = resolve(block.kind)
                     ?: throw StepError("unknown block kind '${block.kind}'", "a kind is one SourceKind class registered on com.neex.tellij.sourceKind")
-                val (decl, target) = connectionFor(model, block)
+                val (decl, target) = connectionFor(model, block, kind.defaultConnection())
                 val conn = connections.getOrPut("${decl.kind}/${decl.name}") {
                     kind.connect(decl.copy(options = decl.options.mapValues { vars.substitute(it.value) }), connectCtx)
                 }
                 val body = block.body?.let { vars.substitute(it.substring(text)) } ?: ""
-                PlanEntry(block, kind.step(StepRequest(block, body, target, vars), conn), null)
+                PlanEntry(block, kind.step(StepRequest(block, body, target, vars), conn), null, captureVersion, captured)
             } catch (e: StepError) {
-                PlanEntry(block, null, e)
+                PlanEntry(block, null, e, captureVersion, captured)
             } catch (e: Exception) {
-                PlanEntry(block, null, StepError(describe(e)))
+                PlanEntry(block, null, StepError(describe(e)), captureVersion, captured)
             }
         }
-        return Plan(entries, connections.values.toList())
+        return Plan(entries, connections)
     }
 
     /**
@@ -55,7 +71,7 @@ object Runner {
      * of that kind; otherwise the block name is the kind's target and the sole connection of that
      * kind is used.
      */
-    fun connectionFor(model: WorkbenchModel, block: Block): Pair<ConnectDecl, String?> {
+    fun connectionFor(model: WorkbenchModel, block: Block, fallback: ConnectDecl? = null): Pair<ConnectDecl, String?> {
         val explicit = block.directive("conn")
         if (explicit != null) {
             val decl = model.connection(block.kind, explicit)
@@ -66,7 +82,7 @@ object Runner {
         val candidates = model.connectionsOf(block.kind)
         return when (candidates.size) {
             1 -> candidates[0] to block.name
-            0 -> throw StepError("no @connect ${block.kind} declared", "add to the header: # @connect ${block.kind} local …")
+            0 -> (fallback ?: throw StepError("no @connect ${block.kind} declared", "add to the header: # @connect ${block.kind} local …")) to block.name
             else -> throw StepError("several ${block.kind} connections (${candidates.joinToString { it.name }})", "pick one with # @conn NAME")
         }
     }
@@ -75,7 +91,7 @@ object Runner {
      * Runs the plan on the calling thread; [spawn] provides threads for concurrent steps. Returns
      * when every step — including spawned ones — has finished or noticed the cancellation.
      */
-    fun execute(plan: Plan, ctx: RunContext, sinkFor: (Block) -> ResultSink, spawn: (Runnable) -> Unit) {
+    fun execute(plan: Plan, ctx: RunContext, sinkFor: (Block) -> ResultSink, spawn: (Runnable) -> Unit, replan: ((Block) -> PlanEntry)? = null) {
         val sinks = plan.entries.associate { it.block.index to sinkFor(it.block) }
         fun sink(e: PlanEntry) = sinks.getValue(e.block.index)
 
@@ -93,11 +109,15 @@ object Runner {
 
         val running = AtomicInteger(0)
         var halted = false
-        for (e in plan.entries) {
-            val out = sink(e)
+        for (planned in plan.entries) {
+            val out = sink(planned)
+            // Captures from earlier blocks change what {{vars}} mean: re-resolve sequential blocks
+            // planned before the latest capture (armed tails keep their step).
+            val e = if (replan != null && !halted && planned.step?.concurrent != true && planned.captureVersion != ctx.captureVersion) replan(planned.block) else planned
             val step = e.step
             if (e.error != null) { out.fail(e.error.message ?: "error", e.error.hint); halted = true; continue }
-            if (step == null || e.block.index !in armed) { halted = true; continue }
+            if (step == null || (planned.step != null && planned.block.index !in armed)) { halted = true; continue }
+            if (e.captured.isNotEmpty()) out.appendLine("# captured: " + e.captured.entries.joinToString(", ") { "${it.key}=${it.value}" })
             if (ctx.isCancelled) { out.stopped(); continue }
             if (halted) { out.skipped("earlier step failed"); continue }
             val delayMs = try { Durations.parse(e.block.directive("delay"), 0) } catch (err: StepError) { out.fail(err.message ?: "bad @delay", err.hint); halted = true; continue }

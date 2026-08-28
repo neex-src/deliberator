@@ -22,6 +22,9 @@ interface SourceKind {
 
     /** Builds the runnable step; validate directives eagerly and throw [StepError] with a hint. */
     fun step(req: StepRequest, conn: Connection): Step
+
+    /** A kind that works without any `@connect` line (http) returns an implicit declaration here. */
+    fun defaultConnection(): ConnectDecl? = null
 }
 
 /** What a connection may need besides its options: the variables and the workbench file's directory. */
@@ -68,8 +71,23 @@ interface RunContext {
     fun checkCancelled() { if (isCancelled) throw RunCancelled() }
     /** Cooperative sleep that returns early on cancel. */
     fun sleep(ms: Long)
-    /** Publish a value for later blocks (`@capture`); a no-op until captures land. */
+    /** Publish a value for later blocks (`# @capture name = …`); they see it as `{{name}}`. */
     fun capture(name: String, value: String) {}
+    /** Bumps on every capture; the runner re-resolves a block's body when it changed since planning. */
+    val captureVersion: Int get() = 0
+}
+
+/** `# @capture name = expression` parsed once, evaluated by the source that knows the result shape. */
+data class CaptureSpec(val name: String, val expr: String) {
+    companion object {
+        fun parse(directives: List<String>): List<CaptureSpec> = directives.map { d ->
+            val i = d.indexOf('=')
+            if (i <= 0) throw StepError("bad @capture '$d'", "# @capture name = \$.path.to.value")
+            val name = d.substring(0, i).trim()
+            if (!Regex("[A-Za-z_][\\w.\\-]*").matches(name)) throw StepError("bad capture name '$name'")
+            CaptureSpec(name, d.substring(i + 1).trim())
+        }
+    }
 }
 
 /** Where a step writes. Terminal calls are idempotent: the first of done/fail/skipped/stopped wins. */

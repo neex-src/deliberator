@@ -14,7 +14,7 @@
 | `tellij-pg` | Postgres 16, `log_statement=all` | `localhost:5432`, db `demo`, user `demo`/`demo` |
 | `tellij-kafka` | apache/kafka 3.9 single-node KRaft, topic `orders` | `localhost:9092` |
 | `tellij-sqs` | ElasticMQ (SQS-compatible), queue `payments` (created by the consumer) | `http://localhost:9324` |
-| `tellij-consumer` | `../demo-consumer` (Kotlin): Kafka `orders` → INSERT, SQS `payments` → UPDATE status | logs to `logs/consumer.log` |
+| `tellij-consumer` | `../demo-consumer` (Kotlin): Kafka `orders` → INSERT, SQS `payments` → UPDATE status; `GET /orders/{id}`, `GET /health` | logs to `logs/consumer.log`, `http://localhost:8085` |
 
 - `tellij-pg` runs with `log_statement=all`, so `podman logs tellij-pg` shows every statement —
   the `### logs pg` block tails exactly that, filtered by the current `{{orderId}}`.

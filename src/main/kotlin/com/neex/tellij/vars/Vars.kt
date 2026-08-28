@@ -12,18 +12,29 @@ import java.util.UUID
  * over time (`{{uuid}}`, `{{now}}`) are fresh on every direct use in a body, but a `@var` that used
  * them was evaluated once at snapshot time — that's what keeps `orderId` identical across blocks.
  */
-class Vars(val values: Map<String, String>, private val env: Map<String, String> = emptyMap()) {
+class Vars(
+    val values: Map<String, String>,
+    private val env: Map<String, String> = emptyMap(),
+    /** `# @capture` results, shared and growing while a session runs; they win over `@var`. */
+    val captures: Map<String, String> = emptyMap(),
+) {
 
     fun substitute(text: String): String = PATTERN.replace(text) { m -> resolve(m.groupValues[1]) }
 
-    /** Names of declared vars referenced in [text], in first-use order. */
+    /** Names of declared or captured vars referenced in [text], in first-use order. */
     fun referenced(text: CharSequence): List<String> =
-        PATTERN.findAll(text).map { it.groupValues[1] }.filter { it in values }.distinct().toList()
+        PATTERN.findAll(text).map { it.groupValues[1] }.filter { it in values || it in captures }.distinct().toList()
 
     fun referencedValues(text: CharSequence): Map<String, String> =
-        referenced(text).associateWith { values.getValue(it) }
+        referenced(text).associateWith { captures[it] ?: values.getValue(it) }
+
+    fun referencedCaptures(text: CharSequence): Map<String, String> =
+        referenced(text).filter { it in captures }.associateWith { captures.getValue(it) }
+
+    fun withCaptures(captures: Map<String, String>): Vars = Vars(values, env, captures)
 
     fun resolve(name: String): String {
+        captures[name]?.let { return it }
         values[name]?.let { return it }
         when (name) {
             "uuid" -> return UUID.randomUUID().toString().substring(0, 8)
@@ -36,7 +47,7 @@ class Vars(val values: Map<String, String>, private val env: Map<String, String>
             return env[key] ?: System.getenv(key)
                 ?: throw StepError("unknown environment variable {{$name}}", "put \"$key\" into tellij-env.json next to the file, or export it")
         }
-        throw StepError("unknown variable {{$name}}", "declare it in the header: # @var $name = …")
+        throw StepError("unknown variable {{$name}}", "declare it in the header: # @var $name = …, or capture it from an earlier block")
     }
 
     companion object {

@@ -54,7 +54,7 @@ up_consumer() {
     docker.io/library/eclipse-temurin:21-jre /app/bin/demo-consumer >/dev/null || { echo "podman run failed"; return 1; }
   for _ in $(seq 1 60); do
     podman logs tellij-consumer 2>/dev/null | grep -q 'kafka assigned' && podman logs tellij-consumer 2>/dev/null | grep -q 'sqs polling' \
-      && { echo "tellij-consumer ready (log: demo/logs/consumer.log)"; return; }
+      && { echo "tellij-consumer ready (log: demo/logs/consumer.log, http://localhost:8085/health)"; return; }
     sleep 1
   done
   echo "tellij-consumer did not report ready"; podman logs --tail 20 tellij-consumer; return 1

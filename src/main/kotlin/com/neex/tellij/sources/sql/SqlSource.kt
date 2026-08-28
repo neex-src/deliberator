@@ -2,6 +2,7 @@ package com.neex.tellij.sources.sql
 
 import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.render.TableRenderer
+import com.neex.tellij.spi.CaptureSpec
 import com.neex.tellij.spi.ConnectContext
 import com.neex.tellij.spi.Connection
 import com.neex.tellij.spi.Durations
@@ -35,7 +36,7 @@ class SqlSource : SourceKind {
         if (sql.isBlank()) throw StepError("empty statement", "put the SQL under the ### sql line")
         val limit = req.directive("limit")?.toIntOrNull() ?: DEFAULT_LIMIT
         val timeoutMs = Durations.parse(req.directive("timeout"), 30_000)
-        return SqlStep(conn as PostgresConnection, sql, limit, timeoutMs)
+        return SqlStep(conn as PostgresConnection, sql, limit, timeoutMs, CaptureSpec.parse(req.directives("capture")))
     }
 
     companion object {
@@ -75,7 +76,7 @@ class PostgresConnection(
     }
 }
 
-class SqlStep(private val conn: PostgresConnection, private val sql: String, private val limit: Int, private val timeoutMs: Long) : Step {
+class SqlStep(private val conn: PostgresConnection, private val sql: String, private val limit: Int, private val timeoutMs: Long, private val captures: List<CaptureSpec> = emptyList()) : Step {
     override fun run(ctx: RunContext, out: ResultSink) {
         val c = conn.jdbc()
         val t0 = System.currentTimeMillis()
@@ -99,7 +100,14 @@ class SqlStep(private val conn: PostgresConnection, private val sql: String, pri
                 out.appendText(TableRenderer.render(columns, shown, truncatedRows = more, limit = limit))
                 val elapsed = System.currentTimeMillis() - t0
                 out.appendLine(TableRenderer.rowCount(shown.size, elapsed) + if (more > 0) " (more available)" else "")
-                out.done("${shown.size}${if (more > 0) "+" else ""} rows")
+                // `# @capture name = column` takes the first row's value.
+                for (c in captures) {
+                    val col = columns.indexOfFirst { it.equals(c.expr, ignoreCase = true) }
+                    if (col < 0) throw StepError("capture '${c.name}': no column '${c.expr}'", "columns: ${columns.joinToString()}")
+                    val row = shown.firstOrNull() ?: throw StepError("capture '${c.name}': the query returned no rows")
+                    ctx.capture(c.name, row[col] ?: "NULL")
+                }
+                out.done("${shown.size}${if (more > 0) "+" else ""} row${if (shown.size == 1 && more == 0) "" else "s"}")
             }
         }
     }
