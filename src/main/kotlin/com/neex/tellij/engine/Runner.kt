@@ -3,6 +3,7 @@ package com.neex.tellij.engine
 import com.neex.tellij.model.Block
 import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.model.WorkbenchModel
+import com.neex.tellij.spi.ConnectContext
 import com.neex.tellij.spi.Connection
 import com.neex.tellij.spi.ResultSink
 import com.neex.tellij.spi.RunCancelled
@@ -26,14 +27,17 @@ class Plan(val entries: List<PlanEntry>, val connections: List<Connection>)
  */
 object Runner {
 
-    fun plan(text: CharSequence, model: WorkbenchModel, blocks: List<Block>, vars: Vars, resolve: (String) -> SourceKind?): Plan {
+    fun plan(text: CharSequence, model: WorkbenchModel, blocks: List<Block>, vars: Vars, baseDir: java.nio.file.Path?, resolve: (String) -> SourceKind?): Plan {
         val connections = LinkedHashMap<String, Connection>()
+        val connectCtx = ConnectContext(vars, baseDir)
         val entries = blocks.map { block ->
             try {
                 val kind = resolve(block.kind)
                     ?: throw StepError("unknown block kind '${block.kind}'", "a kind is one SourceKind class registered on com.neex.tellij.sourceKind")
                 val (decl, target) = connectionFor(model, block)
-                val conn = connections.getOrPut("${decl.kind}/${decl.name}") { kind.connect(decl, vars) }
+                val conn = connections.getOrPut("${decl.kind}/${decl.name}") {
+                    kind.connect(decl.copy(options = decl.options.mapValues { vars.substitute(it.value) }), connectCtx)
+                }
                 val body = block.body?.let { vars.substitute(it.substring(text)) } ?: ""
                 PlanEntry(block, kind.step(StepRequest(block, body, target, vars), conn), null)
             } catch (e: StepError) {
@@ -109,7 +113,10 @@ object Runner {
             }
         }
         // Concurrent steps observe ctx.isCancelled themselves; we only wait for them to notice.
-        while (running.get() > 0) Thread.sleep(25)
+        // A cancel interrupts this thread as well — that is not a reason to stop waiting.
+        while (running.get() > 0) {
+            try { Thread.sleep(25) } catch (e: InterruptedException) { /* keep waiting */ }
+        }
         for (c in plan.connections) runCatching { c.close() }
     }
 

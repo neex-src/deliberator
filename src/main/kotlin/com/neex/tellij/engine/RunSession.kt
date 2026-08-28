@@ -132,7 +132,7 @@ class RunSession private constructor(
             if (blocks.isEmpty()) return null
 
             val vars = snapshot(document, model, text, freshVars)
-            val plan = Runner.plan(text, model, blocks, vars, SourceRegistry::byId)
+            val plan = Runner.plan(text, model, blocks, vars, directoryOf(document), SourceRegistry::byId)
             val session = RunSession(project, document, vars)
             Disposer.register(TellijProjectScope.get(project), session)
             document.putUserData(Keys.SESSION, session)
