@@ -1,5 +1,6 @@
 package com.neex.tellij.engine
 
+import com.neex.tellij.sources.logs.EntryGrouper
 import com.neex.tellij.sources.logs.FileTail
 import com.neex.tellij.sources.logs.FileTailStep
 import com.neex.tellij.sources.logs.LogFilter
@@ -27,9 +28,12 @@ class LogTailTest {
         tail.arm()
         assertEquals(emptyList<String>(), tail.poll())
         append("a.log", "new 1\nnew 2\npart")
-        assertEquals(listOf("new 1", "new 2"), tail.poll())
+        // "new 2" may still get continuation lines; it completes on the idle poll.
+        assertEquals(listOf("new 1"), tail.poll())
+        assertEquals(listOf("new 2"), tail.poll())
         assertEquals(emptyList<String>(), tail.poll())
         append("a.log", "ial\r\n")
+        assertEquals(emptyList<String>(), tail.poll())
         assertEquals(listOf("partial"), tail.poll())
     }
 
@@ -40,10 +44,27 @@ class LogTailTest {
         tail.arm()
         assertEquals(emptyList<String>(), tail.poll())
         append("later.log", "first line, long enough\n")
+        tail.poll()
         assertEquals(listOf("first line, long enough"), tail.poll())
         // Rotation/truncation is detected by the file shrinking (size-only heuristic, v1).
         Files.writeString(p, "rotated\n")
+        tail.poll()
         assertEquals(listOf("rotated"), tail.poll())
+    }
+
+    @Test
+    fun indentedContinuationLinesTravelWithTheirHeader() {
+        append("g.log", "")
+        val tail = FileTail(tmp.root.toPath().resolve("g.log"), LogFilter.parse(listOf("ord-1")))
+        tail.arm()
+        append("g.log", "LOG: execute: insert into orders\n\tvalues ('ord-1')\n\ton conflict do nothing\nException: boom ord-1\n\tat a.b(C.kt:1)\nunrelated\n\tat still.unrelated\n")
+        assertEquals(listOf("LOG: execute: insert into orders", "\tvalues ('ord-1')", "\ton conflict do nothing", "Exception: boom ord-1", "\tat a.b(C.kt:1)"), tail.poll())
+        assertEquals(emptyList<String>(), tail.poll())
+        val g = EntryGrouper(LogFilter.ALL)
+        assertEquals(emptyList<String>(), g.feed("a"))
+        assertEquals(listOf("a"), g.feed("b"))
+        assertEquals(listOf("b"), g.flush())
+        assertEquals(emptyList<String>(), g.flush())
     }
 
     @Test
