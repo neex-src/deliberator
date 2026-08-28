@@ -25,6 +25,29 @@ interface SourceKind {
 
     /** A kind that works without any `@connect` line (http) returns an implicit declaration here. */
     fun defaultConnection(): ConnectDecl? = null
+
+    /** The `# @directive`s a block of this kind understands — completion reads this. */
+    val directives: List<DirectiveSpec> get() = emptyList()
+
+    /** The `key=value` options of its `@connect` line. */
+    val connectOptions: List<DirectiveSpec> get() = emptyList()
+}
+
+/** A directive or option: its name, a one-line hint, and the values worth offering. */
+data class DirectiveSpec(val name: String, val hint: String, val values: List<String> = emptyList()) {
+    companion object {
+        /** Understood on every block, by the runner or every source. */
+        val COMMON: List<DirectiveSpec> = listOf(
+            DirectiveSpec("conn", "which @connect of this kind to use"),
+            DirectiveSpec("delay", "wait before running this block", listOf("500ms", "1s", "2s", "5s")),
+            DirectiveSpec("timeout", "give up after", listOf("1s", "5s", "10s", "30s")),
+            DirectiveSpec("capture", "name = \$.json.path (http, mongo) or = column (sql) → {{name}} for later blocks"),
+        )
+        val HEADER: List<DirectiveSpec> = listOf(
+            DirectiveSpec("var", "name = value — {{name}} everywhere below; may use {{uuid}}, {{now}}, {{env.X}}"),
+            DirectiveSpec("connect", "kind name key=value … — a connection for ### kind blocks"),
+        )
+    }
 }
 
 /** What a connection may need besides its options: the variables and the workbench file's directory. */

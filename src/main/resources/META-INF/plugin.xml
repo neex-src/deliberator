@@ -23,6 +23,8 @@
         <lang.syntaxHighlighterFactory language="Tellij"
                   implementationClass="com.neex.tellij.lang.TellijHighlighterFactory"/>
         <lang.foldingBuilder language="Tellij" implementationClass="com.neex.tellij.editor.TellijFoldingBuilder"/>
+        <completion.contributor language="Tellij" implementationClass="com.neex.tellij.editor.TellijCompletionContributor"/>
+        <typedHandler implementation="com.neex.tellij.editor.TellijTypedHandler"/>
         <editorFactoryListener implementation="com.neex.tellij.editor.TellijEditorTracker"/>
         <editorActionHandler action="EditorEscape"
                   implementationClass="com.neex.tellij.actions.TellijEscapeHandler" order="first"/>

@@ -4,6 +4,7 @@ import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.render.TableRenderer
 import com.neex.tellij.spi.CaptureSpec
 import com.neex.tellij.spi.ConnectContext
+import com.neex.tellij.spi.DirectiveSpec
 import com.neex.tellij.spi.Connection
 import com.neex.tellij.spi.Durations
 import com.neex.tellij.spi.ResultSink
@@ -24,6 +25,17 @@ import java.util.Properties
  */
 class SqlSource : SourceKind {
     override val id: String = "sql"
+
+    override val directives = listOf(
+        DirectiveSpec("limit", "max rows shown", listOf("20", "50", "200", "1000")),
+        DirectiveSpec("capture", "name = column — the first row's value becomes {{name}}"),
+    )
+    override val connectOptions = listOf(
+        DirectiveSpec("url", "JDBC URL", listOf("jdbc:postgresql://localhost:5432/demo")),
+        DirectiveSpec("user", "database user"),
+        DirectiveSpec("password", "database password (use {{env.PG_PASSWORD}})", listOf("{{env.PG_PASSWORD}}")),
+        DirectiveSpec("timeout", "connect timeout", listOf("5s")),
+    )
 
     override fun connect(decl: ConnectDecl, ctx: ConnectContext): Connection {
         val url = decl.option("url") ?: throw StepError("sql connection needs url=jdbc:postgresql://host:port/db", "# @connect sql pg url=… user=… password=…")
