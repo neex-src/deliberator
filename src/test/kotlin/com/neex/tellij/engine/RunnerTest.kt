@@ -2,6 +2,7 @@ package com.neex.tellij.engine
 
 import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.model.WorkbenchParser
+import com.neex.tellij.spi.ConnectContext
 import com.neex.tellij.spi.Connection
 import com.neex.tellij.spi.ResultSink
 import com.neex.tellij.spi.RunContext
@@ -18,7 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Fake source: body "lines N" streams N lines, "fail X" throws, "tail" loops until cancelled. */
 class FakeSource(override val id: String = "fake", val events: MutableList<String> = CopyOnWriteArrayList()) : SourceKind {
-    override fun connect(decl: ConnectDecl, vars: Vars): Connection = object : Connection {
+    override fun connect(decl: ConnectDecl, ctx: ConnectContext): Connection = object : Connection {
         override val decl = decl
         override fun close() { events += "close ${decl.name}" }
     }
@@ -74,7 +75,7 @@ class RunnerTest {
 
     private fun run(text: String, source: FakeSource = FakeSource(), ctx: TestContext = TestContext(), before: (Map<String, MemorySink>) -> Unit = {}): Map<String, MemorySink> {
         val model = WorkbenchParser.parse(text)
-        val plan = Runner.plan(text, model, model.blocks, Vars(emptyMap())) { if (it == source.id) source else null }
+        val plan = Runner.plan(text, model, model.blocks, Vars(emptyMap()), null) { if (it == source.id) source else null }
         val sinks = model.blocks.associate { (it.name ?: "?") to MemorySink(it.name ?: "?") }
         before(sinks)
         Runner.execute(plan, ctx, { sinks.getValue(it.name ?: "?") }) { r -> Thread(r).start() }

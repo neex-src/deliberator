@@ -3,10 +3,19 @@
 # @var orderId = ord-{{uuid}}
 # @var customer = alice
 # @connect kafka local bootstrap=localhost:9092 simulate=true latency=400ms
+# @connect logs consumer file=logs/consumer.log
+# @connect logs echo podman=tellij-echo
 
 ### kafka orders
 # @key {{orderId}}
 { "orderId": "{{orderId}}", "customer": "{{customer}}", "amount": 42.5 }
 
+### logs consumer
+# @filter {{orderId}}
+# @for 8s
+
 ### kafka payments
 { "orderId": "{{orderId}}", "status": "PAID", "paidAt": "{{now}}" }
+
+### logs echo
+# @for 4s

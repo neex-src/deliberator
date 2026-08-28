@@ -14,11 +14,23 @@ interface SourceKind {
     /** The word after `###` and after `# @connect`. */
     val id: String
 
-    /** Called at most once per session per `@connect` name; expensive clients may connect lazily. */
-    fun connect(decl: ConnectDecl, vars: Vars): Connection
+    /**
+     * Called at most once per session per `@connect` name; expensive clients may connect lazily.
+     * Option values already have `{{vars}}` applied.
+     */
+    fun connect(decl: ConnectDecl, ctx: ConnectContext): Connection
 
     /** Builds the runnable step; validate directives eagerly and throw [StepError] with a hint. */
     fun step(req: StepRequest, conn: Connection): Step
+}
+
+/** What a connection may need besides its options: the variables and the workbench file's directory. */
+class ConnectContext(val vars: Vars, val baseDir: java.nio.file.Path?) {
+    /** Resolves a possibly relative path against the workbench file's directory. */
+    fun resolve(path: String): java.nio.file.Path {
+        val p = java.nio.file.Path.of(path)
+        return if (p.isAbsolute || baseDir == null) p else baseDir.resolve(p).normalize()
+    }
 }
 
 interface Connection : AutoCloseable {
@@ -40,7 +52,10 @@ interface Step {
     /** Runs before ANY step of the session starts — log tails capture their offset here. */
     fun arm(ctx: RunContext) {}
 
-    /** Blocking. Must poll [RunContext.isCancelled] (or call [RunContext.checkCancelled]) in loops. */
+    /**
+     * Blocking. Must poll [RunContext.isCancelled] (or call [RunContext.checkCancelled]) in loops,
+     * and must NOT call [ResultSink.done] after a cancel — the runner marks the section "stopped".
+     */
     fun run(ctx: RunContext, out: ResultSink)
 
     /** Concurrent steps run on their own thread while the following sequential steps proceed. */

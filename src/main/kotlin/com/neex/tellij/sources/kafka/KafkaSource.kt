@@ -1,6 +1,7 @@
 package com.neex.tellij.sources.kafka
 
 import com.neex.tellij.model.ConnectDecl
+import com.neex.tellij.spi.ConnectContext
 import com.neex.tellij.spi.Connection
 import com.neex.tellij.spi.Durations
 import com.neex.tellij.spi.ResultSink
@@ -9,7 +10,6 @@ import com.neex.tellij.spi.SourceKind
 import com.neex.tellij.spi.Step
 import com.neex.tellij.spi.StepError
 import com.neex.tellij.spi.StepRequest
-import com.neex.tellij.vars.Vars
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicLong
 class KafkaSource : SourceKind {
     override val id: String = "kafka"
 
-    override fun connect(decl: ConnectDecl, vars: Vars): Connection {
+    override fun connect(decl: ConnectDecl, ctx: ConnectContext): Connection {
         if (decl.option("simulate") == "true") return SimulatedKafkaConnection(decl)
         throw StepError("real Kafka producer is not built yet", "add simulate=true to the @connect kafka line")
     }
