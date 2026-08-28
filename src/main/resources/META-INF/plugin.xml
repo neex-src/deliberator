@@ -31,6 +31,7 @@
         <sourceKind implementation="com.neex.tellij.sources.kafka.KafkaSource"/>
         <sourceKind implementation="com.neex.tellij.sources.logs.LogsSource"/>
         <sourceKind implementation="com.neex.tellij.sources.sql.SqlSource"/>
+        <sourceKind implementation="com.neex.tellij.sources.sqs.SqsSource"/>
     </extensions>
 
     <actions>

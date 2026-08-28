@@ -3,5 +3,6 @@ create table if not exists orders (
     customer    text,
     amount      numeric,
     source      text default 'workbench',
+    status      text default 'NEW',
     received_at timestamptz default now()
 );
