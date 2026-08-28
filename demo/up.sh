@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # demo/up.sh [service…] — start the demo stack with podman on the host network. Idempotent.
-# Services: pg kafka sqs consumer (default: all). Everything listens on localhost exactly as the IDE sees it.
+# Services: pg kafka sqs mongo consumer (default: all). Everything listens on localhost exactly as the IDE sees it.
 set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
 running() { podman ps --format '{{.Names}}' | grep -qx "$1"; }
@@ -44,6 +44,17 @@ up_sqs() {
   echo "tellij-sqs did not become ready"; return 1
 }
 
+up_mongo() {
+  if running tellij-mongo; then echo "tellij-mongo already running"; return; fi
+  podman rm -f tellij-mongo >/dev/null 2>&1
+  podman run -d --name tellij-mongo --network host docker.io/library/mongo:7 >/dev/null || { echo "podman run failed"; return 1; }
+  for _ in $(seq 1 40); do
+    [ "$(podman exec tellij-mongo mongosh --quiet --eval 'db.runCommand({ping:1}).ok' 2>/dev/null)" = "1" ] && { echo "tellij-mongo ready: mongodb://localhost:27017/demo"; return; }
+    sleep 1
+  done
+  echo "tellij-mongo did not become ready"; podman logs --tail 20 tellij-mongo; return 1
+}
+
 up_consumer() {
   podman rm -f tellij-consumer >/dev/null 2>&1
   ( cd "$DIR/.." && ./gradlew -q :demo-consumer:installDist ) || { echo "consumer build failed"; return 1; }
@@ -60,13 +71,14 @@ up_consumer() {
   echo "tellij-consumer did not report ready"; podman logs --tail 20 tellij-consumer; return 1
 }
 
-SERVICES=("$@"); [ ${#SERVICES[@]} -eq 0 ] && SERVICES=(pg kafka sqs consumer)
+SERVICES=("$@"); [ ${#SERVICES[@]} -eq 0 ] && SERVICES=(pg kafka sqs mongo consumer)
 for s in "${SERVICES[@]}"; do
   case "$s" in
     pg) up_pg ;;
     kafka) up_kafka ;;
     sqs) up_sqs ;;
+    mongo) up_mongo ;;
     consumer) up_consumer ;;
-    *) echo "unknown service: $s (known: pg kafka sqs consumer)"; exit 2 ;;
+    *) echo "unknown service: $s (known: pg kafka sqs mongo consumer)"; exit 2 ;;
   esac
 done

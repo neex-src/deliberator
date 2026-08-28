@@ -47,6 +47,7 @@ dependencies {
         exclude(group = "software.amazon.awssdk", module = "apache-client")
     }
     implementation("software.amazon.awssdk:url-connection-client")
+    implementation("org.mongodb:mongodb-driver-sync:5.5.1")
 }
 
 intellijPlatform {

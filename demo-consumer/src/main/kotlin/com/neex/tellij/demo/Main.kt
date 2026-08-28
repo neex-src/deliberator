@@ -35,6 +35,7 @@ object Config {
     val pgUser: String = env("PG_USER", "demo")
     val pgPassword: String = env("PG_PASSWORD", "demo")
     val logFile: String = env("LOG_FILE", "consumer.log")
+    val mongoUri: String = env("MONGO_URI", "mongodb://localhost:27017/demo")
     val httpPort: Int = env("HTTP_PORT", "8085").toInt()
     private fun env(k: String, d: String) = System.getenv(k)?.takeIf { it.isNotBlank() } ?: d
 }
@@ -87,6 +88,28 @@ object Store {
         }
 }
 
+/** Every event, as it arrived, into `events` — the document side of the demo. Never blocks the row. */
+object Events {
+    private val client by lazy {
+        val cs = com.mongodb.ConnectionString(Config.mongoUri)
+        com.mongodb.client.MongoClients.create(
+            com.mongodb.MongoClientSettings.builder().applyConnectionString(cs)
+                .applyToClusterSettings { it.serverSelectionTimeout(2, java.util.concurrent.TimeUnit.SECONDS) }
+                .applicationName("demo-consumer").build()
+        ).getDatabase(cs.database ?: "demo")
+    }
+
+    fun record(source: String, kind: String, id: String, json: com.google.gson.JsonObject): String = try {
+        client.getCollection("events").insertOne(
+            org.bson.Document("orderId", id).append("source", source).append("kind", kind)
+                .append("body", org.bson.Document.parse(json.toString())).append("receivedAt", java.util.Date())
+        )
+        "ok"
+    } catch (e: Exception) {
+        "down(${e.javaClass.simpleName})"
+    }
+}
+
 /** One event from either bus. */
 fun handle(source: String, body: String) {
     val json = try { JsonParser.parseString(body).asJsonObject } catch (e: Exception) {
@@ -96,12 +119,12 @@ fun handle(source: String, body: String) {
     val status = json.get("status")?.asString
     if (status != null) {
         Log.line("$source received orderId=$id status=$status")
-        retry("update") { val n = Store.updateStatus(id, status); Log.line("updated orderId=$id status=$status pg=$n") }
+        retry("update") { val n = Store.updateStatus(id, status); Log.line("updated orderId=$id status=$status pg=$n mongo=${Events.record(source, "payment", id, json)}") }
     } else {
         val customer = json.get("customer")?.asString
         val amount = json.get("amount")?.asDouble
         Log.line("$source received orderId=$id customer=$customer amount=$amount")
-        retry("insert") { val n = Store.insertOrder(id, customer, amount, source); Log.line("stored orderId=$id pg=$n source=$source") }
+        retry("insert") { val n = Store.insertOrder(id, customer, amount, source); Log.line("stored orderId=$id pg=$n source=$source mongo=${Events.record(source, "order", id, json)}") }
     }
 }
 

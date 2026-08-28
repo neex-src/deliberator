@@ -3,7 +3,7 @@
 `orders.tellij` is the workbench; the stack it talks to runs in podman on the host network.
 
 ```bash
-./up.sh                  # everything: pg kafka sqs consumer
+./up.sh                  # everything: pg kafka sqs mongo consumer
 ./up.sh pg kafka         # or a subset
 ./status.sh
 ./down.sh
@@ -14,6 +14,7 @@
 | `tellij-pg` | Postgres 16, `log_statement=all` | `localhost:5432`, db `demo`, user `demo`/`demo` |
 | `tellij-kafka` | apache/kafka 3.9 single-node KRaft, topic `orders` | `localhost:9092` |
 | `tellij-sqs` | ElasticMQ (SQS-compatible), queue `payments` (created by the consumer) | `http://localhost:9324` |
+| `tellij-mongo` | MongoDB 7; the consumer writes every event it receives into `demo.events` | `mongodb://localhost:27017/demo` |
 | `tellij-consumer` | `../demo-consumer` (Kotlin): Kafka `orders` → INSERT, SQS `payments` → UPDATE status; `GET /orders/{id}`, `GET /health` | logs to `logs/consumer.log`, `http://localhost:8085` |
 
 - `tellij-pg` runs with `log_statement=all`, so `podman logs tellij-pg` shows every statement —
