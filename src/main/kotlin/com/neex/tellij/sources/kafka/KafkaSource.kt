@@ -2,6 +2,7 @@ package com.neex.tellij.sources.kafka
 
 import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.spi.ConnectContext
+import com.neex.tellij.spi.DirectiveSpec
 import com.neex.tellij.spi.Connection
 import com.neex.tellij.spi.Durations
 import com.neex.tellij.spi.ResultSink
@@ -31,6 +32,19 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class KafkaSource : SourceKind {
     override val id: String = "kafka"
+
+    override val directives = listOf(
+        DirectiveSpec("key", "message key ({{orderId}} keeps one order on one partition)"),
+        DirectiveSpec("header", "name=value record header (repeatable)"),
+        DirectiveSpec("topic", "topic, when the block name is a connection name"),
+    )
+    override val connectOptions = listOf(
+        DirectiveSpec("bootstrap", "host:port[,host:port]", listOf("localhost:9092")),
+        DirectiveSpec("simulate", "true = no broker, pretend to send", listOf("true")),
+        DirectiveSpec("latency", "simulated send delay", listOf("300ms", "1s")),
+        DirectiveSpec("timeout", "max.block.ms — fail fast without a broker", listOf("5s")),
+        DirectiveSpec("producer.", "any producer config, e.g. producer.acks=1"),
+    )
 
     override fun connect(decl: ConnectDecl, ctx: ConnectContext): Connection {
         if (decl.option("simulate") == "true") return SimulatedKafkaConnection(decl)

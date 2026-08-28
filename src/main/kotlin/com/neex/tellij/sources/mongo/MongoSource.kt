@@ -11,6 +11,7 @@ import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.sources.http.JsonPathLite
 import com.neex.tellij.spi.CaptureSpec
 import com.neex.tellij.spi.ConnectContext
+import com.neex.tellij.spi.DirectiveSpec
 import com.neex.tellij.spi.Connection
 import com.neex.tellij.spi.Durations
 import com.neex.tellij.spi.ResultSink
@@ -35,6 +36,19 @@ import java.util.concurrent.TimeUnit
  */
 class MongoSource : SourceKind {
     override val id: String = "mongo"
+
+    override val directives = listOf(
+        DirectiveSpec("op", "what to do with the body", listOf("find", "count", "insert", "aggregate")),
+        DirectiveSpec("sort", "sort document for find", listOf("{ \"_id\": -1 }")),
+        DirectiveSpec("limit", "max documents shown", listOf("5", "20", "100")),
+        DirectiveSpec("capture", "name = \$.path from the first document"),
+        DirectiveSpec("collection", "collection, when the block name is a connection name"),
+    )
+    override val connectOptions = listOf(
+        DirectiveSpec("uri", "mongodb://host:port/db", listOf("mongodb://localhost:27017/demo")),
+        DirectiveSpec("db", "database, when the uri has none"),
+        DirectiveSpec("timeout", "server selection timeout", listOf("3s")),
+    )
 
     override fun connect(decl: ConnectDecl, ctx: ConnectContext): Connection {
         val uri = decl.option("uri") ?: throw StepError("mongo connection needs uri=mongodb://host:27017/db", "# @connect mongo local uri=mongodb://localhost:27017/demo")

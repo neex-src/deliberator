@@ -5,6 +5,7 @@ import com.google.gson.JsonParser
 import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.spi.CaptureSpec
 import com.neex.tellij.spi.ConnectContext
+import com.neex.tellij.spi.DirectiveSpec
 import com.neex.tellij.spi.Connection
 import com.neex.tellij.spi.Durations
 import com.neex.tellij.spi.ResultSink
@@ -30,6 +31,16 @@ import java.time.Duration
  */
 class HttpSource : SourceKind {
     override val id: String = "http"
+
+    override val directives = listOf(
+        DirectiveSpec("header", "Name=value request header (or write `Name: value` under the request line)"),
+        DirectiveSpec("capture", "name = \$.path[0].to.value from the JSON response"),
+    )
+    override val connectOptions = listOf(
+        DirectiveSpec("base", "base URL for relative requests", listOf("http://localhost:8085")),
+        DirectiveSpec("header.", "shared header, e.g. header.Authorization=\"Bearer …\""),
+        DirectiveSpec("timeout", "request timeout", listOf("10s", "30s")),
+    )
 
     override fun defaultConnection(): ConnectDecl = ConnectDecl("http", "default", emptyMap(), -1)
 

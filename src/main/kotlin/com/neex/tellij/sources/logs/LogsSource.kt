@@ -2,6 +2,7 @@ package com.neex.tellij.sources.logs
 
 import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.spi.ConnectContext
+import com.neex.tellij.spi.DirectiveSpec
 import com.neex.tellij.spi.Connection
 import com.neex.tellij.spi.Durations
 import com.neex.tellij.spi.ResultSink
@@ -23,6 +24,16 @@ import java.util.concurrent.TimeUnit
  */
 class LogsSource : SourceKind {
     override val id: String = "logs"
+
+    override val directives = listOf(
+        DirectiveSpec("filter", "substring or /regex/ a line must contain; repeat to AND", listOf("{{orderId}}")),
+        DirectiveSpec("for", "how long to tail", listOf("5s", "10s", "30s", "1m")),
+        DirectiveSpec("limit", "max lines kept in the result", listOf("100", "500", "5000")),
+    )
+    override val connectOptions = listOf(
+        DirectiveSpec("file", "path of the log file (relative to this workbench)", listOf("logs/app.log")),
+        DirectiveSpec("podman", "container name to `podman logs -f`"),
+    )
 
     override fun connect(decl: ConnectDecl, ctx: ConnectContext): Connection {
         decl.option("file")?.let { return FileLogConnection(decl, ctx.resolve(it)) }

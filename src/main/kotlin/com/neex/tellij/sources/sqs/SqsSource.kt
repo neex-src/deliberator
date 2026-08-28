@@ -2,6 +2,7 @@ package com.neex.tellij.sources.sqs
 
 import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.spi.ConnectContext
+import com.neex.tellij.spi.DirectiveSpec
 import com.neex.tellij.spi.Connection
 import com.neex.tellij.spi.Durations
 import com.neex.tellij.spi.ResultSink
@@ -31,6 +32,20 @@ import java.time.Duration
  */
 class SqsSource : SourceKind {
     override val id: String = "sqs"
+
+    override val directives = listOf(
+        DirectiveSpec("queue", "queue name or URL, when the block name is a connection name"),
+        DirectiveSpec("header", "name=value message attribute (repeatable)"),
+        DirectiveSpec("group", "MessageGroupId for FIFO queues"),
+        DirectiveSpec("dedup", "MessageDeduplicationId for FIFO queues"),
+    )
+    override val connectOptions = listOf(
+        DirectiveSpec("endpoint", "override for ElasticMQ / LocalStack", listOf("http://localhost:9324")),
+        DirectiveSpec("region", "AWS region", listOf("us-east-1", "eu-central-1", "eu-west-1")),
+        DirectiveSpec("accessKey", "static credentials (any value for ElasticMQ)", listOf("x")),
+        DirectiveSpec("secretKey", "static credentials (any value for ElasticMQ)", listOf("x")),
+        DirectiveSpec("timeout", "connect timeout", listOf("5s")),
+    )
 
     override fun connect(decl: ConnectDecl, ctx: ConnectContext): Connection = SqsConnection(
         decl,
