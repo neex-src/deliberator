@@ -65,6 +65,12 @@ class LogTailTest {
         assertEquals(listOf("a"), g.feed("b"))
         assertEquals(listOf("b"), g.flush())
         assertEquals(emptyList<String>(), g.flush())
+        // Postgres puts a prepared statement's parameters on a DETAIL line with its own timestamp.
+        val pg = EntryGrouper(LogFilter.parse(listOf("ord-9")))
+        assertEquals(emptyList<String>(), pg.feed("2026-08-28 14:43:41.905 UTC [82] LOG:  execute <unnamed>: insert into orders values (\$1)"))
+        assertEquals(emptyList<String>(), pg.feed("2026-08-28 14:43:41.905 UTC [82] DETAIL:  parameters: \$1 = 'ord-9'"))
+        assertEquals(2, pg.feed("2026-08-28 14:43:42.000 UTC [83] LOG:  statement: select 1").size)
+        assertEquals(emptyList<String>(), pg.flush())
     }
 
     @Test

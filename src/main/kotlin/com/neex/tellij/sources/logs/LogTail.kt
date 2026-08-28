@@ -25,15 +25,17 @@ class LogFilter(private val matchers: List<(String) -> Boolean>) {
 }
 
 /**
- * Groups a header line with the indented lines that follow it (a Postgres statement, a Java stack
- * trace) so the filter sees — and the buffer shows — whole entries. An entry completes when the
- * next non-indented line arrives or when the source goes idle ([flush]).
+ * Groups a header line with the lines that continue it — indented lines (a multi-line statement,
+ * a Java stack trace) and Postgres's `DETAIL:`/`HINT:`/`CONTEXT:`/`STATEMENT:` lines, which carry
+ * their own timestamp but belong to the entry above (the bound parameters of a prepared statement
+ * live there). The filter sees, and the buffer shows, whole entries. An entry completes when the
+ * next header arrives or when the source goes idle ([flush]).
  */
 class EntryGrouper(private val filter: LogFilter) {
     private val pending = ArrayList<String>()
 
     fun feed(line: String): List<String> {
-        if (pending.isNotEmpty() && line.isNotEmpty() && (line[0] == ' ' || line[0] == '\t')) {
+        if (pending.isNotEmpty() && isContinuation(line)) {
             pending += line
             return emptyList()
         }
@@ -47,6 +49,12 @@ class EntryGrouper(private val filter: LogFilter) {
         val entry = pending.toList()
         pending.clear()
         return if (entry.any { filter.matches(it) }) entry else emptyList()
+    }
+
+    companion object {
+        private val PG_DETAIL = Regex("""^\S.{0,80}?\s(DETAIL|HINT|CONTEXT|STATEMENT|QUERY|LOCATION):\s""")
+        fun isContinuation(line: String): Boolean =
+            line.isNotEmpty() && (line[0] == ' ' || line[0] == '\t' || PG_DETAIL.containsMatchIn(line))
     }
 }
 

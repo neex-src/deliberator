@@ -5,6 +5,7 @@ import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.model.WorkbenchModel
 import com.neex.tellij.spi.ConnectContext
 import com.neex.tellij.spi.Connection
+import com.neex.tellij.spi.Durations
 import com.neex.tellij.spi.ResultSink
 import com.neex.tellij.spi.RunCancelled
 import com.neex.tellij.spi.RunContext
@@ -99,16 +100,17 @@ object Runner {
             if (step == null || e.block.index !in armed) { halted = true; continue }
             if (ctx.isCancelled) { out.stopped(); continue }
             if (halted) { out.skipped("earlier step failed"); continue }
+            val delayMs = try { Durations.parse(e.block.directive("delay"), 0) } catch (err: StepError) { out.fail(err.message ?: "bad @delay", err.hint); halted = true; continue }
             if (step.concurrent) {
                 running.incrementAndGet()
                 spawn {
                     try {
-                        runOne(step, ctx, out)
+                        runOne(step, ctx, out, delayMs)
                     } finally {
                         running.decrementAndGet()
                     }
                 }
-            } else if (!runOne(step, ctx, out)) {
+            } else if (!runOne(step, ctx, out, delayMs)) {
                 halted = true
             }
         }
@@ -121,8 +123,10 @@ object Runner {
     }
 
     /** true on success. */
-    private fun runOne(step: Step, ctx: RunContext, out: ResultSink): Boolean {
+    private fun runOne(step: Step, ctx: RunContext, out: ResultSink, delayMs: Long = 0): Boolean {
         return try {
+            // `# @delay 1s`: give an eventually-consistent system a beat before asking it.
+            if (delayMs > 0) { ctx.sleep(delayMs); ctx.checkCancelled() }
             out.started()
             step.run(ctx, out)
             // A step that returned because it noticed the cancel flag did not "finish".

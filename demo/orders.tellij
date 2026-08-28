@@ -1,12 +1,13 @@
-# Tellij workbench — one order through the demo stack.
+# Tellij workbench — one order through the demo stack (demo/up.sh).
 # Ctrl+Enter runs the block under the caret, Ctrl+Shift+Enter runs everything, Esc stops.
 # @var orderId = ord-{{uuid}}
 # @var customer = alice
-# @connect kafka local bootstrap=localhost:9092 simulate=true latency=400ms
+# @connect kafka local bootstrap=localhost:9092
+# @connect sqs local endpoint=http://localhost:9324 region=us-east-1 accessKey=x secretKey=x
 # @connect logs consumer file=logs/consumer.log
-# @connect logs echo podman=tellij-echo
 # @connect sql pg url=jdbc:postgresql://localhost:5432/demo user=demo password={{env.PG_PASSWORD}}
 # @connect logs pg podman=tellij-pg
+# @connect logs echo podman=tellij-echo
 
 ### kafka orders
 # @key {{orderId}}
@@ -14,23 +15,22 @@
 
 ### logs consumer
 # @filter {{orderId}}
-# @for 8s
-
-### sql pg seed — what the consumer would have stored
-insert into orders (id, customer, amount, source)
-values ('{{orderId}}', '{{customer}}', 42.5, 'workbench')
-on conflict (id) do nothing
+# @for 6s
 
 ### sql pg
-# @limit 20
-select id, customer, amount, source, received_at from orders where id = '{{orderId}}'
+# @delay 1s
+select id, customer, amount, status, source, received_at from orders where id = '{{orderId}}'
+
+### sqs payments
+{ "orderId": "{{orderId}}", "status": "PAID", "paidAt": "{{now}}" }
+
+### sql pg
+# @delay 1s
+select id, status from orders where id = '{{orderId}}'
 
 ### logs pg
 # @filter {{orderId}}
-# @for 6s
-
-### kafka payments
-{ "orderId": "{{orderId}}", "status": "PAID", "paidAt": "{{now}}" }
+# @for 5s
 
 ### logs echo
-# @for 4s
+# @for 3s

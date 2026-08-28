@@ -34,6 +34,19 @@ dependencies {
     implementation("org.postgresql:postgresql:42.7.7") {
         exclude(group = "org.checkerframework")
     }
+    implementation("org.apache.kafka:kafka-clients:3.9.2") {
+        // compression codecs are native + large; the workbench sends uncompressed
+        exclude(group = "com.github.luben", module = "zstd-jni")
+        exclude(group = "org.xerial.snappy", module = "snappy-java")
+        exclude(group = "org.lz4", module = "lz4-java")
+    }
+    implementation(platform("software.amazon.awssdk:bom:2.46.7"))
+    implementation("software.amazon.awssdk:sqs") {
+        // the SDK's default HTTP clients; we pass UrlConnectionHttpClient explicitly
+        exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
+        exclude(group = "software.amazon.awssdk", module = "apache-client")
+    }
+    implementation("software.amazon.awssdk:url-connection-client")
 }
 
 intellijPlatform {
