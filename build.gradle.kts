@@ -25,7 +25,11 @@ configurations.all {
 dependencies {
     intellijPlatform {
         local("~/.local/share/JetBrains/Toolbox/apps/intellij-idea-ultimate")
+        // Java PSI for the endpoint summary / controller blocks — an OPTIONAL plugin dependency at
+        // runtime (META-INF/tellij-java.xml); the core keeps loading without it.
+        bundledPlugin("com.intellij.java")
         testFramework(TestFrameworkType.Platform)
+        testFramework(TestFrameworkType.Plugin.Java)
         pluginVerifier()
     }
     testImplementation("junit:junit:4.13.2")
