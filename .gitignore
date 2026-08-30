@@ -6,3 +6,8 @@ build/
 .intellijPlatform/
 demo/.idea/
 demo/logs/*.log
+# demo-api is a project the sandbox IDE opens: its Gradle/SDK settings are part of the demo.
+!demo-api/.idea/
+demo-api/.idea/*
+!demo-api/.idea/gradle.xml
+!demo-api/.idea/misc.xml
