@@ -14,11 +14,13 @@
 
 ### kafka orders
 # @key {{orderId}}
+# @assert offset >= 0
 { "orderId": "{{orderId}}", "customer": "{{customer}}", "amount": 42.5 }
 
 ### logs consumer
 # @filter {{orderId}}
 # @for 6s
+# @assert lines >= 2
 
 ### sql pg
 # @delay 1s
@@ -29,10 +31,15 @@ select id, customer, amount, status, source, received_at from orders where id = 
 
 ### sql pg
 # @delay 1s
+# @assert rows == 1
+# @assert col.status == "PAID"
 select id, status from orders where id = '{{orderId}}'
 
 ### http
 # @capture status = $.status
+# @assert status == 200
+# @assert $.status == "PAID"
+# @assert elapsed < 2000
 GET http://localhost:8085/orders/{{orderId}}
 Accept: application/json
 
@@ -41,6 +48,8 @@ select count(*) as orders_with_status from orders where status = '{{status}}'
 
 ### mongo events
 # @sort { "receivedAt": 1 }
+# @assert docs == 2
+# @assert doc.kind == order
 { "orderId": "{{orderId}}" }
 
 ### logs pg

@@ -37,6 +37,7 @@ class KafkaSource : SourceKind {
         DirectiveSpec("key", "message key ({{orderId}} keeps one order on one partition)"),
         DirectiveSpec("header", "name=value record header (repeatable)"),
         DirectiveSpec("topic", "topic, when the block name is a connection name"),
+        DirectiveSpec("assert", "facts: topic, partition, offset, key, elapsed", listOf("offset >= 0", "partition == 0")),
     )
     override val connectOptions = listOf(
         DirectiveSpec("bootstrap", "host:port[,host:port]", listOf("localhost:9092")),
@@ -123,6 +124,7 @@ class KafkaSend(
         out.appendLine("sent topic=${md.topic()} partition=${md.partition()} offset=${md.offset()}" +
             (key?.let { " key=$it" } ?: "") + " bytes=${bytes.size}" +
             (if (headers.isNotEmpty()) " headers=${headers.joinToString(",") { it.first }}" else ""))
+        out.fact("topic", md.topic()); out.fact("partition", md.partition()); out.fact("offset", md.offset()); out.fact("key", key)
         out.done("sent")
     }
 }
@@ -140,8 +142,10 @@ class SimulatedSend(private val conn: SimulatedKafkaConnection, private val topi
             ctx.checkCancelled()
         }
         val bytes = body.toByteArray(Charsets.UTF_8).size
-        out.appendLine("simulated send topic=$topic partition=0 offset=${conn.nextOffset(topic)}" +
+        val offset = conn.nextOffset(topic)
+        out.appendLine("simulated send topic=$topic partition=0 offset=$offset" +
             (key?.let { " key=$it" } ?: "") + " bytes=$bytes")
+        out.fact("topic", topic); out.fact("partition", 0); out.fact("offset", offset); out.fact("key", key)
         out.done("simulated")
     }
 }

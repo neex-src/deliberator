@@ -62,6 +62,9 @@ class HttpSourceTest {
         assertEquals(listOf("{", "  \"orderId\": \"o1\",", "  \"items\": [", "    {", "      \"sku\": \"a\",", "      \"qty\": 2", "    }", "  ],", "  \"status\": \"PAID\",", "  \"note\": null", "}"), sink.lines.drop(blank + 1))
         assertEquals("yes", lastHeader)
         assertEquals(mapOf("status" to "PAID", "sku" to "a", "note" to "null"), ctx.captures)
+        assertEquals(200, sink.facts["status"])
+        assertEquals("application/json", sink.facts["headers.content-type"])
+        assertEquals("PAID", (sink.facts["$"] as com.google.gson.JsonElement).asJsonObject["status"].asString)
     }
 
     @Test

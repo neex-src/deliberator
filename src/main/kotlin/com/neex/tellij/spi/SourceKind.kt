@@ -42,6 +42,7 @@ data class DirectiveSpec(val name: String, val hint: String, val values: List<St
             DirectiveSpec("delay", "wait before running this block", listOf("500ms", "1s", "2s", "5s")),
             DirectiveSpec("timeout", "give up after", listOf("1s", "5s", "10s", "30s")),
             DirectiveSpec("capture", "name = \$.json.path (http, mongo) or = column (sql) → {{name}} for later blocks"),
+            DirectiveSpec("assert", "a check on this block's facts — repeatable; ✓/✗ under the result, FAILED n/m in the header, the run continues", listOf("elapsed < 500")),
         )
         val HEADER: List<DirectiveSpec> = listOf(
             DirectiveSpec("var", "name = value — {{name}} everywhere below; may use {{uuid}}, {{now}}, {{env.X}}"),
@@ -120,6 +121,10 @@ interface ResultSink {
     fun appendLine(line: CharSequence)
     fun appendText(text: CharSequence) = text.lineSequence().forEach { appendLine(it) }
     fun done(summary: String? = null)
+    /** `done`, but an assertion failed: the header says so; the run continues. */
+    fun failed(summary: String) = done(summary)
+    /** A value later `# @assert` lines can check (`status`, `rows`, `$` as a JsonElement, …). */
+    fun fact(name: String, value: Any?) {}
     fun fail(message: String, hint: String? = null)
     fun skipped(reason: String)
     fun stopped()

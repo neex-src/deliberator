@@ -54,6 +54,12 @@ open class FakeSource(override val id: String = "fake", val events: MutableList<
             "echo" -> object : Step {
                 override fun run(ctx: RunContext, out: ResultSink) { out.appendLine(words.drop(1).joinToString(" ")) }
             }
+            "facts" -> object : Step {
+                override fun run(ctx: RunContext, out: ResultSink) {
+                    words.drop(1).forEach { kv -> val (k, v) = kv.split("=", limit = 2); out.fact(k, v.toIntOrNull() ?: v) }
+                    out.appendLine("facts published")
+                }
+            }
             "badstep" -> throw StepError("bad step", "fix it")
             else -> throw StepError("unknown fake body '${req.body}'")
         }
@@ -62,9 +68,12 @@ open class FakeSource(override val id: String = "fake", val events: MutableList<
 
 class MemorySink(val name: String) : ResultSink {
     val lines = CopyOnWriteArrayList<String>()
+    val facts = java.util.Collections.synchronizedMap(LinkedHashMap<String, Any?>())
     @Volatile var terminal: String? = null
     override fun appendLine(line: CharSequence) { lines += line.toString() }
+    override fun fact(name: String, value: Any?) { facts[name] = value }
     override fun done(summary: String?) { terminal = terminal ?: "done" }
+    override fun failed(summary: String) { terminal = terminal ?: "failed:$summary" }
     override fun fail(message: String, hint: String?) { terminal = terminal ?: "fail:$message:$hint" }
     override fun skipped(reason: String) { terminal = terminal ?: "skipped:$reason" }
     override fun stopped() { terminal = terminal ?: "stopped" }
@@ -150,6 +159,16 @@ class RunnerTest {
         assertEquals(listOf("# captured: id=42", "got 42"), sinks.getValue("b").lines)
         assertEquals("done", sinks.getValue("b").terminal)
         assertTrue(sinks.getValue("c").terminal!!, sinks.getValue("c").terminal!!.startsWith("fail:unknown variable {{nope}}"))
+    }
+
+    @Test
+    fun assertionsRenderAndDoNotHalt() {
+        val sinks = run("# @connect fake f\n### fake a\n# @assert n == 1\n# @assert s == \"y\"\n# @assert elapsed < 5000\nfacts n=1 s=x\n### fake b\nlines 1\n")
+        assertEquals(listOf("facts published", "✓ n == 1", "✗ s == \"y\" (was \"x\")", "✓ elapsed < 5000"), sinks.getValue("a").lines)
+        assertEquals("failed:FAILED 1/3", sinks.getValue("a").terminal)
+        assertEquals("done", sinks.getValue("b").terminal)
+        val bad = run("# @connect fake f\n### fake a\n# @assert n === 1\nfacts n=1\n")
+        assertTrue(bad.getValue("a").terminal!!, bad.getValue("a").terminal!!.startsWith("fail:bad @assert"))
     }
 
     @Test

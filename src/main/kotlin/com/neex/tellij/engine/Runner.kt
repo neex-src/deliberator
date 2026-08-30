@@ -1,5 +1,6 @@
 package com.neex.tellij.engine
 
+import com.neex.tellij.asserts.AssertExpr
 import com.neex.tellij.model.Block
 import com.neex.tellij.model.ConnectDecl
 import com.neex.tellij.model.WorkbenchModel
@@ -21,7 +22,14 @@ import java.util.concurrent.atomic.AtomicInteger
  * [captureVersion] is the context's version when it was planned; [captured] the captured values
  * its text uses (shown in the section so the substituted body is accountable).
  */
-class PlanEntry(val block: Block, val step: Step?, val error: StepError?, val captureVersion: Int = 0, val captured: Map<String, String> = emptyMap())
+class PlanEntry(
+    val block: Block,
+    val step: Step?,
+    val error: StepError?,
+    val captureVersion: Int = 0,
+    val captured: Map<String, String> = emptyMap(),
+    val asserts: List<AssertExpr> = emptyList(),
+)
 
 class Plan(val entries: List<PlanEntry>, val connectionMap: MutableMap<String, Connection>) {
     val connections: List<Connection> get() = connectionMap.values.toList()
@@ -56,7 +64,8 @@ object Runner {
                     kind.connect(decl.copy(options = decl.options.mapValues { vars.substitute(it.value) }), connectCtx)
                 }
                 val body = block.body?.let { vars.substitute(it.substring(text)) } ?: ""
-                PlanEntry(block, kind.step(StepRequest(block, body, target, vars), conn), null, captureVersion, captured)
+                val asserts = AssertExpr.parseAll(block.directives("assert").map { vars.substitute(it) })
+                PlanEntry(block, kind.step(StepRequest(block, body, target, vars), conn), null, captureVersion, captured, asserts)
             } catch (e: StepError) {
                 PlanEntry(block, null, e, captureVersion, captured)
             } catch (e: Exception) {
@@ -121,16 +130,17 @@ object Runner {
             if (ctx.isCancelled) { out.stopped(); continue }
             if (halted) { out.skipped("earlier step failed"); continue }
             val delayMs = try { Durations.parse(e.block.directive("delay"), 0) } catch (err: StepError) { out.fail(err.message ?: "bad @delay", err.hint); halted = true; continue }
+            val sink = if (e.asserts.isEmpty()) out else AssertingSink(out, e.asserts)
             if (step.concurrent) {
                 running.incrementAndGet()
                 spawn {
                     try {
-                        runOne(step, ctx, out, delayMs)
+                        runOne(step, ctx, sink, delayMs)
                     } finally {
                         running.decrementAndGet()
                     }
                 }
-            } else if (!runOne(step, ctx, out, delayMs)) {
+            } else if (!runOne(step, ctx, sink, delayMs)) {
                 halted = true
             }
         }

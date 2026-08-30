@@ -87,9 +87,11 @@ class TellijCompletionContributor : CompletionContributor() {
                 }
             }
             DIRECTIVE_VALUE.matchEntire(before)?.let { m ->
-                val all = DirectiveSpec.HEADER + DirectiveSpec.COMMON + (kind?.let { SourceRegistry.byId(it)?.directives } ?: emptyList())
-                val spec = all.firstOrNull { it.name == m.groupValues[1] && it.values.isNotEmpty() } ?: return null
-                return m.groupValues[2] to spec.values.map { LookupElementBuilder.create(it).withTypeText(spec.hint) }
+                val all = (kind?.let { SourceRegistry.byId(it)?.directives } ?: emptyList()) + DirectiveSpec.COMMON + DirectiveSpec.HEADER
+                val specs = all.filter { it.name == m.groupValues[1] && it.values.isNotEmpty() }
+                if (specs.isEmpty()) return null
+                return m.groupValues[2] to specs.flatMap { s -> s.values.map { it to s.hint } }.distinctBy { it.first }
+                    .map { (v, hint) -> LookupElementBuilder.create(v).withTypeText(hint) }
             }
             return null
         }

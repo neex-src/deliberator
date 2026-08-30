@@ -37,6 +37,13 @@ class TellijCompletionTest : BasePlatformTestCase() {
         assertEquals("# @connect logs a file=\n", myFixture.editor.document.text)
     }
 
+    fun testAssertTemplatesPerKind() {
+        val http = complete("### http\n# @assert <caret>\n")!!
+        assertTrue(http.toString(), http.containsAll(listOf("status == 200", "elapsed < 500", "body contains \"PAID\"")))
+        val sql = complete("### sql pg\n# @assert <caret>\n")!!
+        assertTrue(sql.toString(), sql.contains("rows == 1") && !sql.contains("status == 200"))
+    }
+
     fun testVariablesInsideBraces() {
         val vars = complete("# @var orderId = 1\n# @var customer = a\n### http\n# @capture status = \$.s\n\n### sql pg\nselect '{{<caret>\n")!!
         assertTrue(vars.toString(), vars.containsAll(listOf("orderId", "customer", "status", "uuid", "now", "now.epoch")))

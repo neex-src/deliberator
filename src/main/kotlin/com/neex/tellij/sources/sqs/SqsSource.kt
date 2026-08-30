@@ -38,6 +38,7 @@ class SqsSource : SourceKind {
         DirectiveSpec("header", "name=value message attribute (repeatable)"),
         DirectiveSpec("group", "MessageGroupId for FIFO queues"),
         DirectiveSpec("dedup", "MessageDeduplicationId for FIFO queues"),
+        DirectiveSpec("assert", "facts: queue, messageId, md5, elapsed", listOf("messageId matches /^[0-9a-f-]+$/")),
     )
     override val connectOptions = listOf(
         DirectiveSpec("endpoint", "override for ElasticMQ / LocalStack", listOf("http://localhost:9324")),
@@ -128,6 +129,7 @@ class SqsSend(
             }
             out.appendLine("sent queue=$queue messageId=${resp.messageId()} md5=${resp.md5OfMessageBody()} bytes=${body.toByteArray().size}" +
                 (if (attrs.isNotEmpty()) " attributes=${attrs.keys.joinToString(",")}" else ""))
+            out.fact("queue", queue); out.fact("messageId", resp.messageId()); out.fact("md5", resp.md5OfMessageBody())
             out.done("sent")
         } catch (e: QueueDoesNotExistException) {
             throw StepError("queue '$queue' does not exist at $where", "the demo consumer creates its queues; or create it: aws sqs create-queue --queue-name $queue")

@@ -34,6 +34,7 @@ class DocumentResultSink(
 
     private sealed class Terminal {
         class Done(val summary: String?) : Terminal()
+        class Failed(val summary: String) : Terminal()
         class Fail(val message: String, val hint: String?) : Terminal()
         class Skipped(val reason: String) : Terminal()
         object Stopped : Terminal()
@@ -88,6 +89,7 @@ class DocumentResultSink(
     }
 
     override fun done(summary: String?) = terminate(Terminal.Done(summary))
+    override fun failed(summary: String) = terminate(Terminal.Failed(summary))
     override fun fail(message: String, hint: String?) = terminate(Terminal.Fail(message, hint))
     override fun skipped(reason: String) = terminate(Terminal.Skipped(reason))
     override fun stopped() = terminate(Terminal.Stopped)
@@ -139,6 +141,7 @@ class DocumentResultSink(
         val count = synchronized(lock) { lines }
         return when (t) {
             is Terminal.Done -> ResultMarkers.header(block.kind, block.name, at, elapsed, t.summary ?: (if (count != 1) "$count lines" else null))
+            is Terminal.Failed -> ResultMarkers.header(block.kind, block.name, at, elapsed, t.summary)
             is Terminal.Fail -> ResultMarkers.header(block.kind, block.name, at, elapsed, "ERROR")
             is Terminal.Skipped -> ResultMarkers.header(block.kind, block.name, at, null, "skipped")
             Terminal.Stopped -> ResultMarkers.header(block.kind, block.name, at, elapsed, "stopped")
