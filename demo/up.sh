@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # demo/up.sh [service…] — start the demo stack with podman on the host network. Idempotent.
-# Services: pg kafka sqs mongo consumer (default: all). Everything listens on localhost exactly as the IDE sees it.
+# Services: pg kafka sqs mongo consumer api (default: all). api runs on the host (JDWP :5005). Everything listens on localhost exactly as the IDE sees it.
 set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
 running() { podman ps --format '{{.Names}}' | grep -qx "$1"; }
@@ -71,7 +71,25 @@ up_consumer() {
   echo "tellij-consumer did not report ready"; podman logs --tail 20 tellij-consumer; return 1
 }
 
-SERVICES=("$@"); [ ${#SERVICES[@]} -eq 0 ] && SERVICES=(pg kafka sqs mongo consumer)
+up_api() {
+  up_pg || return 1
+  ( cd "$DIR/../demo-api" && ./gradlew -q bootJar ) || { echo "api build failed"; return 1; }
+  mkdir -p "$DIR/logs"
+  # A pid file, never pkill -f: a pattern would match any shell whose command line mentions the jar.
+  [ -f "$DIR/logs/api.pid" ] && { kill "$(cat "$DIR/logs/api.pid")" 2>/dev/null; sleep 1; rm -f "$DIR/logs/api.pid"; }
+  # On the host, not in a container: the sandbox IDE attaches to :5005 and the sources match.
+  nohup /usr/lib/jvm/java-17-openjdk/bin/java \
+    -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 \
+    -jar "$DIR/../demo-api/build/libs/demo-api.jar" > "$DIR/logs/api.log" 2>&1 &
+  echo $! > "$DIR/logs/api.pid"
+  for _ in $(seq 1 60); do
+    curl -sf http://localhost:8080/v3/api-docs >/dev/null 2>&1 && { echo "demo-api ready: http://localhost:8080 (jdwp :5005, log demo/logs/api.log)"; return; }
+    sleep 1
+  done
+  echo "demo-api did not become ready"; tail -20 "$DIR/logs/api.log"; return 1
+}
+
+SERVICES=("$@"); [ ${#SERVICES[@]} -eq 0 ] && SERVICES=(pg kafka sqs mongo consumer api)
 for s in "${SERVICES[@]}"; do
   case "$s" in
     pg) up_pg ;;
@@ -79,6 +97,7 @@ for s in "${SERVICES[@]}"; do
     sqs) up_sqs ;;
     mongo) up_mongo ;;
     consumer) up_consumer ;;
-    *) echo "unknown service: $s (known: pg kafka sqs mongo consumer)"; exit 2 ;;
+    api) up_api ;;
+    *) echo "unknown service: $s (known: pg kafka sqs mongo consumer api)"; exit 2 ;;
   esac
 done

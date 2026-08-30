@@ -1,0 +1,15 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: demo-api
+  datasource:
+    url: jdbc:postgresql://localhost:5432/demo
+    username: demo
+    password: demo
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSS} %-5level %logger{0} - %msg%n"

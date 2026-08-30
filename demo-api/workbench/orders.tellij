@@ -1,4 +1,4 @@
-# Tellij workbench — one order through the demo stack (demo/up.sh).
+# Tellij workbench — one order through the demo stack (../../demo/up.sh) and this service (demo-api).
 # Ctrl+Enter runs the block under the caret, Ctrl+Shift+Enter runs everything, Esc stops.
 # Ctrl+Alt+Shift+Enter runs from the caret down. Esc / Ctrl+Alt+Shift+- fold results, Ctrl+Alt+Shift+= unfold.
 # Ctrl+Alt+Backspace clears the result under the caret, Ctrl+Alt+Shift+Backspace clears them all.
@@ -6,7 +6,9 @@
 # @var customer = alice
 # @connect kafka local bootstrap=localhost:9092
 # @connect sqs local endpoint=http://localhost:9324 region=us-east-1 accessKey=x secretKey=x
-# @connect logs consumer file=logs/consumer.log
+# @connect logs consumer file=../../demo/logs/consumer.log
+# @connect http api base=http://localhost:8080
+# @connect logs api file=../../demo/logs/api.log
 # @connect sql pg url=jdbc:postgresql://localhost:5432/demo user=demo password={{env.PG_PASSWORD}}
 # @connect logs pg podman=tellij-pg
 # @connect mongo local uri=mongodb://localhost:27017/demo
@@ -45,6 +47,21 @@ Accept: application/json
 
 ### sql pg
 select count(*) as orders_with_status from orders where status = '{{status}}'
+
+### http api the same order, through the service's own API
+# @header X-Trace={{orderId}}
+# @assert status == 201
+# @assert $.items[0].sku == "A-1"
+# @capture apiOrder = $.orderId
+POST /api/orders
+Content-Type: application/json
+
+{ "orderId": "{{orderId}}-api", "customer": "{{customer}}", "amount": 42.5, "items": [ { "sku": "A-1", "qty": 2 } ] }
+
+### logs api
+# @filter {{orderId}}
+# @for 3s
+# @assert lines >= 1
 
 ### mongo events
 # @sort { "receivedAt": 1 }
