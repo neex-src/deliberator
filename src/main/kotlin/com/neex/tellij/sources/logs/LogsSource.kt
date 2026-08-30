@@ -29,6 +29,7 @@ class LogsSource : SourceKind {
         DirectiveSpec("filter", "substring or /regex/ a line must contain; repeat to AND", listOf("{{orderId}}")),
         DirectiveSpec("for", "how long to tail", listOf("5s", "10s", "30s", "1m")),
         DirectiveSpec("limit", "max lines kept in the result", listOf("100", "500", "5000")),
+        DirectiveSpec("assert", "facts: lines (matched), elapsed", listOf("lines > 0", "lines >= 2")),
     )
     override val connectOptions = listOf(
         DirectiveSpec("file", "path of the log file (relative to this workbench)", listOf("logs/app.log")),
@@ -76,6 +77,7 @@ class FileTailStep(path: Path, filter: LogFilter, private val windowMs: Long) : 
             ctx.sleep(minOf(200L, maxOf(1L, deadline - System.currentTimeMillis())))
         }
         if (ctx.isCancelled) return // the runner marks the section "stopped"
+        out.fact("lines", matched)
         out.done("$matched lines · window ${LogsSource.windowText(windowMs)}")
     }
 }
@@ -132,6 +134,7 @@ class PodmanTailStep(private val container: String, private val filter: LogFilte
             reader.join(1000)
         }
         if (ctx.isCancelled) return // the runner marks the section "stopped"
+        out.fact("lines", matched)
         out.done("$matched lines · window ${LogsSource.windowText(windowMs)}")
     }
 }

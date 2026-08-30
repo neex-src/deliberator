@@ -43,6 +43,7 @@ class MongoSource : SourceKind {
         DirectiveSpec("limit", "max documents shown", listOf("5", "20", "100")),
         DirectiveSpec("capture", "name = \$.path from the first document"),
         DirectiveSpec("collection", "collection, when the block name is a connection name"),
+        DirectiveSpec("assert", "facts: docs, doc.<path> (first document), count, inserted, elapsed", listOf("docs == 2", "docs >= 1", "doc.status == \"PAID\"", "count == 1")),
     )
     override val connectOptions = listOf(
         DirectiveSpec("uri", "mongodb://host:port/db", listOf("mongodb://localhost:27017/demo")),
@@ -126,6 +127,7 @@ class MongoStep(
                 "count" -> {
                     val n = coll.countDocuments(MongoSource.parseDoc(body, "filter"))
                     out.appendLine("$n document${if (n == 1L) "" else "s"} match")
+                    out.fact("count", n)
                     out.done("$n")
                 }
                 "insert" -> {
@@ -137,6 +139,7 @@ class MongoStep(
                         listOf(coll.insertOne(MongoSource.parseDoc(body, "document")).insertedId.toString())
                     }
                     out.appendLine("inserted ${ids.size} document${if (ids.size == 1) "" else "s"}: ${ids.joinToString()}")
+                    out.fact("inserted", ids.size)
                     out.done("inserted ${ids.size}")
                 }
             }
@@ -156,6 +159,8 @@ class MongoStep(
         }
         if (more > 0) out.appendLine("… more ${noun}s (limit $limit, # @limit N to raise)")
         out.appendLine("(${shown.size} $noun${if (shown.size == 1) "" else "s"} · ${System.currentTimeMillis() - t0} ms)")
+        out.fact("docs", shown.size)
+        shown.firstOrNull()?.let { out.fact("doc", com.google.gson.JsonParser.parseString(it.toJson(JsonWriterSettings.builder().outputMode(JsonMode.RELAXED).build()))) }
         for (c in captures) {
             val first = shown.firstOrNull() ?: throw StepError("capture '${c.name}': no documents")
             ctx.capture(c.name, JsonPathLite.get(first.toJson(JsonWriterSettings.builder().outputMode(JsonMode.RELAXED).build()), c.expr))

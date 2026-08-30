@@ -49,6 +49,17 @@ class RunSessionTest : BasePlatformTestCase() {
         assertFalse("run-all takes a fresh snapshot", d.text.contains("# vars: id=$id1"))
     }
 
+    fun testFailedAssertionMarksHeaderAndContinues() {
+        myFixture.configureByText("x.tellij", "# @connect fake f\n\n### fake one\n# @assert n == 2\n# @assert s == x\nfacts n=1 s=x\n\n### fake two\nlines 1\n")
+        val d = myFixture.editor.document
+        val session = RunSession.start(project, d, { it.blocks }, freshVars = true)!!
+        await(session)
+        val text = d.text
+        assertTrue(text, Regex("#> result fake one · [^\n]* · \\d+ ms · FAILED 1/2\n# vars: \\(none\\)\nfacts published\n✗ n == 2 \\(was 1\\)\n✓ s == x\n#< end").containsMatchIn(text))
+        assertTrue(text, text.contains("#> result fake two · ") && text.contains("two line 0"))
+        assertFalse(text.contains("ERROR"))
+    }
+
     fun testCancelMarksStopped() {
         myFixture.configureByText("x.tellij", "# @connect fake f\n### fake t\ntail\n")
         val d = myFixture.editor.document

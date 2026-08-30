@@ -35,6 +35,7 @@ class HttpSource : SourceKind {
     override val directives = listOf(
         DirectiveSpec("header", "Name=value request header (or write `Name: value` under the request line)"),
         DirectiveSpec("capture", "name = \$.path[0].to.value from the JSON response"),
+        DirectiveSpec("assert", "facts: status, headers.<name>, body, size, \$.json.path, elapsed", listOf("status == 200", "\$.status == \"PAID\"", "body contains \"PAID\"", "headers.content-type contains json", "\$.items[0].sku exists")),
     )
     override val connectOptions = listOf(
         DirectiveSpec("base", "base URL for relative requests", listOf("http://localhost:8085")),
@@ -96,8 +97,19 @@ class HttpSend(private val conn: HttpConnection, private val spec: HttpRequestSp
             out.appendLine("")
             out.appendText(if (contentType.contains("json", ignoreCase = true)) prettyJson(body) else body)
         }
+        out.fact("status", response.statusCode())
+        response.headers().map().forEach { (k, v) -> if (!k.startsWith(":")) out.fact("headers.${k.lowercase()}", v.joinToString(", ")) }
+        out.fact("body", body)
+        out.fact("size", body.toByteArray().size)
+        parsedJson(body, contentType)?.let { out.fact("$", it) }
         for (c in captures) ctx.capture(c.name, JsonPathLite.get(body, c.expr))
         out.done("${response.statusCode()} · ${size(body.toByteArray().size)}")
+    }
+
+    private fun parsedJson(body: String, contentType: String): com.google.gson.JsonElement? {
+        val t = body.trimStart()
+        if (!contentType.contains("json", ignoreCase = true) && !(t.startsWith("{") || t.startsWith("["))) return null
+        return try { JsonParser.parseString(body) } catch (e: Exception) { null }
     }
 
     private fun prettyJson(body: String): String = try {

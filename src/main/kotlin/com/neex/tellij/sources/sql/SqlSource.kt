@@ -29,6 +29,7 @@ class SqlSource : SourceKind {
     override val directives = listOf(
         DirectiveSpec("limit", "max rows shown", listOf("20", "50", "200", "1000")),
         DirectiveSpec("capture", "name = column — the first row's value becomes {{name}}"),
+        DirectiveSpec("assert", "facts: rows, affected, columns, col.<label> (first row), elapsed", listOf("rows == 1", "rows >= 1", "col.status == \"PAID\"", "affected == 1")),
     )
     override val connectOptions = listOf(
         DirectiveSpec("url", "JDBC URL", listOf("jdbc:postgresql://localhost:5432/demo")),
@@ -102,6 +103,8 @@ class SqlStep(private val conn: PostgresConnection, private val sql: String, pri
             }
             if (!hasResultSet) {
                 out.appendLine(TableRenderer.rowsAffected(st.updateCount))
+                out.fact("affected", st.updateCount)
+                out.fact("rows", 0)
                 out.done("${st.updateCount} affected")
                 return
             }
@@ -110,6 +113,9 @@ class SqlStep(private val conn: PostgresConnection, private val sql: String, pri
                 val more = if (rows.size > limit) 1 else 0
                 val shown = rows.take(limit)
                 out.appendText(TableRenderer.render(columns, shown, truncatedRows = more, limit = limit))
+                out.fact("rows", shown.size)
+                out.fact("columns", columns)
+                shown.firstOrNull()?.let { first -> columns.forEachIndexed { i, c -> out.fact("col.$c", first[i]) } }
                 val elapsed = System.currentTimeMillis() - t0
                 out.appendLine(TableRenderer.rowCount(shown.size, elapsed) + if (more > 0) " (more available)" else "")
                 // `# @capture name = column` takes the first row's value.
