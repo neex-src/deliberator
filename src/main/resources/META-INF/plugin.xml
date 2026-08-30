@@ -10,6 +10,7 @@
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends optional="true" config-file="tellij-java.xml">com.intellij.java</depends>
 
     <extensionPoints>
         <extensionPoint qualifiedName="com.neex.tellij.sourceKind"
@@ -26,7 +27,7 @@
         <completion.contributor language="Tellij" implementationClass="com.neex.tellij.editor.TellijCompletionContributor"/>
         <typedHandler implementation="com.neex.tellij.editor.TellijTypedHandler"/>
         <editorFactoryListener implementation="com.neex.tellij.editor.TellijEditorTracker"/>
-        <editorActionHandler action="EditorEscape"
+        <editorActionHandler action="EditorEscape" id="tellijEscape"
                   implementationClass="com.neex.tellij.actions.TellijEscapeHandler" order="first"/>
         <actionPromoter implementation="com.neex.tellij.actions.TellijActionPromoter"/>
     </extensions>
