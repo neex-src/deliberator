@@ -51,6 +51,7 @@ object Runner {
         resolve: (String) -> SourceKind?,
         connections: MutableMap<String, Connection> = LinkedHashMap(),
         captureVersion: Int = 0,
+        stepContext: Map<String, Any> = emptyMap(),
     ): Plan {
         val connectCtx = ConnectContext(vars, baseDir)
         val entries = blocks.map { block ->
@@ -65,7 +66,7 @@ object Runner {
                 }
                 val body = block.body?.let { vars.substitute(it.substring(text)) } ?: ""
                 val asserts = AssertExpr.parseAll(block.directives("assert").map { vars.substitute(it) })
-                PlanEntry(block, kind.step(StepRequest(block, body, target, vars), conn), null, captureVersion, captured, asserts)
+                PlanEntry(block, kind.step(StepRequest(block, body, target, vars, stepContext, model), conn), null, captureVersion, captured, asserts)
             } catch (e: StepError) {
                 PlanEntry(block, null, e, captureVersion, captured)
             } catch (e: Exception) {

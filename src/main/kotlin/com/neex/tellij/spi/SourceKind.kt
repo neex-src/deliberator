@@ -69,7 +69,16 @@ interface Connection : AutoCloseable {
  * What a block asks for, with variables already applied to the body. [target] is the block's name
  * when it is not a connection name (`### kafka orders` → topic "orders").
  */
-class StepRequest(val block: Block, val body: String, val target: String?, val vars: Vars) {
+class StepRequest(
+    val block: Block,
+    val body: String,
+    val target: String?,
+    val vars: Vars,
+    /** Host-provided handles a source may need (the IDE project under "project"); empty in pure tests. */
+    val context: Map<String, Any> = emptyMap(),
+    /** The whole workbench, for sources that look at other declarations (`# @connect debug`). */
+    val model: com.neex.tellij.model.WorkbenchModel? = null,
+) {
     fun directive(name: String): String? = block.directive(name)?.let { vars.substitute(it) }
     fun directives(name: String): List<String> = block.directives(name).map { vars.substitute(it) }
     fun require(name: String, hint: String): String = directive(name) ?: throw StepError("missing # @$name", hint)

@@ -3,6 +3,13 @@
     <extensions defaultExtensionNs="com.intellij">
         <editorActionHandler action="EditorEscape" order="first, before tellijEscape"
                   implementationClass="com.neex.tellij.java.summary.EndpointSummaryEscapeHandler"/>
+        <completion.contributor language="Tellij" order="last"
+                  implementationClass="com.neex.tellij.java.controller.JsonBodyCompletion"/>
+        <annotator language="Tellij" implementationClass="com.neex.tellij.java.controller.JsonBodyAnnotator"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.neex.tellij">
+        <sourceKind implementation="com.neex.tellij.java.controller.ControllerSource"/>
     </extensions>
 
     <actions>
