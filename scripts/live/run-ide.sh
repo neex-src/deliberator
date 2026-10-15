@@ -5,8 +5,9 @@ set -u
 . "$(dirname "$0")/env.sh"
 cd "$ROOT"
 pkill -f '[i]dea-sandbox' 2>/dev/null; pkill -f 'sandbox/[t]ellij' 2>/dev/null; sleep 2
-SB="$ROOT/.intellijPlatform/sandbox/tellij/IU-2026.2.1"
-SEED="$HOME/projects/inliner/.intellijPlatform/sandbox/inliner/IU-2026.2.1/config"
+SB="$(ls -d "$ROOT"/.intellijPlatform/sandbox/tellij/IU-* 2>/dev/null | sort -V | tail -1)"
+[ -n "$SB" ] || SB="$ROOT/.intellijPlatform/sandbox/tellij/IU-2026.2.3"
+SEED="$(ls -d "$HOME"/projects/inliner/.intellijPlatform/sandbox/inliner/IU-*/config 2>/dev/null | sort -V | tail -1)"
 if [ ! -d "$SB/config" ] && [ -d "$SEED" ]; then
   mkdir -p "$SB"; cp -r "$SEED" "$SB/config"; rm -rf "$SB/config/plugins"
   echo "seeded sandbox config from inliner"
