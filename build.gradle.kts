@@ -1,19 +1,12 @@
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
 plugins {
-    id("org.jetbrains.kotlin.jvm") version "2.3.21"
-    id("org.jetbrains.intellij.platform") version "2.18.1"
+    id("org.jetbrains.kotlin.jvm")
+    id("org.jetbrains.intellij.platform")
 }
 
 group = "com.neex"
 version = "0.1.0"
-
-repositories {
-    mavenCentral()
-    intellijPlatform {
-        defaultRepositories()
-    }
-}
 
 // Third-party client libraries get packed into the plugin zip. slf4j-api is excluded everywhere:
 // the platform ships slf4j 2.0 + a JUL provider (lib/util-8.jar); a second copy inside the plugin
@@ -24,7 +17,7 @@ configurations.all {
 
 dependencies {
     intellijPlatform {
-        local("~/.local/share/JetBrains/Toolbox/apps/intellij-idea-ultimate")
+        intellijIdea("2026.2.3")
         // Java PSI for the endpoint summary / controller blocks — an OPTIONAL plugin dependency at
         // runtime (META-INF/tellij-java.xml); the core keeps loading without it.
         bundledPlugin("com.intellij.java")
@@ -55,28 +48,12 @@ dependencies {
 }
 
 intellijPlatform {
-    pluginConfiguration {
-        ideaVersion {
-            sinceBuild = "262"
-        }
-    }
     buildSearchableOptions = false
     instrumentCode = false
     pluginVerification {
         ides {
-            local(file("~/.local/share/JetBrains/Toolbox/apps/intellij-idea-ultimate"))
+            recommended()
         }
-    }
-}
-
-// jvmTarget intentionally not set: the IntelliJ Platform plugin pins it to the
-// platform's Java version (25 for 262), and Kotlin 2.3 can emit that.
-
-// Tests fork on the IDE's own JBR 25 (registered via org.gradle.java.installations.paths) —
-// the same runtime the plugin sees in production.
-tasks.test {
-    javaLauncher = javaToolchains.launcherFor {
-        languageVersion = JavaLanguageVersion.of(25)
     }
 }
 
@@ -87,4 +64,10 @@ tasks.runIde {
         listOfNotNull(System.getenv("TELLIJ_OPEN")?.let { file(it).absolutePath })
     })
     jvmArgs("-Didea.trust.all.projects=true")
+}
+
+// 2026.2's Ultimate distribution has an obfuscated post-startup activity (com.intellij.modules.ultimate)
+// that cannot be instantiated in the light test environment and fails every platform test.
+tasks.test {
+    systemProperty("idea.suppressed.plugins.id", "com.intellij.modules.ultimate")
 }
