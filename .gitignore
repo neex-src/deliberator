@@ -13,3 +13,8 @@ build/
 target/
 .nrepl-port
 .clj-kondo/.cache/
+
+# cljdev / REPL tooling litter
+.clj-ai/
+.clojure-mcp/
+.repl-tap.log
