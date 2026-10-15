@@ -3,7 +3,7 @@
 set -u
 . "$(dirname "$0")/env.sh"
 SRC="$ROOT/demo-api/src/main/java/com/neex/demo/api/OrdersController.java"
-LOG=$(ls -t "$ROOT"/.intellijPlatform/sandbox/tellij/IU-2026.2.1/log/idea.log | head -1)
+LOG=$(ls -t "$ROOT"/.intellijPlatform/sandbox/tellij/IU-*/log/idea.log | head -1)
 W=$(xdotool search --onlyvisible --name "$PROJECT_WIN" | head -1); [ -z "$W" ] && { echo "no IDE window"; exit 1; }
 xdotool windowactivate --sync "$W"; sleep 0.5
 xdotool key --clearmodifiers ctrl+shift+n; sleep 1.5; xdotool type --delay 40 'OrdersController.java'; sleep 1.5; xdotool key Return; sleep 3

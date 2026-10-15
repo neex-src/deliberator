@@ -95,7 +95,8 @@ class ControllerSourceTest : LightJavaCodeInsightFixtureTestCase() {
         assertTrue(err("### controller OrdersController.helper\n").message!!.contains("not a Spring MVC handler"))
         assertTrue(err("### controller Nope.x\n").message!!.startsWith("no class 'Nope'"))
         assertTrue(err("### controller OrdersController.bulk\n{}\n").hint!!.contains("bulk(CreateOrderRequest)"))
-        assertEquals("POST http://localhost:8080/bulk   (OrdersController.bulk)", try { run("### controller OrdersController.bulk\n# @method bulk(String)\n{}\n"); "" } catch (e: StepError) { e.message!! }.let { if (it.isEmpty()) "POST http://localhost:8080/bulk   (OrdersController.bulk)" else it })
+        // `# @method` picks the overload; bulk(String) carries no mapping, so it is the one that is not a handler
+        assertTrue(err("### controller OrdersController.bulk\n# @method bulk(String)\n{}\n").message!!.contains("OrdersController.bulk is not a Spring MVC handler"))
     }
 
     fun testCommentsAndScanner() {
