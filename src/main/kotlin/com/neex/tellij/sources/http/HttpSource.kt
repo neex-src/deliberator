@@ -72,8 +72,18 @@ class HttpConnection(override val decl: ConnectDecl, val base: String?, val time
     }
 }
 
-class HttpSend(private val conn: HttpConnection, private val spec: HttpRequestSpec, private val timeoutMs: Long, private val captures: List<CaptureSpec>) : Step {
+class HttpSend(
+    private val conn: HttpConnection,
+    private val spec: HttpRequestSpec,
+    private val timeoutMs: Long,
+    private val captures: List<CaptureSpec>,
+    /** Lines written before the response — controller blocks show the request they derived. */
+    private val preface: List<String> = emptyList(),
+    private val extraFacts: Map<String, Any?> = emptyMap(),
+) : Step {
     override fun run(ctx: RunContext, out: ResultSink) {
+        preface.forEach { out.appendLine(it) }
+        extraFacts.forEach { (k, v) -> out.fact(k, v) }
         val uri = try { URI.create(spec.url) } catch (e: Exception) { throw StepError("bad URL '${spec.url}'") }
         val builder = HttpRequest.newBuilder(uri).timeout(Duration.ofMillis(timeoutMs))
         for ((k, v) in spec.headers) builder.header(k, v)

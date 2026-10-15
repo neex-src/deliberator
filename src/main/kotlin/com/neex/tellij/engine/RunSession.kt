@@ -142,7 +142,8 @@ class RunSession private constructor(
             if (blocks.isEmpty()) return null
 
             val vars = snapshot(document, model, text, freshVars)
-            val plan = Runner.plan(text, model, blocks, vars, directoryOf(document), SourceRegistry::byId)
+            val stepContext = mapOf<String, Any>("project" to project)
+            val plan = Runner.plan(text, model, blocks, vars, directoryOf(document), SourceRegistry::byId, stepContext = stepContext)
             val session = RunSession(project, document, vars)
             Disposer.register(TellijProjectScope.get(project), session)
             document.putUserData(Keys.SESSION, session)
@@ -165,7 +166,7 @@ class RunSession private constructor(
             session.spawn {
                 try {
                     Runner.execute(plan, session, { session.sinks.getValue(it.index) }, session::spawn) { block ->
-                        Runner.plan(text, model, listOf(block), session.vars, baseDir, SourceRegistry::byId, plan.connectionMap, session.captureVersion).entries[0]
+                        Runner.plan(text, model, listOf(block), session.vars, baseDir, SourceRegistry::byId, plan.connectionMap, session.captureVersion, stepContext).entries[0]
                     }
                 } finally {
                     ApplicationManager.getApplication().invokeLater({ session.finish() }, ModalityState.nonModal())

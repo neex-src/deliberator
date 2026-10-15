@@ -9,6 +9,7 @@
 # @connect logs consumer file=../../demo/logs/consumer.log
 # @connect http api base=http://localhost:8080
 # @connect logs api file=../../demo/logs/api.log
+# @connect controller api base=http://localhost:8080 header.X-Trace={{orderId}}
 # @connect sql pg url=jdbc:postgresql://localhost:5432/demo user=demo password={{env.PG_PASSWORD}}
 # @connect logs pg podman=tellij-pg
 # @connect mongo local uri=mongodb://localhost:27017/demo
@@ -58,10 +59,27 @@ Content-Type: application/json
 
 { "orderId": "{{orderId}}-api", "customer": "{{customer}}", "amount": 42.5, "items": [ { "sku": "A-1", "qty": 2 } ] }
 
+### controller OrdersController.create
+# @assert status == 201
+# @assert $.status == "NEW"
+# @capture ctrlOrder = $.orderId
+{
+  "orderId": "{{orderId}}-ctrl",
+  "customer": "{{customer}}",   // comment a field out and watch the 400 come back with the field name
+  "amount": 42.5,
+  "items": [ { "sku": "A-1", "qty": 2 } ]
+}
+
+### controller OrdersController.get
+# @path id={{ctrlOrder}}
+# @query verbose=true
+# @assert status == 200
+# @assert $.items[0].qty == 2
+
 ### logs api
 # @filter {{orderId}}
 # @for 3s
-# @assert lines >= 1
+# @assert lines >= 3
 
 ### mongo events
 # @sort { "receivedAt": 1 }

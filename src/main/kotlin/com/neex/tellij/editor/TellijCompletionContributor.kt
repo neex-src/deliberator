@@ -107,7 +107,8 @@ class TellijTypedHandler : TypedHandlerDelegate() {
         if (file !is TellijFile) return Result.CONTINUE
         val offset = editor.caretModel.offset
         val text = editor.document.immutableCharSequence
-        val trigger = c == '@' || (c == '{' && offset > 0 && text[offset - 1] == '{')
+        val trigger = c == '@' || (c == '{' && offset > 0 && text[offset - 1] == '{') ||
+            (c == '"' && WorkbenchParser.parse(text).blockAt(offset)?.let { b -> b.body != null && offset > b.body.start } == true)
         if (trigger) {
             AutoPopupController.getInstance(project).scheduleAutoPopup(editor)
             return Result.STOP
