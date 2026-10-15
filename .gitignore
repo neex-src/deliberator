@@ -1,16 +1,15 @@
 .gradle/
 build/
-.idea/
 .kotlin/
-*.iml
 .intellijPlatform/
-demo/.idea/
-demo/logs/*.log
-# demo-api is a project the sandbox IDE opens: its Gradle/SDK settings are part of the demo.
-!demo-api/.idea/
-demo-api/.idea/*
-!demo-api/.idea/gradle.xml
-!demo-api/.idea/misc.xml
+.idea/
+*.iml
 
 # scratch: worktrees, spikes, analysis dumps (the user RULE ZERO)
 .scratch/
+
+# Clojure
+.cpcache/
+target/
+.nrepl-port
+.clj-kondo/.cache/

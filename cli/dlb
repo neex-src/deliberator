@@ -1,0 +1,6 @@
+#!/usr/bin/env bb
+;; dlb: the Deliberator command line. argv -> one request to deliberatord -> print the summary.
+;; Skeleton: the daemon does not exist yet (piece 08), so there is nothing to talk to.
+(binding [*out* *err*]
+  (println "deliberatord not running"))
+(System/exit 2)

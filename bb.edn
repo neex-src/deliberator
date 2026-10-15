@@ -1,0 +1,12 @@
+{:paths ["bb"]
+ :tasks
+ {core:build {:doc "Build core/target/deliberatord.jar (AOT uberjar)"
+              :task (shell {:dir "core"} "clojure -T:build uber")}
+  core:test {:doc "Run the core tests (clojure -M:test in core/)"
+             :task (shell {:dir "core"} "clojure -M:test")}
+  check:arch {:doc "Layering rules: core, cli, ide separation, no employer names"
+              :requires ([check-arch])
+              :task (check-arch/-main)}
+  cli:install {:doc "Symlink cli/dlb into ~/.local/bin"
+               :requires ([cli-install])
+               :task (cli-install/-main)}}}
