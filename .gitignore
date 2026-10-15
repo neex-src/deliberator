@@ -11,3 +11,6 @@ demo/logs/*.log
 demo-api/.idea/*
 !demo-api/.idea/gradle.xml
 !demo-api/.idea/misc.xml
+
+# scratch: worktrees, spikes, analysis dumps (the user RULE ZERO)
+.scratch/
