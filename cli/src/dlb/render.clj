@@ -100,6 +100,9 @@
              (:text ev))
     "confirm.required" (str "! confirmation required, step " (:step ev) ": " (:summary ev))
     "run.finished" nil
+    "service.build.line" (:text ev)
+    "service.started" (str "service started " (:name ev) " " (:container ev))
+    "service.stopped" (str "service stopped " (:name ev) " " (:container ev))
     (if (str/starts-with? event "runtime.")
       (str event " " (str/join " " (keep #(some-> (get ev %) str) [:role :name :image :action :reason :detail])))
       nil)))
@@ -156,7 +159,7 @@
   [op {:keys [type message hint token summary step result] :as err} argv]
   (if (= type "confirm-required")
     (do (when result (print-result op result))
-        (println (str "confirmation required (step " step "): " summary))
+        (println (str "confirmation required" (when step (str " (step " step ")")) ": " summary))
         (println (str "to approve: dlb " (str/join " " argv) " --confirm " token
                       (when step (str " --steps " step)))))
     (binding [*out* *err*]

@@ -18,6 +18,7 @@
             [deliberator.floci-util :as fu :refer [deftest-floci]]
             [deliberator.podman :as podman]
             [deliberator.runtime :as runtime]
+            [deliberator.service.description :as description]
             [deliberator.store :as store]
             [deliberator.test-util :as tu])
   (:import (java.net URI)
@@ -32,8 +33,17 @@
    "secrets" [{"name" "TABLE_NAME" "valueFrom" "arn:aws:ssm:eu-central-1:000000000000:parameter/estate/common/table-name"}
               {"name" "API_KEY" "valueFrom" "arn:aws:secretsmanager:eu-central-1:000000000000:secret:estate/api-key-AbCdEf"}]})
 
+(defn- taskdef->service
+  "A hand-written `:jar` role of the shape the descriptions derive (`description/->spec`)."
+  [cd {:keys [jar debug java-opts]}]
+  (let [td (description/parse-taskdef (json/write-str [cd]))]
+    (cond-> {:image description/default-image :jar jar
+             :ports (into (sorted-map) (map (fn [p] [p p]) (concat (:ports td) [debug])))
+             :env (:environment td) :secrets (:secrets td)}
+      debug (assoc :debug debug) java-opts (assoc :java-opts java-opts))))
+
 (deftest taskdef-to-service
-  (let [s (runtime/taskdef->service container-def {:jar "a.jar" :debug 5005 :java-opts ["-Xmx256m"]})]
+  (let [s (taskdef->service container-def {:jar "a.jar" :debug 5005 :java-opts ["-Xmx256m"]})]
     (is (= {8081 8081 5005 5005} (:ports s)))
     (is (= 5005 (:debug s)))
     (is (= "http://deliberator-default-floci:4566" (get-in s [:env "AWS_ENDPOINT_URL"])))
@@ -44,7 +54,7 @@
 
 (defn- jar-config [root]
   {:network "n" :root (str root)
-   :containers {:service/a (assoc (runtime/taskdef->service container-def {:jar "svc/a.jar" :debug 5005 :java-opts ["-Xmx256m"]})
+   :containers {:service/a (assoc (taskdef->service container-def {:jar "svc/a.jar" :debug 5005 :java-opts ["-Xmx256m"]})
                                   :image "img:1")}})
 
 (deftest jar-role-desired-state
@@ -73,25 +83,38 @@
         (.delete jar)
         (is (some? (:hash (first (runtime/desired-all "w" cfg)))))))))
 
-(deftest adopt-taskdefs-writes-roles-and-bends-local-env
+(deftest descriptions-become-roles-and-bend-local-env
   (tu/with-temp-home
     (store/write-edn! (runtime/config-path "w")
                       (-> (runtime/default-config)
                           (assoc-in [:containers :floci :ports] {4566 14566})
                           (assoc-in [:containers :postgres :ports] {5432 15432})))
-    (let [cfg (runtime/adopt-taskdefs! "w" {:root "/repo" :postgres-init "/repo/estate/sql"
-                                            :services {"a" {:taskdef (json/write-str [container-def]) :jar "x/a.jar" :debug 5005}}})
-          e (env/load "w" "local")]
-      (is (= "/repo" (:root cfg)))
-      (is (= "/repo/estate/sql" (get-in cfg [:containers :postgres :init])))
-      (is (= #{:floci :postgres :service/a} (set (keys (:containers cfg)))))
-      (is (= cfg (store/read-edn (runtime/config-path "w"))))
+    (description/write! "w" {:name "a" :kind :spring-boot :repo nil :module "/repo/estate/services/service-a"
+                             :build {:artifact "target/a.jar"} :port 8081 :jdwp 5005
+                             :taskdef {:environment {"AWS_REGION" "eu-central-1"}
+                                       :secrets {"API_KEY" "arn:aws:secretsmanager:eu-central-1:000000000000:secret:estate/api-key-AbCdEf"}}})
+    (let [cfg (runtime/read-config "w")
+          cs (runtime/effective-containers "w" cfg)
+          e (do (runtime/sync-local-env! "w" cfg) (env/load "w" "local"))]
+      (is (= #{:floci :postgres :service/a} (set (keys cs))) "the role is derived, runtime.edn holds none")
+      (is (= #{:floci :postgres} (set (keys (:containers cfg)))))
+      (is (= "/repo/estate/services/service-a/target/a.jar" (:jar (:service/a cs))))
+      (is (= {8081 8081 5005 5005} (:ports (:service/a cs))))
       (is (= "http://localhost:14566" (get-in e [:aws :endpoint])))
       (is (= "jdbc:postgresql://localhost:15432/deliberator?user=deliberator&password=deliberator" (get-in e [:targets :db/main])))
       (testing "a second sync does not append the credentials again"
         (runtime/sync-local-env! "w" cfg)
         (is (= (get-in e [:targets :db/main]) (get-in (env/load "w" "local") [:targets :db/main]))))
-      (is (= "http://localhost:8081" (get-in e [:targets :service/a]))))))
+      (is (= "http://localhost:8081" (get-in e [:targets :service/a])))
+      (is (= {:container "deliberator-w-service-a"} (get-in e [:targets :log/service-a])))
+      (testing "the runtime half moves host ports and adds env"
+        (let [cfg (assoc cfg :services {"a" {:ports {8081 18081} :env {"X" "1"}}})
+              d (first (filter #(= "service-a" (:role %)) (runtime/desired-all "w" cfg)))]
+          (is (= {5005 5005 8081 18081} (into {} (:ports d))))
+          (is (= "1" (get-in d [:env "X"])))
+          (is (= "eu-central-1" (get-in d [:env "AWS_REGION"])))
+          (runtime/sync-local-env! "w" cfg)
+          (is (= "http://localhost:18081" (get-in (env/load "w" "local") [:targets :service/a]))))))))
 
 (deftest-floci resolve-secrets-by-arn-and-name
   (tu/with-temp-home

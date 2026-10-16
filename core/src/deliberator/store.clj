@@ -35,7 +35,7 @@
 
 (def sources
   "Allowed `:source` values of a raw blob. Extend here when a new kind of fetcher appears."
-  #{:aws :http :podman :sql :file :note})
+  #{:aws :http :podman :sql :file :note :build})
 
 (def ^:dynamic *home*
   "Override of the home directory (string or Path); tests bind it to a temporary directory."
