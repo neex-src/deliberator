@@ -8,7 +8,10 @@ import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.neex.deliberator.daemon.DaemonException
 import java.nio.file.Path
 
@@ -39,7 +42,13 @@ object Ui {
     /** Opens a file the daemon wrote (a path it returned) in the editor. EDT. */
     fun openFile(project: Project, path: String): Boolean {
         val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(Path.of(path)) ?: return false
-        FileEditorManager.getInstance(project).openTextEditor(OpenFileDescriptor(project, vf), true)
+        openEditor(project, vf, 0)
         return true
+    }
+
+    /** Opens [vf] with the caret on 0-based [line0] and answers its text editor (null when the file has none). EDT. */
+    fun openEditor(project: Project, vf: VirtualFile, line0: Int = 0): Editor? {
+        OpenFileDescriptor(project, vf, maxOf(0, line0), 0).navigate(true)
+        return FileEditorManager.getInstance(project).selectedTextEditor?.takeIf { it.virtualFile == vf || FileDocumentManager.getInstance().getFile(it.document) == vf }
     }
 }

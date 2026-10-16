@@ -179,15 +179,6 @@ class ScnCompletionContributor : CompletionContributor() {
         return b
     }
 
-    override fun invokeAutoPopup(position: PsiElement, typeChar: Char): Boolean {
-        if (typeChar == '@' || typeChar == '{') return true
-        if (typeChar != ' ') return false
-        val text = position.containingFile.text
-        val off = position.textRange.startOffset.coerceAtMost(text.length)
-        val lineStart = text.lastIndexOf('\n', off - 1) + 1
-        return text.startsWith("### ", lineStart)
-    }
-
     private companion object {
         val CLOSE_VARIABLE = InsertHandler<LookupElement> { ctx, _ ->
             val doc = ctx.document
@@ -197,5 +188,27 @@ class ScnCompletionContributor : CompletionContributor() {
             }
             ctx.editor.caretModel.moveToOffset(tail + 2)
         }
+    }
+}
+
+/**
+ * Opens the completion popup after `@`, after `{` and after the space of a `### ` step head: none of them is an identifier
+ * character, which is all the platform pops up for on its own. (This replaces the deprecated `invokeAutoPopup` of the contributor.)
+ */
+class ScnAutoPopup : com.intellij.codeInsight.editorActions.TypedHandlerDelegate() {
+    override fun checkAutoPopup(charTyped: Char, project: com.intellij.openapi.project.Project, editor: com.intellij.openapi.editor.Editor, file: com.intellij.psi.PsiFile): Result {
+        if (file !is ScnFile) return Result.CONTINUE
+        val doc = editor.document
+        val offset = editor.caretModel.offset.coerceIn(0, doc.textLength)
+        val prefix = doc.getText(com.intellij.openapi.util.TextRange(doc.getLineStartOffset(doc.getLineNumber(offset)), offset))
+        if (!triggers(charTyped, prefix)) return Result.CONTINUE
+        com.intellij.codeInsight.AutoPopupController.getInstance(project).scheduleAutoPopup(editor)
+        return Result.STOP
+    }
+
+    companion object {
+        /** [linePrefix] is the line up to the caret (with or without the typed character, depending on when the platform asks). */
+        fun triggers(charTyped: Char, linePrefix: String): Boolean =
+            charTyped == '@' || charTyped == '{' || (charTyped == ' ' && Regex("###\\s?").matches(linePrefix))
     }
 }

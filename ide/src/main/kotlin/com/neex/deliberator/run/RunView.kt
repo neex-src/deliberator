@@ -142,6 +142,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
     private var allExpanded = false
     private var shown: RunSnapshot? = null
     private var loading = false
+    @Volatile private var disposed = false
     private val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
 
     /** The buffer differs from the run that is shown (edited, or the file changed since). */
@@ -194,7 +195,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
             val snap = try { runner.latest(path) } catch (_: Exception) { null }
             ApplicationManager.getApplication().invokeLater({
                 loading = false
-                if (snap != null && !Disposer.isDisposed(this) && runner.state(path).snapshot == null && !runner.isRunning(path)) runner.show(path, snap)
+                if (snap != null && !disposed && runner.state(path).snapshot == null && !runner.isRunning(path)) runner.show(path, snap)
             }, com.intellij.openapi.application.ModalityState.nonModal())
         }
     }
@@ -211,7 +212,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
 
     /** Rebuilds inlays, banner and gutter from the runner's state. EDT. */
     fun refresh() {
-        if (Disposer.isDisposed(this) || editor.isDisposed) return
+        if (disposed || editor.isDisposed) return
         val st = runner.state(path)
         val snap = st.snapshot
         val running = st.running
@@ -233,8 +234,9 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
             bannerText?.let { add(0, true, ResultRenderer(this, null, null, null, it)) }
             for (s in steps) {
                 val n = s.index
-                val section = if (running) null else snap?.sections?.get(n)
-                val live = if (running) st.live[n] else null
+                // during the run the file is the truth for the steps it already holds; the events only fill the gap before it is rewritten
+                val section = if (running) st.progress?.sections?.get(n) else snap?.sections?.get(n)
+                val live = if (running && section == null) st.live[n] else null
                 if (section == null && live == null) continue
                 val line = doc.getLineNumber(s.textRange.startOffset)
                 add(doc.getLineEndOffset(line), false, ResultRenderer(this, n, section, live, null))
@@ -250,7 +252,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
     }
 
     private fun banner(st: RunState, snap: RunSnapshot?): String? {
-        if (st.running) return "▶ running" + (st.runId?.let { " $it" } ?: "") + "  (Esc cancels)"
+        if (st.running) return "▶ running" + (st.runId?.let { " $it" } ?: "") + (st.progress?.trailer?.takeIf { it.isNotEmpty() }?.let { "  ·  " + it.joinToString(" · ") } ?: "") + "  (Esc cancels)"
         if (snap == null) return null
         if (snap.problem != null) return "RUN ${snap.status} · ${snap.problem}"
         val t = snap.trailer.joinToString(" · ")
@@ -275,8 +277,10 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
         val base = "Step $n"
         if (running) {
             val live = st.live[n]
+            val section = st.progress?.sections?.get(n)
             return when {
-                live != null && live.status == "running" -> Triple(AllIcons.Actions.Suspend, "$base running: click or Esc to cancel the run", true)
+                live != null && live.status == "running" && section == null -> Triple(AllIcons.Actions.Suspend, "$base running: click or Esc to cancel the run", true)
+                section != null -> Triple(statusIcon(section.status), "$base ${section.status}", false)
                 live != null -> Triple(statusIcon(live.status), "$base ${live.status}", false)
                 st.asked.isEmpty() || n in st.asked -> Triple(AllIcons.RunConfigurations.TestNotRan, "$base waits for its turn", false)
                 else -> Triple(AllIcons.RunConfigurations.TestState.Run, "Run $base (Ctrl+Enter), run from here, run all", false)
@@ -296,7 +300,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
 
     private fun scheduleGutter() {
         alarm.cancelAllRequests()
-        alarm.addRequest({ if (!Disposer.isDisposed(this) && !editor.isDisposed) refresh() }, 300)
+        alarm.addRequest({ if (!disposed && !editor.isDisposed) refresh() }, 300)
     }
 
     // actions --------------------------------------------------------------------------------------------
@@ -340,6 +344,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
     fun gutterIcons(): Map<Int, StepGutterIcon> = highlighters.mapNotNull { it.gutterIconRenderer as? StepGutterIcon }.associateBy { it.step }
 
     override fun dispose() {
+        disposed = true
         inlays.forEach { Disposer.dispose(it) }
         inlays.clear()
         if (!editor.isDisposed) highlighters.forEach { editor.markupModel.removeHighlighter(it) }

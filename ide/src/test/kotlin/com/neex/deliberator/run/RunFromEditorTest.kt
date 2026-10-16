@@ -331,6 +331,62 @@ class RunFromEditorTest : BasePlatformTestCase() {
         assertNotNull(view)
     }
 
+    /** 06b: during the run the view takes the finished steps' sections from the progressive result.txt, not from the events. */
+    fun testTheViewFollowsTheProgressiveResultTxtDuringTheRun() {
+        val (vf, view) = open("### wait first\n# @for 100ms\n\n### wait second\n# @for 60s\n")
+        val st = runner.state(vf.path)
+        view.runSteps(null)
+        wait("step 1's section from the file while step 2 runs") {
+            PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+            st.progress?.sections?.containsKey(1) == true && view.inlayInfos().any { it.step == 1 && it.section != null }
+        }
+        assertTrue("still running", runner.isRunning(vf.path))
+        val prog = st.progress!!
+        val onDisk = Files.readString(Path.of(prog.resultPath!!))
+        assertTrue("the section is a piece of the file as it is now:\n$onDisk", onDisk.contains(view.inlayInfos().first { it.step == 1 }.section!!.text))
+        assertTrue(onDisk, onDisk.trimEnd().endsWith("RUN running steps 1 failed 0"))
+        assertTrue(view.bannerText!!, view.bannerText!!.contains("RUN running steps 1 failed 0"))
+        assertNull("step 2 has no section yet, only the live line", view.inlayInfos().first { it.step == 2 }.section)
+        assertEquals("running", view.inlayInfos().first { it.step == 2 }.live?.status)
+        runner.cancel(vf.path)
+        wait("the cancelled run to end") { !runner.isRunning(vf.path) && st.snapshot != null }
+        assertNull("the progress is dropped when the run ends", st.progress)
+        assertEquals("cancelled", st.snapshot!!.status)
+    }
+
+    /** F12: the history popup's actions, driven without a screen. */
+    fun testTheHistoryMenuOpensInlineAndDiffsWithThePreviousRun() {
+        val (vf, view) = open("### wait one\n# @for 50ms\n")
+        val first = runAndWait(view, vf, null)
+        val second = runAndWait(view, vf, null)
+        val rows = bg { runner.history(vf.path) }
+        assertEquals(listOf(second.runId, first.runId), rows.map { it.runId })
+        assertNull("the oldest run has no earlier one", RunHistory.olderThan(rows[1], rows))
+        assertEquals(rows[1], RunHistory.olderThan(rows[0], rows))
+        assertEquals("older on the left", rows[1] to rows[0], RunHistory.diffOrder(rows[0], rows[1], rows))
+        assertEquals("older on the left, either way round", rows[1] to rows[0], RunHistory.diffOrder(rows[1], rows[0], rows))
+
+        RunHistory.perform(project, vf.path, rows[1], rows, "Show inline")
+        wait("the older run shown inline") { runner.state(vf.path).snapshot?.runId == first.runId }
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        assertEquals(first.runId, runner.state(vf.path).snapshot!!.runId)
+
+        var texts: DiffTexts? = null
+        RunHistory.perform(project, vf.path, rows[0], rows, "Diff with previous run", showDiff = { _, t -> texts = t })
+        wait("the diff texts") { PlatformTestUtil.dispatchAllEventsInIdeEventQueue(); texts != null }
+        assertEquals(first.runId, texts!!.aRun)
+        assertEquals(second.runId, texts!!.bRun)
+        assertTrue(texts!!.a.isNotEmpty() && texts!!.b.isNotEmpty())
+
+        var none: DiffTexts? = null
+        RunHistory.perform(project, vf.path, rows[1], rows, "Diff with previous run", showDiff = { _, t -> none = t })
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        assertNull("nothing to diff against", none)
+
+        RunHistory.perform(project, vf.path, rows[0], rows, "Open result.txt")
+        wait("result.txt opened") { PlatformTestUtil.dispatchAllEventsInIdeEventQueue(); com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedTextEditor?.virtualFile?.name == "result.txt" }
+    }
+
     private fun dataContext() = SimpleDataContext.builder()
         .add(CommonDataKeys.PROJECT, project)
         .add(CommonDataKeys.EDITOR, myFixture.editor)

@@ -35,6 +35,8 @@ data class WorkspaceModel(
     /** The first failure of the last refresh (parts that failed keep their previous value). */
     val error: String? = null,
     val fetchedAt: Instant? = null,
+    /** The daemon does not know [ws] (`workspace/not-found`): nothing else was asked; Open Workspace creates it. */
+    val missing: Boolean = false,
 ) {
     companion object {
         const val DEFAULT_ENV = "local"

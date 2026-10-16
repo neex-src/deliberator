@@ -4,7 +4,6 @@ import com.google.gson.GsonBuilder
 import com.google.gson.JsonParser
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileTypes.PlainTextFileType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
@@ -51,6 +50,7 @@ class OperationsDialog(private val project: Project, private val svc: WorkspaceS
     private val fields = linkedMapOf<String, () -> String>()
     private var current: OpSpec? = null
     @Volatile private var call: DaemonClient.Call? = null
+    private val transcript = StringBuilder()
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
     private val runAction = object : AbstractAction("Run") {
@@ -58,15 +58,18 @@ class OperationsDialog(private val project: Project, private val svc: WorkspaceS
     }
     private val editorAction = object : AbstractAction("Open in editor") {
         override fun actionPerformed(e: ActionEvent) {
+            val saved = savedNote
+            // the kept transcript is a file of the workspace; only a call that could not be kept falls back to an editor-only buffer
+            if (saved != null && Ui.openFile(project, saved)) return
             val name = (current?.op ?: "operation") + ".txt"
-            FileEditorManager.getInstance(project).openFile(LightVirtualFile(name, PlainTextFileType.INSTANCE, output.text), true)
+            Ui.openEditor(project, LightVirtualFile(name, PlainTextFileType.INSTANCE, output.text))
         }
     }
 
     init {
         title = "Deliberator Operations (workspace ${svc.ws})"
         init()
-        list.cellRenderer = com.intellij.ui.SimpleListCellRenderer.create("") { (if (it.mutating) "* " else "  ") + it.op }
+        list.cellRenderer = com.intellij.ui.dsl.listCellRenderer.textListCellRenderer { (if (it.mutating) "* " else "  ") + it.op }
         list.addListSelectionListener { if (!it.valueIsAdjusting) list.selectedValue?.let { s -> select(s) } }
         filter.addDocumentListener(object : com.intellij.ui.DocumentAdapter() {
             override fun textChanged(e: javax.swing.event.DocumentEvent) = applyFilter()
@@ -122,30 +125,67 @@ class OperationsDialog(private val project: Project, private val svc: WorkspaceS
         val s = current ?: return
         val r = OperationForm.build(s, fields.mapValues { it.value() }, svc.ws)
         if (r.args == null) { output.text = "Not sent:\n" + r.problems.joinToString("\n") { "  - $it" }; return }
-        output.text = "> ${s.op} ${r.args}\n"
         runAction.isEnabled = false
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                val client = svc.client()
-                val c = client.start(s.op, r.args, true) { ev -> append("event ${ev.name}: ${ev.json}\n") }
-                call = c
-                val t = c.await()
-                append(if (t.ok) pretty(t.raw) else "ERROR ${t.errorType}: ${t.errorMessage}\n${pretty(t.raw)}")
-            } catch (e: DaemonException) {
-                append("failed: ${e.type}: ${e.message}\n")
-            } catch (e: java.util.concurrent.CancellationException) {
-                append("cancelled\n")
+                execute(s, r.args)
             } finally {
-                call = null
                 ApplicationManager.getApplication().invokeLater({ runAction.isEnabled = true }, com.intellij.openapi.application.ModalityState.any())
             }
         }
     }
 
+    /**
+     * One call of [s] with [args]: events and the terminal stream into the pane and into the transcript; when the call ends
+     * (ok, error or cancel) the transcript is kept through `session.note` and the pane ends with the saved path (also [savedNote]).
+     * Blocking, off the EDT; returns the saved path or null.
+     */
+    internal fun execute(s: OpSpec, args: com.google.gson.JsonObject): String? {
+        synchronized(transcript) { transcript.setLength(0) }
+        savedNote = null
+        ApplicationManager.getApplication().invokeLater({ output.text = "" }, com.intellij.openapi.application.ModalityState.any())
+        append("> ${s.op} $args\n")
+        try {
+            val c = svc.client().start(s.op, args, true) { ev -> append("event ${ev.name}: ${ev.json}\n") }
+            call = c
+            val t = c.await()
+            append(if (t.ok) pretty(t.raw) else "ERROR ${t.errorType}: ${t.errorMessage}\n${pretty(t.raw)}")
+        } catch (e: DaemonException) {
+            append("failed: ${e.type}: ${e.message}\n")
+        } catch (e: java.util.concurrent.CancellationException) {
+            append("cancelled\n")
+        } finally {
+            call = null
+        }
+        return keepTranscript(s.op)
+    }
+
+    private fun keepTranscript(op: String): String? {
+        if (op == "session.note") return null
+        val text = synchronized(transcript) { transcript.toString() }
+        return try {
+            val path = OperationTranscript.save(svc, op, text)
+            savedNote = path
+            append("\ntranscript saved: $path\n")
+            path
+        } catch (e: DaemonException) {
+            append("\ntranscript not saved: ${e.message}${e.hint?.let { " ($it)" } ?: ""}\n")
+            null
+        }
+    }
+
     private fun pretty(raw: String) = try { gson.toJson(JsonParser.parseString(raw)) + "\n" } catch (_: Exception) { raw + "\n" }
 
-    private fun append(text: String) =
+    private fun append(text: String) {
+        synchronized(transcript) { if (!text.startsWith("\ntranscript ")) transcript.append(text) }
         ApplicationManager.getApplication().invokeLater({ output.append(text) }, com.intellij.openapi.application.ModalityState.any())
+    }
+
+    /** The pane's text now (tests). */
+    internal fun outputText(): String = output.text
+
+    /** Where the last call's transcript was kept by `session.note`, or null. */
+    @Volatile internal var savedNote: String? = null; private set
 
     override fun createActions(): Array<Action> = arrayOf(runAction, editorAction, cancelAction.also { it.putValue(Action.NAME, "Close") })
 
@@ -175,4 +215,17 @@ class OperationsDialog(private val project: Project, private val svc: WorkspaceS
     }
 
     override fun getPreferredFocusedComponent(): JComponent = filter
+}
+
+/** The transcript of an Operations call, kept as a note of the current session. */
+object OperationTranscript {
+    private val STAMP = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss").withZone(java.time.ZoneOffset.UTC)
+
+    /** `<op>-<ts>` (the daemon adds its own timestamp and `.txt`). */
+    fun noteName(op: String, now: java.time.Instant = java.time.Instant.now()) = "$op-${STAMP.format(now)}"
+
+    /** `session.note` of the current session; the path of the file. Blocking. */
+    fun save(svc: WorkspaceService, op: String, text: String): String =
+        svc.call("session.note", com.google.gson.JsonObject().apply { addProperty("name", noteName(op)); addProperty("text", text) })
+            .resultObject().get("path")?.asString ?: throw DaemonException("session.note returned no path", "session/no-path")
 }

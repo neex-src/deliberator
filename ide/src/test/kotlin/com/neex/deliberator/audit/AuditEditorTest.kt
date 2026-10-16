@@ -3,6 +3,7 @@ package com.neex.deliberator.audit
 import com.google.gson.JsonObject
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.testFramework.PlatformTestUtil
@@ -15,9 +16,7 @@ import com.neex.deliberator.logs.LogService
 import com.neex.deliberator.logs.MarkerService
 import com.neex.deliberator.logs.ToggleMarkerAction
 import com.neex.deliberator.scn.ScnRegistry
-import com.neex.deliberator.testing.KnownBug
 import com.neex.deliberator.testing.TempDaemon
-import org.junit.experimental.categories.Category
 import com.neex.deliberator.ui.DeliberatorPanel
 import com.neex.deliberator.workspace.WorkspaceService
 import java.nio.file.Files
@@ -95,19 +94,30 @@ class AuditEditorTest : BasePlatformTestCase() {
 
     // --- the project's workspace binding edited by hand ------------------------------------------
 
-    fun testAWorkspaceNamedByHandThatDoesNotExistIsAnEmptyModelAndRefreshMaterialisesIt() {
+    fun testAWorkspaceNamedByHandThatDoesNotExistIsShownAsMissingAndOnlyOpenWorkspaceCreatesIt() {
         svc.loadState(WorkspaceService.State().apply { ws = "no-such-ws" })
+        val dir = daemon.home.resolve("workspaces").resolve("no-such-ws")
         val m = bg { svc.refreshNow() }
         assertEquals("no-such-ws", m.ws)
-        assertNull("a workspace nobody created is shown empty, not as an error: ${m.error}", m.error)
-        assertTrue(m.sessions.isEmpty())
-        assertNull(m.currentSession)
-        val made = Path.of(bg { svc.call("workspace.show").resultObject().get("path").asString })
-        println("AUDIT-GHOST-WS: after refreshNow the directory exists=${Files.exists(made)} " + (if (Files.exists(made)) Files.walk(made).use { s -> s.map { made.relativize(it).toString() }.toList() } else ""))
-        // audit finding (rough edge): a typo in .idea/deliberator.xml silently makes a new workspace on the first refresh (env.list writes the
-        // default environment), the same lazy creation `dlb --ws typo` has; the model shows it as an empty, healthy workspace
-        assertTrue("env.list materialises the workspace", Files.isDirectory(made.resolve("environments")))
-        assertNotNull(DeliberatorPanel.headerText(m))
+        assertTrue("the daemon does not know it: the model says so", m.missing)
+        assertNull("not an error, a state of its own: ${m.error}", m.error)
+        assertTrue(m.sessions.isEmpty() && m.envs.isEmpty())
+        assertTrue(DeliberatorPanel.headerText(m), DeliberatorPanel.headerText(m).contains("not found"))
+        // the tool window offers the way out, and refreshing (any number of times) creates nothing
+        val panel = DeliberatorPanel(project).also { Disposer.register(testRootDisposable, it) }
+        bg { svc.refreshNow() }
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        panel.render(svc.model)
+        assertTrue("Open Workspace is visible", panel.openButton.isVisible)
+        assertFalse("a refresh must not materialise the workspace", Files.exists(dir))
+        assertNull("no other op was asked", svc.model.currentSession)
+        // Open Workspace is the one thing that creates it
+        bg { svc.openWorkspace() }
+        assertFalse(svc.model.missing)
+        assertTrue(Files.isDirectory(dir.resolve("environments")))
+        assertTrue(Files.isDirectory(dir.resolve("project")))
+        panel.render(svc.model)
+        assertFalse(panel.openButton.isVisible)
     }
 
     fun testAnInvalidWorkspaceNameByHandIsATypedErrorInTheModel() {
@@ -191,19 +201,58 @@ class AuditEditorTest : BasePlatformTestCase() {
         FileDocumentManager.getInstance().saveAllDocuments()
     }
 
-    /** F-big: the platform loads a file above its content limit truncated; the plugin neither says so nor keeps the highlights it cannot show. */
-    @Category(KnownBug::class)
-    fun testAFetchedHugeLogIsShownWholeOrTheTruncationIsReported() {
-        svc.bind("w1")
-        val src = daemon.home.resolve("huge2.log")
+    private fun hugeLog(name: String, tail: String): Path {
+        val src = daemon.home.resolve(name)
         val line = "2026-10-16T10:00:00.123+02:00 INFO  APP [run1-001] com.example.demo.Inbox:6 - " + "x".repeat(60) + "\n"
         val n = ((50L * 1024 * 1024) / line.length).toInt() + 1
-        Files.newBufferedWriter(src).use { w -> repeat(n) { w.write(line) } }
+        Files.newBufferedWriter(src).use { w -> repeat(n) { w.write(line) }; w.write(tail) }
+        return src
+    }
+
+    /** F3: the platform loads only the head of a very large file; the editor either holds all of it or its banner says what is missing. */
+    fun testAFetchedHugeLogIsShownWholeOrTheTruncationIsReported() {
+        svc.bind("w1")
+        val src = hugeLog("huge2.log", "")
         bg { svc.call("session.start", JsonObject().apply { addProperty("key", "BIG-2") }) }
         val r = bg(300) { LogService.getInstance(project).fetchNow(FetchRequest(src.toString())) }
+        val total = r.get("lines").asInt
         val ed = LogMatcher.getInstance(project).open(r.get("path").asString, 1)
         assertNotNull(ed)
-        assertTrue("the editor shows ${ed!!.document.lineCount} of ${r.get("lines")} lines and the plugin does not say so", ed.document.lineCount >= r.get("lines").asInt)
+        if (ed!!.document.lineCount >= total) return // shown whole
+        val vf = FileDocumentManager.getInstance().getFile(ed.document)!!
+        val banner = bannerOf(vf, ed)
+        assertNotNull("the editor shows ${ed.document.lineCount} of $total lines and the plugin must say so", banner)
+        assertTrue(banner!!, banner.contains("of $total"))
+        assertTrue(banner, banner.contains(vf.path))
+    }
+
+    /** F3: marker hits below the loaded part are counted and located (not dropped), and "jump to last match" says where the line is. */
+    fun testHitsBeyondTheLoadedPartOfAHugeLogAreReportedAndTheJumpSaysSo() {
+        svc.bind("w1")
+        val src = hugeLog("huge3.log", "2026-10-16T10:00:01.000+02:00 INFO  APP [run1-001] com.example.demo.Outbox:9 - the last line\n")
+        bg { svc.call("session.start", JsonObject().apply { addProperty("key", "BIG-3") }) }
+        val java = daemon.home.resolve("Outbox.java").also { Files.writeString(it, "package com.example.demo;\npublic class Outbox {\n}\n") }
+        val marker = bg { MarkerService.getInstance(project).addNow(java.toString(), 9, "com.example.demo.Outbox").single() }
+        val r = bg(300) { LogService.getInstance(project).fetchNow(FetchRequest(src.toString())) }
+        val total = r.get("lines").asInt
+        val matcher = LogMatcher.getInstance(project)
+        val ed = matcher.open(r.get("path").asString, 1)!!
+        if (ed.document.lineCount >= total) return // the platform holds it whole: nothing is beyond
+        matcher.annotate(ed)
+        // the latest request wins (opening the log and the marker events ask as well): wait for the match itself
+        PlatformTestUtil.waitWithEventsDispatching("logs.match answered", { matcher.lastMatch(marker.id) != null }, 300)
+        val beyond = matcher.beyond(r.get("path").asString)
+        assertNotNull("the hit on the last line is below the ${ed.document.lineCount} loaded lines", beyond)
+        assertEquals(1, beyond!!.count)
+        assertEquals(total, beyond.firstLine)
+        assertTrue(bannerOf(FileDocumentManager.getInstance().getFile(ed.document)!!, ed)!!.contains("1 marker hit lies beyond the loaded part, the first at line $total"))
+        assertEquals("the matched line is the last one, not the end of the head", total, matcher.lastMatch(marker.id)?.second)
+    }
+
+    private fun bannerOf(vf: com.intellij.openapi.vfs.VirtualFile, ed: com.intellij.openapi.editor.Editor): String? {
+        val fe = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).getEditors(vf).first()
+        val f = bg { com.neex.deliberator.logs.TruncatedLogBanner().collectNotificationData(project, vf) } ?: return null
+        return (f.apply(fe) as com.intellij.ui.EditorNotificationPanel).text
     }
 }
 

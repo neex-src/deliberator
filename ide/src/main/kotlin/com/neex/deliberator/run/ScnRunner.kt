@@ -51,6 +51,13 @@ class RunState(val path: String) {
     @Volatile var live: Map<Int, LiveStep> = emptyMap()
     @Volatile var snapshot: RunSnapshot? = null
     @Volatile var cancelRequested = false
+    /** The run directory the daemon named in `run.started` (where the progressive `result.txt` is). */
+    @Volatile var runDir: String? = null
+    /** The progressive `result.txt` read during the run: the sections of the steps finished so far (null before the first read). */
+    @Volatile var progress: RunSnapshot? = null
+    @Volatile var finishedEvents = 0
+    internal val reading = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile internal var dirty = false
 }
 
 /**
@@ -117,6 +124,7 @@ class ScnRunner(private val project: Project) : Disposable {
             st.asked = steps.orEmpty()
             st.started = emptySet()
             st.live = emptyMap()
+            st.progress = null
         }
         publish(path)
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -129,6 +137,7 @@ class ScnRunner(private val project: Project) : Disposable {
             } finally {
                 st.running = false
                 st.call = null
+                st.progress = null
                 publish(path)
             }
         }
@@ -151,9 +160,17 @@ class ScnRunner(private val project: Project) : Disposable {
         st.asked = steps
         st.started = emptySet()
         st.live = emptyMap()
+        st.progress = null
+        st.runDir = null
+        st.finishedEvents = 0
         val call = svc.start("scenario.run", args, true) { ev ->
             when (ev.name) {
-                "run.started" -> { st.runId = ev.json.get("run-id")?.asString; publish(path) }
+                "run.started" -> {
+                    st.runId = ev.json.get("run-id")?.asString
+                    st.runDir = ev.json.get("run-dir")?.takeIf { it.isJsonPrimitive }?.asString
+                    publish(path)
+                    requestProgress(path, st)
+                }
                 "step.started" -> {
                     val n = ev.json.get("step")?.asInt ?: return@start
                     st.started = st.started + n
@@ -164,7 +181,9 @@ class ScnRunner(private val project: Project) : Disposable {
                     val n = ev.json.get("step")?.asInt ?: return@start
                     val status = ev.json.get("status")?.asString?.removePrefix(":") ?: "?"
                     st.live = st.live + (n to LiveStep(n, status, ev.json.get("elapsed")?.takeIf { it.isJsonPrimitive }?.asLong))
+                    st.finishedEvents++
                     publish(path)
+                    requestProgress(path, st)
                 }
             }
         }
@@ -199,6 +218,7 @@ class ScnRunner(private val project: Project) : Disposable {
         val st = state(path)
         st.snapshot = snap
         st.live = emptyMap()
+        st.progress = null
         ApplicationManager.getApplication().invokeLater({
             project.messageBus.syncPublisher(ScnRunListener.TOPIC).runFinished(path, snap)
             project.messageBus.syncPublisher(ScnRunListener.TOPIC).stateChanged(path)
@@ -213,6 +233,40 @@ class ScnRunner(private val project: Project) : Disposable {
         svc.startSession(key, null)
     }
 
+    // following the file ---------------------------------------------------------------------------
+
+    /**
+     * An event said something happened: re-read the run's progressive `result.txt` (through `runs.show`, the daemon names the file)
+     * on a pooled thread, one read at a time, and publish. The file is the truth; the events only say when to look.
+     */
+    private fun requestProgress(path: String, st: RunState) {
+        st.dirty = true
+        if (!st.reading.compareAndSet(false, true)) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                while (st.dirty && st.running) {
+                    st.dirty = false
+                    val dir = st.runDir ?: break
+                    var snap = readProgress(dir)
+                    // core emits step.finished a moment BEFORE it rewrites result.txt (core finding): one short re-read, no more
+                    if (st.running && (snap == null || snap.sections.size < st.finishedEvents)) {
+                        Thread.sleep(150)
+                        snap = readProgress(dir) ?: snap
+                    }
+                    if (st.running && snap != null) {
+                        st.progress = snap
+                        publish(path)
+                    }
+                }
+            } finally {
+                st.reading.set(false)
+            }
+            if (st.dirty && st.running) requestProgress(path, st)
+        }
+    }
+
+    private fun readProgress(runDir: String): RunSnapshot? = try { loadSnapshot(runDir) } catch (_: Exception) { null }
+
     // cancelling ------------------------------------------------------------------------------------
 
     /** Esc: cancel the run of [path]. By run id once the daemon named it (the run closes properly), else by closing the request. */
@@ -224,8 +278,7 @@ class ScnRunner(private val project: Project) : Disposable {
         if (id == null) { st.call?.cancel(); return }
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                // scenario.cancel takes no ws: the run id is global to the daemon
-                WorkspaceService.getInstance(project).client().call("scenario.cancel", JsonObject().apply { addProperty("run-id", id) })
+                WorkspaceService.getInstance(project).call("scenario.cancel", JsonObject().apply { addProperty("run-id", id) })
             } catch (e: DaemonException) {
                 Ui.notify(project, "Cancel", e.message ?: "cancel failed", NotificationType.WARNING)
             }

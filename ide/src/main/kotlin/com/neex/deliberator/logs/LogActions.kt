@@ -38,22 +38,8 @@ class FetchLogsAction : AnAction(), DumbAware {
     }
 
     private fun ask(project: Project, targets: List<String>): FetchRequest? {
-        val target = JComboBox(targets.toTypedArray()).apply { isEditable = true; selectedItem = targets.firstOrNull() ?: "" }
-        val since = JBTextField("10m", 12)
-        val forDur = JBTextField(12)
-        val filter = JBTextField(24)
-        val dlg = object : DialogWrapper(project) {
-            init { title = "Fetch Logs"; init() }
-            override fun createCenterPanel(): JComponent = panel {
-                row("Target:") { cell(target) }
-                row("Since:") { cell(since).comment("10m, 2h or an ISO-8601 instant") }
-                row("Keep listening for:") { cell(forDur).comment("optional, e.g. 5s") }
-                row("Filter:") { cell(filter).comment("optional text or /regex/") }
-            }
-        }
-        if (!dlg.showAndGet()) return null
-        val t = (target.selectedItem as? String)?.trim().orEmpty()
-        return t.takeIf { it.isNotEmpty() }?.let { FetchRequest(it, since.text, forDur.text, filter.text) }
+        val dlg = FetchLogsDialog(project, targets)
+        return if (dlg.showAndGet()) dlg.request() else null
     }
 
     private fun fetch(project: Project, req: FetchRequest) {
@@ -145,4 +131,57 @@ class ToggleMarkerAction : AnAction(), DumbAware {
             Ui.background(project, "Deliberator: marker", { service.toggleNow(vf.path, line0 + 1, logger) })
         }
     }
+}
+
+/** What the Fetch Logs dialog knows about its target, free of the platform. */
+object FetchForm {
+    /** An absolute path (`/var/log/x.log`, `C:\x.log`) is a file target; a name like `log/service-a` is an environment target. */
+    fun isFileTarget(target: String): Boolean = target.trim().let { it.startsWith("/") || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(it) }
+
+    /** The request for what was typed; null without a target. `since` means nothing to a file (the whole file comes back), so none is sent. */
+    fun request(target: String, since: String?, forDur: String?, filter: String?): FetchRequest? {
+        val t = target.trim().takeIf { it.isNotEmpty() } ?: return null
+        return FetchRequest(t, since?.takeIf { !isFileTarget(t) && it.isNotBlank() }, forDur?.takeIf { it.isNotBlank() }, filter?.takeIf { it.isNotEmpty() })
+    }
+}
+
+/** `deliberator.logs.fetch`'s dialog: target, window and filter; `Since` is hidden while the target is a file. */
+class FetchLogsDialog(project: Project, targets: List<String>) : DialogWrapper(project) {
+    private val target = JComboBox(targets.toTypedArray()).apply { isEditable = true; selectedItem = targets.firstOrNull() ?: "" }
+    private val since = JBTextField("10m", 12)
+    private val forDur = JBTextField(12)
+    private val filter = JBTextField(24)
+    private var sinceRow: com.intellij.ui.dsl.builder.Row? = null
+
+    init {
+        title = "Fetch Logs"
+        init()
+        val sync = { updateSinceRow() }
+        target.addActionListener { sync() }
+        (target.editor.editorComponent as? javax.swing.text.JTextComponent)?.document?.addDocumentListener(object : com.intellij.ui.DocumentAdapter() {
+            override fun textChanged(e: javax.swing.event.DocumentEvent) = sync()
+        })
+        updateSinceRow()
+    }
+
+    override fun createCenterPanel(): JComponent = panel {
+        row("Target:") { cell(target) }
+        sinceRow = row("Since:") { cell(since).comment("10m, 2h or an ISO-8601 instant") }
+        row("Keep listening for:") { cell(forDur).comment("optional, e.g. 5s") }
+        row("Filter:") { cell(filter).comment("optional text or /regex/") }
+    }
+
+    private fun updateSinceRow() { sinceRow?.visible(!FetchForm.isFileTarget(currentTarget())) }
+
+    private fun currentTarget(): String = ((target.editor?.item ?: target.selectedItem) as? String).orEmpty()
+
+    /** For tests and the action: type a target as the user would. */
+    internal fun setTarget(t: String) { target.selectedItem = t; (target.editor.editorComponent as? javax.swing.text.JTextComponent)?.text = t; updateSinceRow() }
+    internal fun sinceVisible(): Boolean = since.isVisible
+    internal fun setSince(v: String) { since.text = v }
+
+    /** What the dialog asks for (after OK); null when no target was typed. */
+    fun request(): FetchRequest? = FetchForm.request(currentTarget(), since.text, forDur.text, filter.text)
+
+    override fun getPreferredFocusedComponent(): JComponent = target
 }

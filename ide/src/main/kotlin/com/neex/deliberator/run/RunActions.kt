@@ -18,12 +18,14 @@ import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.util.Disposer
 import com.intellij.codeInsight.lookup.LookupManager
 import com.intellij.diff.DiffManager
-import com.intellij.ui.SimpleListCellRenderer
+import com.intellij.ui.dsl.listCellRenderer.textListCellRenderer
 import com.neex.deliberator.daemon.DaemonException
 import com.neex.deliberator.scn.ScnFile
 import com.neex.deliberator.scn.ScnFileType
 import com.neex.deliberator.ui.Ui
 import com.neex.deliberator.workspace.WorkspaceService
+
+private val CTRL_ENTER = com.intellij.openapi.actionSystem.CustomShortcutSet(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ENTER, java.awt.event.InputEvent.CTRL_DOWN_MASK))
 
 /** Creates the [RunView] of every `.scn` editor and binds Ctrl+Enter and Esc to it (component level, before the stock bindings). */
 class RunEditorListener : EditorFactoryListener {
@@ -34,7 +36,7 @@ class RunEditorListener : EditorFactoryListener {
         if (vf.fileType != ScnFileType || !vf.isInLocalFileSystem) return
         val view = RunView.attach(editor, project, vf)
         val am = ActionManager.getInstance()
-        am.getAction("deliberator.scenario.runStep")?.registerCustomShortcutSet(CommonShortcuts.CTRL_ENTER, editor.contentComponent, view)
+        am.getAction("deliberator.scenario.runStep")?.registerCustomShortcutSet(CTRL_ENTER, editor.contentComponent, view)
         am.getAction("deliberator.scenario.cancel")?.registerCustomShortcutSet(CommonShortcuts.ESCAPE, editor.contentComponent, view)
     }
 
@@ -126,24 +128,40 @@ object RunHistory {
 
     private fun pick(project: Project, path: String, title: String, rows: List<HistoryRow>, chosen: (HistoryRow) -> Unit) {
         JBPopupFactory.getInstance().createPopupChooserBuilder(rows).setTitle(title)
-            .setRenderer(SimpleListCellRenderer.create("") { it.label })
+            .setRenderer(textListCellRenderer { it.label })
             .setItemChosenCallback(chosen).createPopup().showCenteredInCurrentWindow(project)
     }
 
+    val ITEMS = listOf("Open result.txt", "Show inline", "Diff with previous run", "Diff with...")
+
     private fun actions(project: Project, path: String, row: HistoryRow, rows: List<HistoryRow>) {
-        val items = listOf("Open result.txt", "Show inline", "Diff with previous run", "Diff with...")
-        JBPopupFactory.getInstance().createPopupChooserBuilder(items).setTitle(row.runId).setItemChosenCallback { a ->
-            when (a) {
-                items[0] -> openResult(project, row)
-                items[1] -> Ui.background(project, "Deliberator: loading ${row.runId}", { ScnRunner.getInstance(project).let { it.show(path, it.loadSnapshot(row.path.ifBlank { row.runId })) } })
-                items[2] -> rows.getOrNull(rows.indexOf(row) + 1)?.let { diff(project, it, row) }
-                    ?: Ui.notify(project, "Runs", "There is no earlier run.", NotificationType.INFORMATION)
-                else -> pick(project, path, "Diff ${row.runId} with", rows.filter { it != row }) { other ->
-                    // older on the left
-                    if (rows.indexOf(other) > rows.indexOf(row)) diff(project, other, row) else diff(project, row, other)
-                }
+        JBPopupFactory.getInstance().createPopupChooserBuilder(ITEMS).setTitle(row.runId)
+            .setItemChosenCallback { a -> perform(project, path, row, rows, a) }.createPopup().showCenteredInCurrentWindow(project)
+    }
+
+    /** What choosing [item] of the action popup does for [row] (rows are newest first). [showDiff] is replaceable for tests. */
+    fun perform(project: Project, path: String, row: HistoryRow, rows: List<HistoryRow>, item: String, showDiff: (Project, DiffTexts) -> Unit = ::showDiffWindow) {
+        when (item) {
+            ITEMS[0] -> openResult(project, row)
+            ITEMS[1] -> Ui.background(project, "Deliberator: loading ${row.runId}", { ScnRunner.getInstance(project).let { it.show(path, it.loadSnapshot(row.path.ifBlank { row.runId })) } })
+            ITEMS[2] -> olderThan(row, rows)?.let { diff(project, it, row, showDiff) }
+                ?: Ui.notify(project, "Runs", "There is no earlier run.", NotificationType.INFORMATION)
+            else -> pick(project, path, "Diff ${row.runId} with", rows.filter { it != row }) { other ->
+                val (older, newer) = diffOrder(row, other, rows)
+                diff(project, older, newer, showDiff)
             }
-        }.createPopup().showCenteredInCurrentWindow(project)
+        }
+    }
+
+    /** The run before [row] (rows are newest first), or null for the oldest. */
+    fun olderThan(row: HistoryRow, rows: List<HistoryRow>): HistoryRow? = rows.getOrNull(rows.indexOf(row) + 1)
+
+    /** Older on the left. */
+    fun diffOrder(a: HistoryRow, b: HistoryRow, rows: List<HistoryRow>): Pair<HistoryRow, HistoryRow> =
+        if (rows.indexOf(b) > rows.indexOf(a)) b to a else a to b
+
+    private fun showDiffWindow(project: Project, texts: DiffTexts) {
+        ApplicationManager.getApplication().invokeLater { DiffManager.getInstance().showDiff(project, RunDiff.request(project, texts)) }
     }
 
     fun openResult(project: Project, row: HistoryRow) {
@@ -154,12 +172,12 @@ object RunHistory {
         })
     }
 
-    fun diff(project: Project, a: HistoryRow, b: HistoryRow) {
+    fun diff(project: Project, a: HistoryRow, b: HistoryRow, showDiff: (Project, DiffTexts) -> Unit = ::showDiffWindow) {
         var texts: DiffTexts? = null
         Ui.background(project, "Deliberator: diff ${a.runId} / ${b.runId}", {
             texts = RunDiff.fetch(WorkspaceService.getInstance(project), a, b)
         }, {
-            texts?.let { ApplicationManager.getApplication().invokeLater { DiffManager.getInstance().showDiff(project, RunDiff.request(project, it)) } }
+            texts?.let { showDiff(project, it) }
         })
     }
 }

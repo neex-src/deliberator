@@ -10,7 +10,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.IdeBorderFactory
-import com.intellij.ui.SimpleListCellRenderer
+import com.intellij.ui.dsl.listCellRenderer.textListCellRenderer
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -45,6 +45,11 @@ class DeliberatorToolWindowFactory : ToolWindowFactory, DumbAware {
 class DeliberatorPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
     private val svc = WorkspaceService.getInstance(project)
     private val header = JBLabel()
+    /** Shown only while the bound workspace does not exist; the same thing as the toolbar's Open Workspace. */
+    val openButton = javax.swing.JButton("Open Workspace").apply {
+        isVisible = false
+        addActionListener { Ui.background(project, "Deliberator: open workspace ${svc.ws}", { svc.openWorkspace() }) }
+    }
     private val sessions = DefaultListModel<String>()
     private val runtime = DefaultTableModel(arrayOf("Role", "State", "Health", "Ports"), 0)
     private val runs = DefaultListModel<RunRow>()
@@ -55,10 +60,10 @@ class DeliberatorPanel(private val project: Project) : JPanel(BorderLayout()), D
         val group = ActionManager.getInstance().getAction("deliberator.toolwindow.actions") as DefaultActionGroup
         val bar = ActionManager.getInstance().createActionToolbar(ActionPlaces.TOOLWINDOW_TOOLBAR_BAR, group, true)
         bar.targetComponent = this
-        val top = JPanel(BorderLayout()).apply { add(bar.component, BorderLayout.NORTH); add(header, BorderLayout.SOUTH) }
+        val top = JPanel(BorderLayout()).apply { add(bar.component, BorderLayout.NORTH); add(JPanel(BorderLayout()).apply { add(header, BorderLayout.CENTER); add(openButton, BorderLayout.EAST) }, BorderLayout.SOUTH) }
         add(top, BorderLayout.NORTH)
 
-        runList.cellRenderer = SimpleListCellRenderer.create("") { "${it.runId}  ${mark(it)}  ${it.scenario ?: ""}  ${it.env ?: ""}" }
+        runList.cellRenderer = textListCellRenderer { "${it.runId}  ${mark(it)}  ${it.scenario ?: ""}  ${it.env ?: ""}" }
         runList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount == 2) runList.selectedValue?.let { OpenRunAction.open(project, it.path) }
@@ -94,6 +99,7 @@ class DeliberatorPanel(private val project: Project) : JPanel(BorderLayout()), D
 
     fun render(m: WorkspaceModel) {
         header.text = headerText(m)
+        openButton.isVisible = m.missing
         sessions.clear()
         m.sessions.forEach { sessions.addElement((if (it.key == m.currentSession) "> " else "  ") + it.key + (it.title?.let { t -> "  $t" } ?: "") + (if (it.isEnded) "  (ended)" else "")) }
         runtime.rowCount = 0
@@ -107,6 +113,7 @@ class DeliberatorPanel(private val project: Project) : JPanel(BorderLayout()), D
         /** The one-line summary above the lists (also what the tests read). */
         fun headerText(m: WorkspaceModel): String {
             if (m.ws == null) return "Not a Deliberator workspace project: Deliberator | Open workspace... or Use workspace for this project..."
+            if (m.missing) return "workspace ${m.ws} not found: the daemon does not know it. Open Workspace creates it."
             val age = m.fetchedAt?.let { Duration.between(it, Instant.now()).seconds.coerceAtLeast(0).toString() + "s ago" } ?: "not fetched yet"
             return "workspace ${m.ws} | env ${m.selectedEnv} | session ${m.currentSession ?: "none"} | $age" + (m.error?.let { " | ERROR: $it" } ?: "")
         }

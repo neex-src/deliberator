@@ -27,7 +27,7 @@ class MarkerIcon(private val gutter: MarkerGutter, val marker: Marker) : GutterI
     override fun getTooltipText(): String {
         val last = gutter.matcher.lastMatch(marker.id)
         return "Deliberator marker ${marker.logger ?: "(file name)"}:${marker.line}" +
-            (last?.let { " - last matched line ${it.second} of ${java.nio.file.Path.of(it.first).fileName}" } ?: " - no matched log line yet")
+            (last?.let { " - last matched line ${it.second} of ${java.nio.file.Path.of(it.first).fileName}" + (gutter.matcher.beyond(it.first)?.takeIf { b -> it.second > b.loadedLines }?.let { b -> " (beyond the ${b.loadedLines} lines the editor loaded)" } ?: "") } ?: " - no matched log line yet")
     }
     override fun getAlignment(): Alignment = Alignment.LEFT
     override fun isNavigateAction(): Boolean = true
@@ -97,12 +97,12 @@ class MarkerGutter(val editor: Editor, val project: Project, val file: VirtualFi
      * A marked line that was deleted has no valid highlighter left: its marker stays where it was, removed only by hand.
      */
     fun syncMoved(): Int {
-        val moves = com.intellij.openapi.application.runReadAction {
+        val moves = com.intellij.openapi.application.ApplicationManager.getApplication().runReadAction(com.intellij.openapi.util.Computable<List<Pair<Marker, Int>>> {
             drawn.filter { it.second.isValid }.mapNotNull { (m, h) ->
                 val now = editor.document.getLineNumber(h.startOffset) + 1
                 if (now != m.line) m to now else null
             }
-        }
+        })
         for ((m, line) in moves) service.moveNow(m, line)
         return moves.size
     }
