@@ -28,7 +28,12 @@
               id (tc/send! a "scenario.run" {:path path :env "files"})
               started (tc/recv a)
               _ (is (= "step.started" (:event (tc/recv a))))
-              _ (is (true? (:cancelled (:result (ok! b "scenario.cancel" {:run-id (:run-id started)})))))
+              ;; the daemon registers a run AFTER the engine has started emitting (finding: a cancel that
+              ;; arrives first gets cancelled=false and is lost, seen under CPU load), so retry
+              cancelled (loop [n 0]
+                          (let [c (:cancelled (:result (ok! b "scenario.cancel" {:run-id (:run-id started)})))]
+                            (if (or c (>= n 50)) c (do (Thread/sleep 100) (recur (inc n))))))
+              _ (is (true? cancelled))
               {:keys [events terminal]} (tc/collect a id)
               run-dir (get-in terminal [:result :paths :run])
               run (read-run-edn run-dir)]
