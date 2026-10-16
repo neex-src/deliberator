@@ -3,8 +3,9 @@
 
   Endpoints: `unix:///path/to/podman.sock` (JDK `UnixDomainSocketAddress` + hand-written HTTP/1.1
   framing: `Connection: close`, chunked, content-length and read-to-EOF bodies) and
-  `tcp://host:port` (`java.net.http`, HTTP/1.1). `ssh://` is recognised and refused until the Mac
-  profile (M3); it is only another endpoint, nothing above this namespace changes.
+  `tcp://host:port` (`java.net.http`, HTTP/1.1). `ssh://user@host[:port]/remote/podman.sock` is parsed here
+  (`parse-endpoint` -> `:scheme :ssh`) but a client never speaks it: `deliberator.runtime/podman-client` opens the tunnel
+  (`deliberator.tunnel`) and hands this namespace the local `unix://` end.
 
   A client is a plain map `(client endpoint :ws ws)`. With a `:ws`, every response body of the
   operations below is persisted first through `store/raw-put!` (`:source :podman`, `:op \"METHOD
@@ -23,7 +24,8 @@
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [deliberator.store :as store])
+            [deliberator.store :as store]
+            [deliberator.tunnel :as tunnel])
   (:import (java.io BufferedReader ByteArrayInputStream ByteArrayOutputStream EOFException
                     IOException InputStream InputStreamReader RandomAccessFile)
            (java.net ConnectException StandardProtocolFamily URI URLEncoder UnixDomainSocketAddress)
@@ -54,7 +56,8 @@
 
 (defn parse-endpoint
   "`unix:///p` -> `{:scheme :unix :path \"/p\"}`; `tcp://h:p` -> `{:scheme :tcp :host :port}`.
-  `ssh://` and anything else throw `:podman/unsupported-endpoint`."
+  `ssh://u@h:p/sock` -> `{:scheme :ssh :user :host :port :remote}` (see `deliberator.tunnel`); anything else throws
+  `:podman/unsupported-endpoint`."
   [endpoint]
   (let [[_ scheme rest] (re-matches #"(?s)([a-z]+)://(.*)" (str endpoint))]
     (case scheme
@@ -64,15 +67,17 @@
                 (throw (ex-info (str "tcp endpoint needs host:port: " endpoint)
                                 {:type :podman/unsupported-endpoint :endpoint endpoint})))
               {:scheme :tcp :host host :port (Long/parseLong port)})
-      "ssh" (throw (ex-info "ssh:// endpoints arrive with the Mac profile (M3)"
-                            {:type :podman/unsupported-endpoint :endpoint endpoint}))
+      "ssh" (assoc (tunnel/parse-ssh endpoint) :scheme :ssh)
       (throw (ex-info (str "unsupported podman endpoint: " (pr-str endpoint))
                       {:type :podman/unsupported-endpoint :endpoint endpoint})))))
 
 (defn client
   "A client map for `endpoint`; `:ws` turns response persistence on."
   [endpoint & {:keys [ws]}]
-  (parse-endpoint endpoint)
+  (when (= :ssh (:scheme (parse-endpoint endpoint)))
+    (throw (ex-info (str "an ssh:// endpoint needs its tunnel first: " endpoint)
+                    {:type :podman/unsupported-endpoint :endpoint endpoint
+                     :hint "go through deliberator.runtime/podman-client, which opens the tunnel"})))
   {:endpoint endpoint :ws ws})
 
 ;; ---------------------------------------------------------------------------------------------
@@ -268,12 +273,32 @@
 ;; ---------------------------------------------------------------------------------------------
 ;; Persistence and the generic call
 
+(def secrets-label "deliberator.secrets-from")
+
+(defn scrub-secrets
+  "The body `bs` of a container description that carries the label `deliberator.secrets-from` (it was created with
+  real secret values) with every `Config.Env` value replaced by `<redacted>`; any other body unchanged.
+  An inspect of such a container would otherwise put the values into the raw store."
+  ^bytes [^bytes bs]
+  (if-not (and (pos? (alength bs)) (str/includes? (String. bs StandardCharsets/UTF_8) secrets-label))
+    bs
+    (try
+      (let [j (json/read-str (String. bs StandardCharsets/UTF_8))
+            scrub (fn [x]
+                    (if (and (map? x) (get-in x ["Config" "Labels" secrets-label]))
+                      (-> x
+                          (update-in ["Config" "Env"] (fn [env] (when env (mapv #(str (first (str/split (str %) #"=" 2)) "=<redacted>") env)))))
+                      x))
+            out (if (sequential? j) (mapv scrub j) (scrub j))]
+        (.getBytes ^String (json/write-str out) StandardCharsets/UTF_8))
+      (catch Exception _ (.getBytes "{\"redacted\":\"body of a container with secret values could not be parsed\"}" StandardCharsets/UTF_8)))))
+
 (defn persist!
   "Writes `bs` to the raw store of the client's workspace (no-op without `:ws` or for an empty
-  body)."
+  body). A container description of a container created with real secret values is scrubbed first (`scrub-secrets`)."
   [c op ^bytes bs content-type]
   (when (and (:ws c) (pos? (alength bs)))
-    (store/raw-put! (:ws c) bs {:source :podman :op op :env nil :at (store/now)
+    (store/raw-put! (:ws c) (scrub-secrets bs) {:source :podman :op op :env nil :at (store/now)
                                 :content-type (or content-type "application/octet-stream")})))
 
 (defn- decode [^bytes bs]

@@ -10,9 +10,11 @@
   `service.started {name container}`, `service.stopped {name container}`, plus the runtime's
   `runtime.pulling|starting|ready|recreating` while a start reconciles.
 
-  `secrets-from` on `start!` is the gate of piece 08, refused here: without a live token `confirm-required`
-  (token 1), with token 1 `confirm-required` again (a different token 2), with token 2
-  `service/secrets-not-built`. Nothing is ever injected by this piece."
+  `secrets-from` on `start!`: without a live token `confirm-required` (token 1: which environment and which
+  secret names), with token 1 `confirm-required` again (a different token 2: the values go into the container's
+  environment only), with token 2 the secrets are fetched from that environment and the container is created with them.
+  A wrong, reused, expired or foreign token is `service/confirmation-refused`; a service with no secret references
+  `service/no-secrets`."
   (:refer-clojure :exclude [list])
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
@@ -217,16 +219,16 @@
       (cond-> {:took-ms (quot (- (System/nanoTime) t0) 1000000) :log (str logf) :sha (:sha raw)}
         a (assoc :artifact (str a) :bytes (.length a))))))
 
-;; the secrets gate (piece 08 builds the rest) --------------------------------------------------
+;; the secrets gate --------------------------------------------------
 
 (defonce ^:private tokens (atom {}))
-(def ^:private token-ttl (Duration/ofMinutes 10))
+(def ^:dynamic *token-ttl* (Duration/ofMinutes 10))
 
 (defn- issue! [fp]
   (let [b (byte-array 18) _ (.nextBytes (SecureRandom.) b)
         t (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) b)
         now (Instant/now)
-        exp (.plus now token-ttl)]
+        exp (.plus now *token-ttl*)]
     (swap! tokens (fn [m] (assoc (into {} (remove (fn [[_ v]] (.isAfter now (:expires v))) m)) t {:fp fp :expires exp})))
     {:token t :expires (str exp)}))
 
@@ -236,22 +238,45 @@
         v (get old token)]
     (boolean (and v (= fp (:fp v)) (not (.isAfter now (:expires v)))))))
 
+(defn- secret-names
+  "env var -> where the value would come from, as the confirmation text shows it: the logical name in the other environment."
+  [refs]
+  (into (sorted-map)
+        (for [[k ref] refs :let [{:keys [service id json-key]} (runtime/logical-ref ref)]]
+          [k (str (clojure.core/name service) " " id (when json-key (str " [" json-key "]")))])))
+
+(defn- gate-texts [name from names]
+  (let [list-str (str/join ", " (for [[k v] names] (str k " <- " v)))]
+    [(str "Start " name " with the REAL secret values of environment " from " instead of the local fakes. "
+          "Secrets that would be read from " from " (" (count names) "): " list-str ". Confirmation 1 of 2.")
+     (str "The values of those " (count names) " secrets will be fetched from " from " now and written into the environment of the container of "
+          name " ONLY (podman create): not into any file under the home, not into the logs, not into the spec hash. "
+          "Anyone who can run `podman inspect` on this machine can read them while the container exists; the next plain start of "
+          name " replaces the container with the local fakes. Confirmation 2 of 2.")]))
+
 (defn- secrets-gate!
-  "Always throws: the two confirmations, then `service/secrets-not-built`."
+  "The two confirmations of `secrets-from`. Throws `confirm-required` (token 1), `confirm-required` (another token and text 2),
+  `service/confirmation-refused` for an unknown, expired, reused or foreign token; returns the secret refs
+  (env var -> reference) once token 2 is consumed. Tokens are bound to workspace, service, environment, the secret names and the step."
   [ws name from confirm]
   (env/load ws from)
-  (let [fp [(store/ws-name ws) name from]
+  (let [refs (runtime/secret-refs ws (role-label name))
+        _ (when (empty? refs)
+            (fail :service/no-secrets (str "service " name " has no secret references (taskdef :secrets): nothing to take from " from)
+                  :hint "service.show shows the description's :taskdef"))
+        names (secret-names refs)
+        fp [(store/ws-name ws) name from (vec (keys names))]
+        texts (gate-texts name from names)
         ask (fn [n]
               (let [{:keys [token expires]} (issue! (conj fp n))
-                    summary (str "start " name " with real secret values from environment " from " (confirmation " n " of 2)")]
+                    summary (nth texts (dec n))]
                 (fail :confirm-required summary :token token :summary summary :expires expires
-                      :confirmations [{:token token :summary summary :expires expires}]
-                      :hint (str "repeat the start with confirm set to the token (" (- 3 n) " more confirmation(s) needed after this one)"))))]
+                      :step n :of 2 :env from :names (vec (keys names)) :sources names
+                      :confirmations [{:token token :summary summary :expires expires :step n :of 2}]
+                      :hint (str "repeat the start with confirm set to the token (" (- 2 n) " more confirmation(s) needed after this one)"))))]
     (cond (nil? confirm) (ask 1)
           (consume! confirm (conj fp 1)) (ask 2)
-          (consume! confirm (conj fp 2)) (fail :service/secrets-not-built
-                                               "both confirmations were given, but injecting secret values is not built yet (m3 piece 08); nothing was started"
-                                               :hint "start without secrets-from to run with the local environment's values")
+          (consume! confirm (conj fp 2)) refs
           :else (fail :service/confirmation-refused "the confirmation token is unknown, expired, already used, or was issued for a different request"
                       :hint "start again without confirm to get the first token"))))
 
@@ -278,15 +303,19 @@
             (str "service " name " is " (clojure.core/name (topo-mode ws name)) " in the topology of environment local: its container is not desired")
             :service name :env "local"
             :hint (str "dlb topology set local " name " local")))
-    (when secrets-from (secrets-gate! ws name secrets-from confirm))
+    (let [refs (when secrets-from (secrets-gate! ws name secrets-from confirm))]
     (when-not (description/runnable? d)
       (fail :service/not-runnable (str "service " name " is a " (clojure.core/name (:kind d)) ": it runs as a function in the environment, not as a container")
             :hint "only spring-boot services start here"))
     (description/module-dir ws d)
-    (runtime/ensure! ws (cond-> {:sink sink :only [(role-label name)]} timeout-ms (assoc :timeout-ms timeout-ms)))
+    ;; nothing is fetched before token 2 was consumed (the gate returns the refs only then)
+    (let [values (when refs (runtime/fetch-secrets ws secrets-from refs))]
+      (runtime/ensure! ws (cond-> {:sink sink :only [(role-label name)]}
+                            timeout-ms (assoc :timeout-ms timeout-ms)
+                            values (assoc :secrets-from {(role-label name) {:env secrets-from :values values}}))))
     (let [r (result ws d)]
       (when sink (sink {:event "service.started" :name name :container (:container r)}))
-      r)))
+      r))))
 
 (defn stop!
   "Stops the container and keeps it (so `start!` reuses it). -> `{:name :status :container}`; no container is `absent`."
@@ -299,5 +328,7 @@
 (defn restart!
   "Stop, then start (a rebuilt jar or a changed description recreates the container)."
   [ws name opts]
-  (stop! ws name opts)
-  (start! ws name opts))
+  (if (:secrets-from opts)
+    (start! ws name opts)   ; a start with secrets always recreates the container; stopping first would strand the service between the two confirmations
+    (do (stop! ws name opts)
+        (start! ws name opts))))

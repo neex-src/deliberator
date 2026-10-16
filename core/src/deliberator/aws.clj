@@ -4,7 +4,8 @@
   `ctx` keys: `:ws` (workspace name or map, required), `:session` (session key; default the
   workspace's current session; with none, the audit goes to the workspace-level `audit.log`),
   `:confirm` (a confirmation token), `:persist-secrets` (true keeps secret values in the persisted
-  blobs of a remote call). `service` is aws-api's keyword (`:eventbridge` accepted for `:events`),
+  blobs of a remote call), `:redact-secrets` (true redacts the persisted blobs of secret-bearing calls
+  on ANY environment, local included: how `secrets-from` fetches real values). `service` is aws-api's keyword (`:eventbridge` accepted for `:events`),
   `op` a keyword or string, `request` the aws-api request map.
 
   Order of events, always: the serialised request is persisted through `store/raw-put!`
@@ -264,7 +265,7 @@
         request (or request {})
         class (ops/op-class api op-name)
         remote? (= :remote (:kind env))
-        redact? (and remote? (not (:persist-secrets ctx)))
+        redact? (or (:redact-secrets ctx) (and remote? (not (:persist-secrets ctx))))
         req-ref (put! ws env
                       (->bytes (pr-edn {:service api :op op-name :env (:name env)
                                         :request (if redact? (redact-request api op-name request) request)}))

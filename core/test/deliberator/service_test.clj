@@ -8,6 +8,7 @@
             [clojure.test :refer [deftest is testing]]
             [deliberator.ops :as ops]
             [deliberator.runtime :as runtime]
+            [deliberator.service :as service]
             [deliberator.service.description :as description]
             [deliberator.store :as store]
             [deliberator.test-util :as tu]))
@@ -88,23 +89,59 @@
         (is (= 5005 (:debug spec)))
         (is (= {"S" "/s"} (:secrets spec)))))))
 
-(deftest secrets-gate-needs-two-distinct-confirmations-and-never-injects
+(deftest secrets-gate-needs-two-distinct-confirmations
+  (tu/with-temp-home
+    (call "workspace.open" {:ws "w"})
+    (description/write! "w" {:name "a" :kind :spring-boot :main "m.Main" :port 8081 :module "/m" :build {:artifact "t.jar"}
+                             :taskdef {:secrets {"API_KEY" "arn:aws:secretsmanager:eu-central-1:000000000000:secret:estate/api-key-LAREMM"
+                                                 "BUS" "arn:aws:ssm:eu-central-1:000000000000:parameter/estate/common/bus-name"}}})
+    (let [go (fn [& {:as m}] (thrown-type #(call "service.start" (merge {:ws "w" :name "a" :secrets-from "local"} m))))
+          e1 (go)
+          e2 (go :confirm (:token e1))
+          e3 (go :confirm (:token e2))]
+      (testing "token 1 names the environment and every secret, token 2 says where the values go"
+        (is (= "confirm-required" (:type e1)))
+        (is (= 1 (:step e1)))
+        (is (= 2 (:of e1)))
+        (is (= ["API_KEY" "BUS"] (:names e1)))
+        (is (re-find #"REAL secret values of environment local" (:summary e1)))
+        (is (re-find #"API_KEY <- secretsmanager estate/api-key" (:summary e1)) "the logical name, not the ARN suffix")
+        (is (re-find #"BUS <- ssm /estate/common/bus-name" (:summary e1))))
+      (is (= "confirm-required" (:type e2)))
+      (is (= 2 (:step e2)))
+      (is (not= (:token e1) (:token e2)))
+      (is (not= (:summary e1) (:summary e2)))
+      (is (re-find #"ONLY" (:summary e2)) "the values go into the container's environment only")
+      (is (re-find #"podman inspect" (:summary e2)))
+      (testing "token 2 passes the gate (the start then fails further on: the module does not exist here)"
+        (is (not (contains? #{"confirm-required" "service/confirmation-refused"} (:type e3)))))
+      (testing "a token is single use, bound to its stage and to the request"
+        (is (= "service/confirmation-refused" (:type (go :confirm (:token e1)))) "token 1 was spent")
+        (let [f1 (go)]
+          (is (= "service/confirmation-refused" (:type (go :confirm (str (:token f1) "x")))) "a token with a character changed"))
+        (let [g1 (go) g2 (go :confirm (:token g1))]
+          (is (= "service/confirmation-refused" (:type (go :confirm (:token g1)))))
+          (is (not= "service/confirmation-refused" (:type (go :confirm (:token g2)))) "g2 is still good")))
+      (testing "only token 1 given twice, or token 2 without token 1, never passes"
+        (let [h1 (go)]
+          (is (= "confirm-required" (:type (go :confirm (:token h1)))))
+          (is (= "service/confirmation-refused" (:type (go :confirm (:token h1)))))))
+      (testing "an expired token is refused"
+        (binding [service/*token-ttl* (java.time.Duration/ofMillis -1)]
+          (let [x1 (go)]
+            (is (= "service/confirmation-refused" (:type (go :confirm (:token x1))))))))
+      (testing "an unknown environment is refused before any token"
+        (is (= "env/not-found" (:type (go :secrets-from "nowhere")))))
+      (testing "a description changed between the confirmations voids the token (names are part of what was confirmed)"
+        (let [k1 (go)]
+          (description/write! "w" (assoc-in (description/read "w" "a") [:taskdef :secrets "EXTRA"] "/extra"))
+          (is (= "service/confirmation-refused" (:type (go :confirm (:token k1))))))))))
+
+(deftest secrets-from-needs-secret-references
   (tu/with-temp-home
     (call "workspace.open" {:ws "w"})
     (description/write! "w" {:name "a" :kind :spring-boot :main "m.Main" :port 8081 :module "/m" :build {:artifact "t.jar"}})
-    (let [e1 (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "local"}))
-          e2 (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "local" :confirm (:token e1)}))
-          e3 (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "local" :confirm (:token e2)}))]
-      (is (= "confirm-required" (:type e1)))
-      (is (= "confirm-required" (:type e2)))
-      (is (not= (:token e1) (:token e2)))
-      (is (= "service/secrets-not-built" (:type e3)))
-      (testing "a token is single use, bound to its stage and to the request"
-        (is (= "service/confirmation-refused" (:type (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "local" :confirm (:token e1)})))))
-        (let [f1 (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "local"}))]
-          (is (= "service/confirmation-refused"
-                 (:type (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "local" :confirm (:token (assoc f1 :token (str (:token f1) "x")))}))))))
-        (is (= "env/not-found" (:type (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "nowhere"})))))))))
+    (is (= "service/no-secrets" (:type (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "local"})))))))
 
 (deftest node-lambda-does-not-start-as-a-container
   (tu/with-temp-home

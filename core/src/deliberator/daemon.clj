@@ -38,7 +38,8 @@
             [deliberator.steps.sql]
             [deliberator.steps.sqs]
             [deliberator.steps.wait]
-            [deliberator.store :as store])
+            [deliberator.store :as store]
+            [deliberator.tunnel :as tunnel])
   (:import (java.lang ProcessHandle)
            (java.net InetAddress InetSocketAddress StandardProtocolFamily UnixDomainSocketAddress)
            (java.nio.channels FileChannel FileLock OverlappingFileLockException ServerSocketChannel)
@@ -181,6 +182,7 @@
                            (catch Throwable e (log "stop: finalising runs failed" (ex-message e)))
                            (finally
                              (try (when-let [s @server] ((:stop! s))) (catch Throwable _ nil))
+                             (try (let [n (tunnel/close-all!)] (when (pos? n) (log "closed" n "ssh tunnel(s)"))) (catch Throwable _ nil))
                              (try (Files/deleteIfExists (.resolve dir "endpoint")) (catch Exception _ nil))
                              (try (Files/deleteIfExists (.resolve dir "deliberatord.sock")) (catch Exception _ nil))
                              (release-lock! lock)
