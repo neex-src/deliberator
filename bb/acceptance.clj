@@ -6,9 +6,12 @@
   3. `dlb run` of `estate/scenarios/order.scn`, then every `estate/scenarios/payloads/*.scn`, in
      name order, against the `local` environment; a run's exit code is dlb's (0 green, 1 failed
      checks, 2 error).
-  4. A summary (scenario, result trailer, run directory) and the exit code: non-zero when any run
+  4. The reload case (`reload-case`): the ack log string of service A's `Api.java` is patched, `service.reload a`
+     brings it into the running container, `order.scn` runs again and the fetched log of A must carry the new
+     string; the file is restored (and reloaded once more) in a `finally`.
+  5. A summary (scenario, result trailer, run directory) and the exit code: non-zero when any run
      did not end green.
-  5. The daemon is stopped with `daemon.stop` (SIGTERM to the pid it announced for a daemon that has no
+  6. The daemon is stopped with `daemon.stop` (SIGTERM to the pid it announced for a daemon that has no
      such op) when this task started it (a daemon that was already running is left alone); the estate
      stays up unless `--down`.
 
@@ -18,6 +21,7 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.string :as str]
+            [daemon-client]
             [dlb.client]
             [dlb.endpoint :as endpoint]
             [estate]))
@@ -57,6 +61,40 @@
      :trailer (or (some #(when (re-find #"^(OK|FAILED) " %) %) (reverse lines)) (str "exit " (:exit r)))
      :run (field "run: ")}))
 
+(defn reload-case
+  "The M3 reload case: patch one log string of service A's source (the original text kept in memory), `service.reload a`,
+  run order.scn, fetch A's log and look for the new string; `finally` restores the file and reloads it back (so the
+  container does not stay on the patched class). -> a result map like `run-scenario`'s."
+  [dlb env ws session]
+  (let [f "estate/services/service-a/src/main/java/estate/a/Api.java"
+        from "\"ACK received id={}\""
+        marker "ACK received (acceptance reload)"
+        to (str "\"" marker " id={}\"")
+        orig (slurp f)
+        scn "estate/scenarios/order.scn"
+        fail (fn [why] {:scenario "reload service/a + order.scn" :exit 1 :trailer (str "FAILED " why) :run nil})]
+    (if-not (str/includes? orig from)
+      (fail (str "the string " from " is not in " f))
+      (try
+        (spit f (str/replace orig from to))
+        (let [rl (daemon-client/call! "service.reload" {:ws ws :name "a"})
+              _ (println "reload a:" (:mechanism rl) (str (:took-ms rl) " ms") "redefined" (:redefined rl) "reload-count" (:reload-count rl))
+              run (run-scenario dlb env ws scn)
+              fetched (p/shell {:out :string :err :string :continue true :extra-env env}
+                               dlb "logs" "fetch" "log/service-a" "--since" "5m" "--ws" ws "--session" session)
+              path (some #(when (str/starts-with? % "path: ") (subs % 6)) (str/split-lines (:out fetched)))
+              found? (boolean (and path (str/includes? (slurp path) marker)))]
+          (println (if found? "ok:" "MISSING:") "fetched log of service A" (if found? "carries" "does not carry") (pr-str marker) path)
+          (cond (not (zero? (:exit run))) (assoc run :scenario "reload service/a + order.scn")
+                (not found?) (fail "the new string is not in the fetched log of service A")
+                :else (assoc run :scenario "reload service/a + order.scn"
+                             :trailer (str (:trailer run) "; new string in A's log"))))
+        (catch Exception e (fail (ex-message e)))
+        (finally
+          (spit f orig)
+          (try (daemon-client/call! "service.reload" {:ws ws :name "a"})
+               (catch Exception e (println "restoring service A's class failed (" (ex-message e) "): reload it by hand"))))))))
+
 (defn -main [& args]
   (let [ws (or (arg args "--ws") "default")
         home (home)
@@ -76,7 +114,8 @@
             session (str "ACCEPT-" (today))
             _ (p/shell {:extra-env env} dlb "workspace" "open" ws)
             _ (p/shell {:extra-env env} dlb "session" "start" session "--ws" ws)
-            results (doall (for [s (scenarios)] (run-scenario dlb env ws s)))
+            results (conj (vec (doall (for [s (scenarios)] (run-scenario dlb env ws s))))
+                          (reload-case dlb env ws session))
             bad (remove #(zero? (:exit %)) results)]
         (println "\n== acceptance" session "ws" ws)
         (doseq [{:keys [scenario trailer run exit]} results]
