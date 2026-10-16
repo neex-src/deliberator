@@ -40,9 +40,10 @@
   container's logs through `podman/logs` and mirrors them to `logs/services/<role>/<date>.log`.
   Health per role (overridable with `:health {:http path :port cp}` or `{:exec [cmd…]}`): Floci
   `GET /_floci/health` with every service `running`, Postgres `pg_isready` via exec, `service-*`
-  `GET /actuator/health`. `opts`: `:sink`, `:timeout-ms` (health wait per container, default 120 s).
+  `GET /actuator/health`. `opts`: `:sink`, `:timeout-ms` (health wait per container, default 120 s), `:infra-only` (skip
+  the `:jar` service roles).
   Home resolution is the store's (`store/*home*`, `$DELIBERATOR_HOME`). `-main`: `up|status|down
-  [--ws W]` (the `bb runtime:*` tasks) plus `adopt-taskdefs --ws W --file descriptor.edn`."
+  [--ws W]` (the `bb runtime:*` tasks) plus `up --infra`, `sync-env` and `adopt-taskdefs --ws W --file descriptor.edn`."
   (:require [clojure.data.json :as json]
             [clojure.edn]
             [clojure.string :as str]
@@ -166,7 +167,7 @@
 (defn- resolve-one [ws local ref]
   (let [ref (str ref)
         ctx {:ws ws}
-        arn (re-matches #"arn:[^:]*:(ssm|secretsmanager):[^:]*:[^:]*:(parameter|secret):(.+)" ref)
+        arn (re-matches #"arn:[^:]*:(ssm|secretsmanager):[^:]*:[^:]*:(parameter|secret)[:/](.+)" ref)
         ssm? (or (and arn (= "ssm" (second arn))) (str/starts-with? ref "/"))
         [secret-id json-key] (if (and arn (not ssm?))
                                (let [parts (str/split (nth arn 3) #":" -1)
@@ -380,9 +381,9 @@
   "Reconciles the runtime of `ws` with its `runtime.edn` and waits until it is healthy. Idempotent.
   -> `(status ws)`."
   ([ws] (ensure! ws {}))
-  ([ws {:keys [sink timeout-ms] :or {timeout-ms default-timeout-ms}}]
+  ([ws {:keys [sink timeout-ms infra-only] :or {timeout-ms default-timeout-ms}}]
    (let [cfg (load-config! ws sink)
-         ds (desired-all ws cfg)
+         ds (cond->> (desired-all ws cfg) infra-only (remove :jar-path))
          c (connect-client ws cfg)
          socket-path (delay (or (podman/socket-path c)
                                 (throw (ex-info "cannot tell the Podman socket path for this endpoint; give :podman-socket \"/path/to/podman.sock\" in runtime.edn"
@@ -536,9 +537,12 @@
         opts {:sink print-event}
         code (try
                (case cmd
-                 "up" (print-status (ensure! ws opts))
+                 "up" (print-status (ensure! ws (assoc opts :infra-only (boolean (some #{"--infra"} more)))))
                  "status" (print-status (status ws opts))
                  "down" (doseq [r (:removed (down! ws opts))] (println "removed" (:name r)))
+                 "sync-env" (do (load-config! ws nil)
+                                (sync-local-env! ws (read-config ws))
+                                (println "local environment follows runtime.edn"))
                  "adopt-taskdefs" (let [f (second (drop-while #(not= "--file" %) more))
                                         cfg (adopt-taskdefs! ws (clojure.edn/read-string (slurp f)))]
                                     (println "runtime.edn:" (config-path ws) "roles" (sort (map str (keys (:containers cfg))))))
