@@ -59,6 +59,7 @@
                                   :image "img:1")}})
 
 (deftest jar-role-desired-state
+  (tu/with-temp-home
   (let [root (tu/temp-home)
         jar (io/file root "svc" "a.jar")]
     (io/make-parents jar)
@@ -82,7 +83,7 @@
       (testing "a changed secret reference recreates, the status of a missing jar does not throw"
         (is (not= (:hash d) (:hash (first (runtime/desired-all "w" (assoc-in cfg [:containers :service/a :secrets "API_KEY"] "other"))))))
         (.delete jar)
-        (is (some? (:hash (first (runtime/desired-all "w" cfg)))))))))
+        (is (some? (:hash (first (runtime/desired-all "w" cfg))))))))))
 
 (deftest descriptions-become-roles-and-bend-local-env
   (tu/with-temp-home

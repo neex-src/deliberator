@@ -85,6 +85,8 @@ fun Test.configureDeliberatorTests() {
     doFirst { tmp.mkdirs() }
     // second net: a daemon home that is not the real one even if the guard were bypassed (the guard refuses it as well)
     environment("DELIBERATOR_HOME", layout.buildDirectory.dir("never-use-home").get().asFile.absolutePath)
+    // every `local` environment a test home invents points at a Floci the test names, never at the host's 4566
+    environment("DELIBERATOR_LOCAL_ENDPOINT", System.getenv("DLB_TEST_FLOCI_URL") ?: "http://localhost:19")
     systemProperty("java.io.tmpdir", tmp.absolutePath)
     // the platform's test JVM writes an (empty) java.util.prefs node for its licence check and a JetBrains/discovery directory under the
     // user's home (audit finding): fence both into build/

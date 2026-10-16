@@ -40,7 +40,10 @@
 (defn- ws-of [args] (or (arg args "--ws") "default"))
 
 (defn- home []
-  (or (System/getenv "DELIBERATOR_HOME") (str (System/getProperty "user.home") "/.local/share/deliberator")))
+  (or (System/getenv "DELIBERATOR_HOME")
+      (if (System/getenv "DELIBERATOR_NO_DEFAULT_HOME")
+        (throw (ex-info "DELIBERATOR_NO_DEFAULT_HOME is set: pass --home or DELIBERATOR_HOME" {:type "no-default-home"}))
+        (str (System/getProperty "user.home") "/.local/share/deliberator"))))
 
 (defn- java21 []
   (or (System/getenv "ESTATE_JAVA_HOME")

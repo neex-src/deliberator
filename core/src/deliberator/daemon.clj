@@ -246,6 +246,10 @@
                   (catch clojure.lang.ExceptionInfo e
                     (binding [*out* *err*] (println (ex-message e)) (println usage))
                     (System/exit 2)))]
+    (when (and (not (:version? opts)) (not (:help? opts)) (not (:home opts))
+               (System/getenv "DELIBERATOR_NO_DEFAULT_HOME") (not (System/getenv "DELIBERATOR_HOME")))
+      (binding [*out* *err*] (println store/no-default-home-message))
+      (System/exit 2))
     (cond
       (:version? opts) (println (str "deliberatord " (version)))
       (:help? opts) (println usage)

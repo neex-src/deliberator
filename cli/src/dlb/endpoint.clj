@@ -28,7 +28,10 @@
   [home-flag]
   (str (fs/absolutize (or home-flag
                           (System/getenv "DELIBERATOR_HOME")
-                          (str (System/getProperty "user.home") "/.local/share/deliberator")))))
+                          (if (System/getenv "DELIBERATOR_NO_DEFAULT_HOME")
+                            (throw (ex-info "DELIBERATOR_NO_DEFAULT_HOME is set: pass --home or DELIBERATOR_HOME"
+                                            {:type "no-default-home" :cli true}))
+                            (str (System/getProperty "user.home") "/.local/share/deliberator"))))))
 
 (defn endpoint-file [home] (fs/file home "daemon" "endpoint"))
 
@@ -66,7 +69,9 @@
     (throw (ex-info "no daemon jar: set DELIBERATOR_JAR or run `bb core:build`"
                     {:type "daemon/no-jar"})))
   (fs/create-dirs (fs/path home "daemon"))
+  (binding [*out* *err*] (println (str "home: " home " (starting a daemon)")))
   (let [out (fs/file home "daemon" "daemon.out")
+        _ (spit out (str "home: " home "\n") :append true)
         extra (some-> (System/getenv "DLB_DAEMON_ARGS") str/trim not-empty (str/split #"\s+"))
         detach? (some? (fs/which "setsid"))
         cmd (vec (concat (when detach? ["setsid" "-f"])

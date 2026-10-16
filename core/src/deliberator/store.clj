@@ -51,12 +51,19 @@
 
 (defn now [] (*clock*))
 
+(def no-default-home-message
+  "The one line printed when `DELIBERATOR_NO_DEFAULT_HOME` forbids the default home."
+  "DELIBERATOR_NO_DEFAULT_HOME is set: pass --home or DELIBERATOR_HOME")
+
 (defn home
-  "The `$DELIBERATOR_HOME` directory as a Path."
+  "The `$DELIBERATOR_HOME` directory as a Path. With `$DELIBERATOR_NO_DEFAULT_HOME` set the default
+  `~/.local/share/deliberator` is never used: throws `:store/no-default-home` instead."
   ^Path []
   (let [h (or *home*
               (System/getenv "DELIBERATOR_HOME")
-              (str (System/getProperty "user.home") "/.local/share/deliberator"))]
+              (if (System/getenv "DELIBERATOR_NO_DEFAULT_HOME")
+                (throw (ex-info no-default-home-message {:type :store/no-default-home}))
+                (str (System/getProperty "user.home") "/.local/share/deliberator")))]
     (.toAbsolutePath (.normalize (.toPath (io/file (str h)))))))
 
 (def max-name-length "Longest workspace name, session key or run id." 100)

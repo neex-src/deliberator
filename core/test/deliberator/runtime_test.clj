@@ -36,6 +36,7 @@
 ;; --- pure ------------------------------------------------------------------------------------
 
 (deftest desired-state
+  (tu/with-temp-home
   (let [cfg (runtime/default-config)
         [floci postgres] (runtime/desired-all "w" cfg)]
     (is (= ["floci" "postgres"] (map :role [floci postgres])))
@@ -50,7 +51,7 @@
         (is (= "http://localhost:14566" (get-in moved [:env "FLOCI_BASE_URL"])))
         (is (not= (:hash floci) (:hash moved)))
         (is (= (:hash floci) (:hash (first (runtime/desired-all "w" cfg)))))))
-    (is (= "service-a" (runtime/role-name :service/a)))))
+    (is (= "service-a" (runtime/role-name :service/a))))))
 
 (deftest podman-down-is-reported
   (tu/with-temp-home
@@ -203,7 +204,8 @@
            (podman/remove-network! c net)))))))
 
 (deftest container-names-carry-the-workspace
+  (tu/with-temp-home
   (is (= "deliberator-w1-service-a" (store/container-name "w1" "service-a")))
   (is (= "deliberator-default-floci" (:name (first (runtime/desired-all "default" (runtime/default-config))))))
   (is (= "deliberator-x-floci" (:name (first (runtime/desired-all "x" (runtime/default-config))))))
-  (is (= "custom" (:name (first (runtime/desired-all "x" (assoc-in (runtime/default-config) [:containers :floci :name] "custom")))))))
+  (is (= "custom" (:name (first (runtime/desired-all "x" (assoc-in (runtime/default-config) [:containers :floci :name] "custom"))))))))
