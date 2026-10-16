@@ -46,7 +46,7 @@ class ServiceOps(private val project: Project) {
     fun build(name: String, onEvent: (DaemonEvent) -> Unit = {}): JsonObject =
         refreshed { svc.call("service.build", args(name), onEvent).resultObject() }
 
-    /** `service.adopt` of the module directory [path] (its `deliberator-service.edn`). */
+    /** `service.adopt` of the module directory [path] (the description it carries). */
     fun adopt(path: String): JsonObject = refreshed { svc.call("service.adopt", JsonObject().apply { addProperty("path", path) }).resultObject() }
 
     /** `topology.set` in the selected environment. [mode] is local, external (with [url]) or off. */

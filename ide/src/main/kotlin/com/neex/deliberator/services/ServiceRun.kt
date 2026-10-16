@@ -323,7 +323,7 @@ class ServiceRunState(private val env: ExecutionEnvironment, private val config:
     /** `localhost:<host JDWP port from service.start>`; a service started without a JDWP port is an error naming the description key. */
     override fun getRemoteConnection(): RemoteConnection {
         val s = prestarted ?: throw ExecutionException("the service ${config.serviceName} is not started yet")
-        val port = s.jdwp ?: throw ExecutionException("service ${config.serviceName} has no JDWP port: add :jdwp to its description (services/${config.serviceName}.edn) and restart it")
+        val port = s.jdwp ?: throw ExecutionException("service ${config.serviceName} has no JDWP port: add :jdwp to the description of ${config.serviceName} and restart it")
         return RemoteConnection(true, "localhost", port, false)
     }
 }

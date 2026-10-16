@@ -200,7 +200,7 @@ class ServiceAdoptAction : AnAction(), DumbAware {
     override fun update(e: AnActionEvent) { e.presentation.isEnabled = e.project?.let { WorkspaceService.getInstance(it).ws != null } == true }
     override fun actionPerformed(e: AnActionEvent) {
         val p = e.project ?: return
-        val dir = FileChooser.chooseFile(FileChooserDescriptorFactory.createSingleFolderDescriptor().withTitle("Service module (with deliberator-service.edn)"), p, null) ?: return
+        val dir = FileChooser.chooseFile(FileChooserDescriptorFactory.createSingleFolderDescriptor().withTitle("Service module directory (the one with its service description)"), p, null) ?: return
         Ui.background(p, "Deliberator: adopt ${dir.name}", {
             val r = ServiceOps.getInstance(p).adopt(dir.path)
             ServiceActions.info(p, "Adopt", "${r.get("name")?.asString} ${if (r.get("created")?.asBoolean == true) "adopted" else "updated"}: ${r.get("path")?.asString ?: ""}")
