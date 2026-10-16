@@ -14,9 +14,7 @@
 
 (def sugar {"run" "scenario.run"})
 
-(defn find-op
-  "Takes the words (no flags before the verb). -> {:op entry :rest words} or {:unknown str}."
-  [table words]
+(defn- find-op-at [table words]
   (let [by-name (into {} (map (juxt :op identity)) table)
         [a b & more] words]
     (cond
@@ -25,6 +23,18 @@
       (and b (not (str/starts-with? b "--")) (by-name (str a "." b))) {:op (by-name (str a "." b)) :rest more}
       (by-name a) {:op (by-name a) :rest (rest words)}
       :else {:unknown (if (and b (not (str/starts-with? b "--"))) (str a " " b) a) :area a})))
+
+(defn find-op
+  "Takes the words. Flags may precede the op (`--ws W service list`): the op is the first position, after
+  leading `--flag [value]` words, where the words name an op; those flags are then moved behind it.
+  -> {:op entry :rest words} or {:unknown str}."
+  [table words]
+  (or (when (some-> (first words) (str/starts-with? "--"))
+        (some (fn [i]
+                (let [r (find-op-at table (drop i words))]
+                  (when (:op r) (update r :rest #(concat % (take i words))))))
+              (range 1 (count words))))
+      (find-op-at table words)))
 
 (defn coerce
   "Converts the string `s` to the schema type `t`."

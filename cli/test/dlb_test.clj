@@ -358,3 +358,12 @@
 (deftest ops-without-ws-accept-one
   (is (= 0 (:exit (dlb *home* "scenario" "kinds" "--ws" "whatever"))))
   (is (str/includes? (:out (dlb *home* "help" "scenario" "cancel")) "--ws")))
+
+(deftest global-flags-before-the-op-equal-flags-after
+  (let [after (dlb *home* "scenario" "kinds" "--ws" "whatever")
+        before (dlb *home* "--ws" "whatever" "scenario" "kinds")
+        mixed (dlb *home* "--ws" "whatever" "--home" *home* "scenario" "kinds")]
+    (is (= 0 (:exit after)))
+    (is (= (select-keys after [:exit :out]) (select-keys before [:exit :out])))
+    (is (= (select-keys after [:exit :out]) (select-keys mixed [:exit :out]))))
+  (is (= 2 (:exit (dlb *home* "--ws" "w" "nonsense" "op")))))
