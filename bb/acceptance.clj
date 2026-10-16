@@ -26,6 +26,8 @@
 
 (defn- home []
   (or (System/getenv "DELIBERATOR_HOME")
+      (when (System/getenv "DELIBERATOR_NO_DEFAULT_HOME")
+        (throw (ex-info "DELIBERATOR_NO_DEFAULT_HOME is set: pass --home or DELIBERATOR_HOME" {:type "no-default-home"})))
       (str (or (System/getenv "XDG_DATA_HOME") (str (System/getProperty "user.home") "/.local/share")) "/deliberator")))
 
 (defn- healthy? [port]

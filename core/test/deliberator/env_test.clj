@@ -24,7 +24,8 @@
     (is (= [] (env/names "w")))
     (let [e (env/load "w" "local")]
       (is (= :local (:kind e)))
-      (is (= "http://localhost:4566" (get-in e [:aws :endpoint])))
+      (is (= (or (System/getenv "DELIBERATOR_LOCAL_ENDPOINT") (System/getProperty "deliberator.local.endpoint") "http://localhost:4566")
+             (get-in e [:aws :endpoint])))
       (is (= "000000000000" (get-in e [:aws :account])))
       (is (= "eu-central-1" (get-in e [:aws :region])))
       (is (= ["local"] (env/names "w")))

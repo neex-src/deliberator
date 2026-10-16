@@ -46,7 +46,9 @@
   [ws]
   {:name "local" :kind :local
    :description "Local runtime and the estate."
-   :aws {:endpoint "http://localhost:4566" :region "eu-central-1" :account "000000000000"
+   :aws {:endpoint (or (System/getenv "DELIBERATOR_LOCAL_ENDPOINT") (System/getProperty "deliberator.local.endpoint")
+                       "http://localhost:4566")
+         :region "eu-central-1" :account "000000000000"
          :credentials {:access-key-id "test" :secret-access-key "test"}}
    :targets {:service/a "http://localhost:8081"
              :service/b "http://localhost:8082"

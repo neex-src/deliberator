@@ -10,6 +10,11 @@
            (java.time Instant)
            (java.util UUID)))
 
+(defonce ^:private local-endpoint-set
+  ;; the `local` environment of every test home points at DLB_TEST_FLOCI_URL, else a closed port; never at 4566
+  (when-not (or (System/getenv "DELIBERATOR_LOCAL_ENDPOINT") (System/getProperty "deliberator.local.endpoint"))
+    (System/setProperty "deliberator.local.endpoint" (or (System/getenv "DLB_TEST_FLOCI_URL") "http://localhost:19"))))
+
 (defn temp-home
   "Creates and returns a fresh temp home directory (a File)."
   []

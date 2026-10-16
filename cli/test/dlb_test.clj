@@ -24,7 +24,8 @@
   "Runs `dlb` with `args` in `home`; -> {:exit :out :err}."
   [home & args]
   (let [r (apply p/shell {:out :string :err :string :continue true
-                          :extra-env {"DELIBERATOR_HOME" home "DLB_DAEMON_ARGS" "--idle-minutes 0.2"}}
+                          
+                          :extra-env {"DELIBERATOR_LOCAL_ENDPOINT" (or (System/getenv "DLB_TEST_FLOCI_URL") "http://localhost:19") "DELIBERATOR_HOME" home "DLB_DAEMON_ARGS" "--idle-minutes 0.2"}}
                  dlb-bin args)]
     (select-keys r [:exit :out :err])))
 
@@ -184,7 +185,8 @@
 
 (defn- dlb-jar [home jar & args]
   (let [r (apply p/shell {:out :string :err :string :continue true
-                          :extra-env {"DELIBERATOR_HOME" home "DELIBERATOR_JAR" jar "DLB_DAEMON_ARGS" "--idle-minutes 0.2"
+                          
+                          :extra-env {"DELIBERATOR_LOCAL_ENDPOINT" (or (System/getenv "DLB_TEST_FLOCI_URL") "http://localhost:19") "DELIBERATOR_HOME" home "DELIBERATOR_JAR" jar "DLB_DAEMON_ARGS" "--idle-minutes 0.2"
                                      ;; a re-zipped jar loses the AOT classes (newer sources win): a cold start takes ~13 s
                                      "DLB_START_TIMEOUT_MS" "60000"}}
                  dlb-bin args)]
@@ -367,3 +369,53 @@
     (is (= (select-keys after [:exit :out]) (select-keys before [:exit :out])))
     (is (= (select-keys after [:exit :out]) (select-keys mixed [:exit :out]))))
   (is (= 2 (:exit (dlb *home* "--ws" "w" "nonsense" "op")))))
+
+;; the default-home guard (m2/13) -------------------------------------------------------------------
+
+(def ^:private guard-line "DELIBERATOR_NO_DEFAULT_HOME is set: pass --home or DELIBERATOR_HOME")
+
+(defn- guarded
+  "Runs argv with DELIBERATOR_NO_DEFAULT_HOME set and no home anywhere. -> {:exit :out :err}"
+  [& argv]
+  (select-keys (apply p/shell {:out :string :err :string :continue true
+                               :extra-env {"DELIBERATOR_NO_DEFAULT_HOME" "1"}
+                               :remove-env ["DELIBERATOR_HOME"]}
+                      argv)
+               [:exit :out :err]))
+
+(deftest no-default-home-guard-trips-before-anything-is-created
+  (let [r (guarded dlb-bin "runtime" "status")]
+    (is (= 2 (:exit r)))
+    (is (str/includes? (:err r) guard-line) (:err r))
+    (is (not (str/includes? (:err r) "starting a daemon")) "no daemon was started"))
+  (let [r (guarded "bb" "estate:status")]
+    (is (pos? (:exit r)))
+    (is (str/includes? (str (:out r) (:err r)) guard-line) (str (:out r) (:err r))))
+  (let [jar (str root "/core/target/deliberatord.jar")]
+    (when (fs/exists? jar)
+      (let [r (guarded "java" "-jar" jar)]
+        (is (= 2 (:exit r)))
+        (is (str/includes? (:err r) guard-line) (:err r))))))
+
+(deftest no-default-home-guard-lets-an-explicit-home-through
+  (let [r (p/shell {:out :string :err :string :continue true
+                    :extra-env {"DELIBERATOR_NO_DEFAULT_HOME" "1" "DLB_DAEMON_ARGS" "--idle-minutes 0.2"}}
+                   dlb-bin "--home" *home* "daemon" "status")]
+    (is (not (str/includes? (:err r) guard-line)))))
+
+(deftest a-started-daemon-echoes-its-home
+  (let [h (new-home)]
+    (try
+      (let [r (dlb h "hello")]
+        (is (= 0 (:exit r)) (:err r))
+        (is (str/includes? (:err r) (str "home: " h)) (:err r))
+        (is (str/starts-with? (slurp (str h "/daemon/daemon.out")) "home: ")))
+      (finally (stop-daemon! h) (fs/delete-tree h)))))
+
+(deftest test-homes-never-point-local-at-4566
+  (let [_ (dlb *home* "workspace" "open" "anything")
+        r (dlb *home* "env" "describe" "local" "--ws" "anything")]
+    (is (= 0 (:exit r)) (:err r))
+    (let [f (slurp (str *home* "/workspaces/anything/environments/local.edn"))]
+      (is (str/includes? f "http://localhost:19") f)
+      (is (not (str/includes? f ":4566"))))))

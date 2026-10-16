@@ -18,6 +18,8 @@
 
 (defn -main [& args]
   (let [home (str (fs/absolutize (or (arg args "--home") (System/getenv "DELIBERATOR_HOME")
+                                     (when (System/getenv "DELIBERATOR_NO_DEFAULT_HOME")
+                                       (throw (ex-info "DELIBERATOR_NO_DEFAULT_HOME is set: pass --home or DELIBERATOR_HOME" {:type "no-default-home"})))
                                      (str (System/getProperty "user.home") "/.local/share/deliberator"))))
         ws (arg args "--ws")
         proj (project-dir home ws)]
