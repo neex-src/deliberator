@@ -247,12 +247,7 @@ class ScnRunner(private val project: Project) : Disposable {
                 while (st.dirty && st.running) {
                     st.dirty = false
                     val dir = st.runDir ?: break
-                    var snap = readProgress(dir)
-                    // core emits step.finished a moment BEFORE it rewrites result.txt (core finding): one short re-read, no more
-                    if (st.running && (snap == null || snap.sections.size < st.finishedEvents)) {
-                        Thread.sleep(150)
-                        snap = readProgress(dir) ?: snap
-                    }
+                    val snap = readProgress(dir)
                     if (st.running && snap != null) {
                         st.progress = snap
                         publish(path)

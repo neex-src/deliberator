@@ -62,7 +62,7 @@ object ResultText {
         var t = lines.indexOfLast { RUN.matches(it) }
         if (t < 0) return Triple(emptyMap(), emptyList(), "result.txt has no RUN line")
         val trailerEnd = t
-        while (t > 0 && (lines[t - 1].startsWith("FAILED ") || lines[t - 1].startsWith("ERROR: "))) t--
+        while (t > 0 && (lines[t - 1].startsWith("TOPOLOGY ") || lines[t - 1].startsWith("FAILED ") || lines[t - 1].startsWith("ERROR: "))) t--
         val trailer = lines.subList(t, trailerEnd + 1)
         val heads = (0 until t).filter { StepSection.HEAD.matches(lines[it]) }
         if (heads.size != stepNs.size) {
