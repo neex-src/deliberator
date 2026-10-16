@@ -44,6 +44,9 @@
           c (podman/client (get-in cfg [:podman :endpoint]) :ws ws)
           b-name (get-in cfg [:containers :service/b :name] "deliberator-service-b")]
       (session/start! ws "AUDIT-5")
+      ;; service B starts its Postgres pool on first use, and those log lines (and a slow first ack) belong to
+      ;; whichever run comes first: a throwaway run makes the comparison depend on nothing but the scenario
+      (run-order! ws e)
       (let [r1 (run-order! ws e)
             r2 (run-order! ws e)]
         (testing "a green order, all checks"
