@@ -34,7 +34,7 @@
           _ (estate/up ["--ws" ws])
           b (try (clj {"ESTATE_WS" ws "DELIBERATOR_LOCAL_ENDPOINT" (or (System/getenv "DLB_TEST_FLOCI_URL") "http://localhost:14566")}
                       "-n" "deliberator.aws-test" "-n" "deliberator.daemon-test"
-                      "-n" "deliberator.estate-test" "-n" "deliberator.topology-estate-test" "-n" "deliberator.audit-estate-test"
+                      "-n" "deliberator.estate-test" "-n" "deliberator.topology-estate-test" "-n" "deliberator.reload-estate-test" "-n" "deliberator.audit-estate-test"
                       "-n" "deliberator.audit-runtime-test"
                       "-n" "deliberator.steps-test" "-n" "deliberator.aws-kinds-test"
                       "-n" "deliberator.ide-ops-test")

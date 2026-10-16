@@ -7,7 +7,9 @@
   | `:node-lambda`), `:repo` (name of an attached repository, nil = none) and `:module` (relative to that
   repository, absolute when `:repo` is nil), `:build {:cmd [argv] :dir <relative to the module> :artifact
   <relative to the module, the last segment may contain *> :java <major version>}`, `:image`, `:port`,
-  `:jdwp`, `:health` (path), `:java-opts`, `:depends {\"ENV_VAR\" \"service\"}` (the entry holds that service's URL: topology
+  `:jdwp`, `:health` (path), `:java-opts`, `:main` (main class, hotswap image), `:image-kind` (`:hotswap`, default
+  for the estate image, or `:plain`: any other `:image` is plain), `:reload {:cmd :dir :modules :deps-args}` (see
+  `reload-config`), `:depends {\"ENV_VAR\" \"service\"}` (the entry holds that service's URL: topology
   rewrites it, piece 03), `:taskdef {:module <terraform module> :container :key
   :environment {name value} :secrets {name valueFrom}}` (the rendered entries as last adopted; references
   only, never secret values), `:adopted {:at :from :file|:terraform}`.
@@ -23,10 +25,20 @@
   (:import (java.io File)
            (java.nio.file Files LinkOption Path)))
 
-(def default-image "docker.io/library/eclipse-temurin:21-jre")
+(def hotswap-image
+  "The service image of the estate (JBR + HotswapAgent, `estate/images/jbr21/`, built by `bb estate:build`)."
+  "localhost/deliberator/jbr21-hotswap:21.0.11")
+(def plain-image "docker.io/library/eclipse-temurin:21-jre")
+(def default-image hotswap-image)
 (def kinds #{:spring-boot :node-lambda})
 
 (defn- fail [type msg & {:as data}] (throw (ex-info msg (assoc data :type type))))
+
+(defn image-kind
+  "`:hotswap` (JBR + HotswapAgent, exploded classpath, in-process reload) or `:plain` (a JRE running the fat jar, JDWP
+  reload). `:image-kind` says it; else an absent `:image` or the hotswap image is hotswap and any other image is plain."
+  [{:keys [image image-kind]}]
+  (or image-kind (if (or (nil? image) (= image hotswap-image)) :hotswap :plain)))
 
 (defn dir [ws] (store/path ws "services"))
 (defn path [ws name] (store/path ws "services" (str (store/safe-name name) ".edn")))
@@ -43,6 +55,9 @@
               (not (kinds (:kind desc))) (conj "kind (spring-boot or node-lambda)")
               (and (= :spring-boot (:kind desc)) (not (integer? (:port desc)))) (conj "port")
               (and (:jdwp desc) (not (integer? (:jdwp desc)))) (conj "jdwp")
+              (and (= :spring-boot (:kind desc)) (= :hotswap (image-kind desc)) (not (string? (:main desc))))
+              (conj "main (the main class, for the hotswap image; or :image of a plain JRE)")
+              (and (contains? desc :reload) (not (map? (:reload desc)))) (conj ":reload ({:cmd [argv] :dir :modules [\"sibling\"]})")
               (and (contains? desc :depends)
                    (not (and (map? (:depends desc)) (every? string? (keys (:depends desc))) (every? string? (vals (:depends desc))))))
               (conj ":depends ({\"ENV_VAR\" \"service\"})"))]
@@ -113,16 +128,50 @@
 
 (defn runnable? [desc] (= :spring-boot (:kind desc)))
 
+(defn reload-config
+  "What `service.reload` and the hotswap role need, from `:reload` with defaults derived from `:build`:
+  `{:cmd :dir :modules :deps-args :main}`. `:cmd` defaults to the build command with its `package|verify|install` phase
+  replaced by `compile` and `-o` (offline) added; `:dir` to the build dir; `:modules` (sibling modules of that dir whose
+  `target/classes` stand in for their jar) to []; `:deps-args` (appended to the build command by `service.build`)
+  to `dependency:copy-dependencies -DincludeScope=runtime`."
+  [{:keys [build reload main]}]
+  (let [cmd (mapv str (:cmd build))
+        mvn? (= "mvn" (first cmd))]
+    {:cmd (or (:cmd reload)
+              (when mvn?
+                (let [c (mapv #(if (#{"package" "verify" "install"} %) "compile" %) cmd)]
+                  (into [(first c) "-o"] (rest c)))))
+     :dir (or (:dir reload) (:dir build) ".")
+     :modules (vec (:modules reload))
+     :deps-args (or (:deps-args reload) ["dependency:copy-dependencies" "-DincludeScope=runtime"])
+     :main main}))
+
+(defn exploded
+  "The `:exploded` runtime spec of a hotswap service: `{:dirs [{:seed :staging :mount}] :dependency :main}`. The first dir
+  is the service's own `target/classes` at `/app/classes`, then one per `:reload :modules` entry at `/app/classes-<module>`
+  (listed first on the classpath, so they shadow the module's jar in `target/dependency`)."
+  [ws desc]
+  (let [mod (module-dir ws desc)
+        rc (reload-config desc)
+        base (.getCanonicalFile (io/file mod (:dir rc)))
+        stage (fn [m] (.toFile (store/path ws "services" (store/safe-name (:name desc)) (if m (str "classes-" m) "classes"))))]
+    {:dirs (into [{:seed (str (io/file mod "target/classes")) :staging (str (stage nil)) :mount "/app/classes"}]
+                 (for [m (:modules rc)]
+                   {:seed (str (io/file base m "target/classes")) :staging (str (stage m)) :mount (str "/app/classes-" m)}))
+     :dependency (str (io/file mod "target/dependency"))
+     :main (:main rc)}))
+
 (defn ->spec
   "The runtime `:jar` role of `desc`: image, the jar, `port` and `jdwp` published on the same host ports,
   the adopted environment and secret references, a health probe on the port."
   [ws {:keys [image port jdwp health java-opts taskdef] :as desc}]
   (cond-> {:image (or image default-image)
-           :jar (artifact-path ws desc)
            :ports (into (sorted-map) (map (fn [p] [p p]) (remove nil? [port jdwp])))
            :env (into (sorted-map) (:environment taskdef))
            :secrets (into (sorted-map) (:secrets taskdef))
            :health {:http (or health "/actuator/health") :port port}}
+    (= :hotswap (image-kind desc)) (assoc :exploded (exploded ws desc))
+    (not= :hotswap (image-kind desc)) (assoc :jar (artifact-path ws desc))
     jdwp (assoc :debug jdwp)
     (seq java-opts) (assoc :java-opts (vec java-opts))))
 
@@ -144,7 +193,8 @@
 
 (defn from-taskdef
   "A description derived from a rendered task definition when the module carries no
-  `deliberator-service.edn`: kind from the module (pom.xml, package.json), default build, `name` or the
+  `deliberator-service.edn`: kind from the module (pom.xml, package.json), default build (a Spring Boot service runs
+  its fat jar on the plain JRE: the main class cannot be derived), `name` or the
   container name without its `service-` prefix."
   [^File module {:keys [container ports]} {:keys [name jdwp]}]
   (let [kind (cond (.isFile (io/file module "pom.xml")) :spring-boot
@@ -154,5 +204,6 @@
                                :hint "add a deliberator-service.edn to the module"))
         n (or name (some-> container (str/replace #"^service-" "")) (.getName module))]
     (cond-> {:name n :kind kind :build (get default-builds kind)}
+      (= :spring-boot kind) (assoc :image plain-image)   ; no main class to derive: the fat jar on a plain JRE
       (first ports) (assoc :port (first ports))
       jdwp (assoc :jdwp jdwp))))

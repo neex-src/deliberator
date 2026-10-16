@@ -1,0 +1,9 @@
+;; The one record of the hotswap service image: its name (core's default image carries the same string) and the
+;; archives `bb estate:build` downloads into .scratch/images/jbr21/ctx and verifies. Java 25: same Containerfile with the 25 archive.
+{:image "localhost/deliberator/jbr21-hotswap:21.0.11"
+ :jbr {:file "jbrsdk-21.0.11-linux-x64-b1163.116.tar.gz"
+       :url "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-21.0.11-linux-x64-b1163.116.tar.gz"
+       :sha512 "13d0aab4bcfa9e4f77a696b97d3998f7e82e22f7f1362d8ce97f0d50d69dddd9331a66ada3fe92c04e544795fc247bcbaf586ad0415df4eda5e0e0505753888f"}
+ :hsa {:file "hotswap-agent-2.0.3.jar"
+       :url "https://github.com/HotswapProjects/HotswapAgent/releases/download/RELEASE-2.0.3/hotswap-agent-2.0.3.jar"
+       :sha512 "9a5f362bcf9f94c9342b534f5a1d0165844bd367f3732155a88dd7a5f0ab0140a9adeae31f4502192e9e00dde9998207a631f31b518c6f9db46b4a29778c4fe0"}}

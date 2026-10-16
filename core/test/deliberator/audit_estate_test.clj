@@ -84,7 +84,7 @@
               (podman/start! c b-name)
               (loop [n 0] (when (and (not (service-b-healthy?)) (< n 100)) (Thread/sleep 300) (recur (inc n)))))))
         (testing "with B back the scenario is green again"
-          (Thread/sleep 5000)
+          (Thread/sleep 10000)   ; the hotswap image starts ~4 s slower than the plain JRE did
           (let [r4 (run-order! ws e)]
             (is (= :ok (:status r4)) (head (:text r4)))))))
     (t/do-report {:type :skip :message "the-order-scenario-twice-then-with-service-b-down: set ESTATE_WS=<ws> (after bb estate:up --ws <ws>)"})))
@@ -123,7 +123,7 @@
           c (podman/client (get-in cfg [:podman :endpoint]) :ws ws)
           b-name (get-in cfg [:containers :service/b :name] (store/container-name ws "service-b"))
           f (io/file (str (store/home)) "logs-resume.scn")
-          _ (do (io/make-parents f) (spit f "### logs log/service-b\n# @for 14s\n# @filter /Started/\n"))]
+          _ (do (io/make-parents f) (spit f "### logs log/service-b\n# @for 26s\n# @filter /Started/\n"))]
       (session/start! ws "AUDIT-6")
       (try
         (let [t0 (System/currentTimeMillis)

@@ -21,8 +21,8 @@
 
 (defn- seed! [ws]
   (call "workspace.open" {:ws ws})
-  (description/write! ws {:name "a" :kind :spring-boot :port 8081 :jdwp 5005 :module "/m/a" :build {:artifact "a.jar"}})
-  (description/write! ws {:name "b" :kind :spring-boot :port 8082 :jdwp 5006 :module "/m/b" :build {:artifact "b.jar"}
+  (description/write! ws {:name "a" :kind :spring-boot :main "m.Main" :port 8081 :jdwp 5005 :module "/m/a" :build {:artifact "a.jar"}})
+  (description/write! ws {:name "b" :kind :spring-boot :main "m.Main" :port 8082 :jdwp 5006 :module "/m/b" :build {:artifact "b.jar"}
                           :depends {"SERVICE_A_URL" "a"}
                           :taskdef {:environment {"REGION" "eu"} :secrets {"SERVICE_A_URL" "/p/a-url" "API_KEY" "/p/key"}}}))
 

@@ -51,6 +51,7 @@
             [deliberator.env :as env]
             [deliberator.podman :as podman]
             [deliberator.service.description :as description]
+            [deliberator.service.staging :as staging]
             [deliberator.store :as store]
             [deliberator.topology :as topology])
   (:import (java.net InetSocketAddress Socket URI)
@@ -125,6 +126,37 @@
                java-opts
                ["-jar" "/app/app.jar"])))
 
+(def ^:private agent-opens
+  "The `--add-opens` set HotswapAgent needs (measured in piece 01; without `java.base/java.lang` the agent dies)."
+  ["java.base/java.lang" "java.base/java.lang.reflect" "java.base/java.io" "java.base/java.util"
+   "java.base/jdk.internal.loader" "java.base/sun.nio.ch" "java.desktop/java.beans" "java.desktop/com.sun.beans"
+   "java.desktop/com.sun.beans.introspect" "java.desktop/javax.swing.plaf.basic" "java.desktop/sun.awt"])
+
+(defn- exploded-command
+  "The hotswap image's command: JBR with enhanced redefinition, the agent, JDWP for the IDE only, the exploded
+  classpath (conf dir with hotswap-agent.properties, the staged class dirs, the dependency jars)."
+  [{:keys [debug java-opts exploded]}]
+  (vec (concat ["java" "-XX:+AllowEnhancedClassRedefinition" "-javaagent:/opt/hotswap/hotswap-agent.jar=autoHotswap=true"]
+               (map #(str "--add-opens=" % "=ALL-UNNAMED") agent-opens)
+               (when debug [(str "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:" debug)])
+               java-opts
+               ["-cp" (str "/opt/hotswap/conf:" (str/join ":" (map :mount (:dirs exploded))) ":/app/dependency/*")
+                (:main exploded)])))
+
+(defn- dep-stamp
+  "name+size of every file of the dependency dir (nil when absent): a changed classpath recreates the container."
+  [dir]
+  (let [f (java.io.File. ^String dir)]
+    (when (.isDirectory f)
+      (vec (sort (for [^java.io.File x (.listFiles f) :when (.isFile x)] [(.getName x) (.length x)]))))))
+
+(defn stage!
+  "Brings the staging dirs of an `:exploded` desired container up to date with the modules' `target/classes` (sha diff).
+  Called before a container is created or started, never while it runs (`service.reload` owns that)."
+  [d]
+  (doseq [{:keys [seed staging]} (:dirs (:exploded d))]
+    (staging/sync! (java.io.File. ^String seed) (java.io.File. ^String staging))))
+
 (defn- service-health [{:keys [ports debug health]}]
   {:http (or (:http health) "/actuator/health")
    :port (or (:port health) (first (remove #{debug} (keys (into (sorted-map) ports)))))})
@@ -146,7 +178,12 @@
         ports (into (sorted-map) (:ports spec))
         ctx {:ports ports :network network :name name :role rn}
         jar (when (:jar spec) (jar-file cfg role spec))
+        exploded (:exploded spec)
         mounts (vec (concat (:mounts spec)
+                            (when exploded
+                              (concat (for [{:keys [staging mount]} (:dirs exploded)]
+                                        {:source staging :destination mount :options ["rw" "z"]})
+                                      [{:source (:dependency exploded) :destination "/app/dependency" :options ["ro" "z"]}]))
                             (when jar [{:source (str jar) :destination "/app/app.jar" :options ["ro" "z"]}])
                             (when-let [init (:init spec)]
                               [{:source (if (str/starts-with? (str init) "/") (str init) (str (store/path ws init)))
@@ -154,13 +191,15 @@
         d {:role rn :name name :image (:image spec) :ports ports
            :host-ip (or (:host-ip spec) "127.0.0.1")
            :env (into (sorted-map) (for [[k v] (:env spec)] [(str (clojure.core/name k)) (template v ctx)]))
-           :command (or (:command spec) (when jar (service-command spec))) :mounts mounts :network network
-           :health (if jar (service-health spec) (:health spec))
+           :command (or (:command spec) (cond jar (service-command spec) exploded (exploded-command spec))) :mounts mounts :network network
+           :health (if (or jar exploded) (service-health spec) (:health spec))
            :podman-socket (:podman-socket spec)}
         d (cond-> d
             jar (assoc :jar-stamp [(.length jar) (.lastModified jar)] :jar-path (str jar))
+            exploded (assoc :exploded exploded :dep-stamp (dep-stamp (:dependency exploded)))
+            (or jar exploded) (assoc :service? true)
             (seq (:secrets spec)) (assoc :secrets (into (sorted-map) (for [[k v] (:secrets spec)] [(clojure.core/name k) v]))))]
-    (assoc d :hash (subs (store/sha256 (.getBytes ^String (pr-str (sorted-deep (dissoc d :health))) StandardCharsets/UTF_8)) 0 16))))
+    (assoc d :hash (subs (store/sha256 (.getBytes ^String (pr-str (sorted-deep (dissoc d :health :service?))) StandardCharsets/UTF_8)) 0 16))))
 
 (defn- merge-spec
   "`base` (derived from a description) with the runtime half `over` (`runtime.edn :services <name>`):
@@ -364,6 +403,7 @@
         {:action :kept :id (:Id keep)}
         (do (emit sink {:event "runtime.starting" :role (:role d) :name (:name d) :action :restart})
             (check-ports! c d)
+            (stage! d)
             (start-container! c d (:Id keep))
             {:action :restarted :id (:Id keep)}))
       :else
@@ -377,12 +417,16 @@
                                "); set :name for this role in runtime.edn")
                           {:type :runtime/name-conflict :name (:name d) :role (:role d)})))
         (check-ports! c d)
+        (stage! d)
         (emit sink {:event "runtime.starting" :role (:role d) :name (:name d) :action :create})
         (let [{:keys [id]} (podman/create! c (container-spec ws d socket-path))]
           (start-container! c d id)
           {:action (if keep :recreated :created) :id id})))))
 
 (defn- ensure-image! [c d sink]
+  (when (and (not (podman/image-exists? c (:image d))) (str/starts-with? (str (:image d)) "localhost/"))
+    (throw (ex-info (str (:role d) ": image " (:image d) " is built locally and does not exist (bb estate:build)")
+                    {:type :runtime/image-missing :role (:role d) :image (:image d) :hint "bb estate:build builds it; or give the service description a :image of a registry"})))
   (when-not (podman/image-exists? c (:image d))
     (emit sink {:event "runtime.pulling" :role (:role d) :image (:image d)})
     (podman/pull! c (:image d)
@@ -420,7 +464,7 @@
   ([ws] (ensure! ws {}))
   ([ws {:keys [sink timeout-ms infra-only only] :or {timeout-ms default-timeout-ms}}]
    (let [cfg (load-config! ws sink)
-         ds (cond->> (desired-all ws cfg) infra-only (remove :jar-path) only (filter (comp (set only) :role)))
+         ds (cond->> (desired-all ws cfg) infra-only (remove :service?) only (filter (comp (set only) :role)))
          c (connect-client ws cfg)
          socket-path (delay (or (podman/socket-path c)
                                 (throw (ex-info "cannot tell the Podman socket path for this endpoint; give :podman-socket \"/path/to/podman.sock\" in runtime.edn"
@@ -428,6 +472,12 @@
      (doseq [d ds :when (and (:jar-path d) (not (.isFile (java.io.File. ^String (:jar-path d)))))]
        (throw (ex-info (str "runtime.edn: " (:role d) " jar " (:jar-path d) " does not exist (bb estate:build)")
                        {:type :runtime/missing-jar :role (:role d) :jar (:jar-path d) :hint "bb estate:build"})))
+     (doseq [d ds :when (:exploded d)
+             :let [missing (first (remove #(.isDirectory (java.io.File. ^String %))
+                                          (cons (get-in d [:exploded :dependency]) (map :seed (get-in d [:exploded :dirs]))))) ]
+             :when missing]
+       (throw (ex-info (str (:role d) ": " missing " does not exist (service.build builds it)")
+                       {:type :runtime/missing-jar :role (:role d) :path missing :hint "dlb service build <name> (or bb estate:build)"})))
      (podman/ensure-network! c (:network cfg))
      ;; a service the topology serves elsewhere (or not at all) is not desired: stop it, keep the container
      (when-not infra-only
@@ -438,7 +488,7 @@
          (emit sink {:event "runtime.stopped" :role role :name (first (:Names ctr)) :reason "topology"})))
      (doseq [d ds] (ensure-image! c d sink))
      ;; infrastructure first, then the services that need it (their secrets live in Floci)
-     (doseq [group ((juxt remove filter) #(some? (seq (filter (fn [m] (= "/app/app.jar" (:destination m))) (:mounts %)))) ds)
+     (doseq [group ((juxt remove filter) :service? ds)
              :when (seq group)]
        (let [started (doall (for [d group]
                               (assoc (reconcile! c ws d (when (:podman-socket d)
@@ -547,7 +597,7 @@
             (and (hp :postgres 5432) (string? (get-in e [:targets :db/main])))
             (update-in [:targets :db/main] #(db-url % (hp :postgres 5432) (get-in cfg [:containers :postgres :env]))))
         e (reduce (fn [e [role spec]]
-                    (if (and (= "service" (namespace role)) (:jar spec))
+                    (if (and (= "service" (namespace role)) (or (:jar spec) (:exploded spec)))
                       (let [n (name role)
                             port (:port (service-health spec))
                             host (get (:ports spec) port)]
