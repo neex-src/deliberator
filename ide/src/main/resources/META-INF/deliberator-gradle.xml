@@ -1,0 +1,6 @@
+<idea-plugin>
+    <!-- Loaded only when the Gradle plugin is present: attach of a Gradle repository. -->
+    <extensions defaultExtensionNs="com.neex.deliberator">
+        <repositoryKind implementation="com.neex.deliberator.repo.GradleKind"/>
+    </extensions>
+</idea-plugin>

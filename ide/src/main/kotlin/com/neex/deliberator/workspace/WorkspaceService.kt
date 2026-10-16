@@ -42,6 +42,8 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
     class State {
         var ws: String = ""
         var env: String = ""
+        /** `kind<TAB>path` of every Gradle/Maven linkage this plugin made (the platform persists the linkage itself, not who made it). */
+        var repos: MutableList<String> = ArrayList()
     }
 
     private var state = State()
@@ -77,7 +79,7 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
         ws?.let { return it }
         if (conventionTried) return null
         conventionTried = true
-        val found = project.basePath?.let { conventionWs(it, client()) }
+        val found = project.basePath?.let { conventionWs(it) { client() } }
         if (found != null) state.ws = found
         return found
     }
@@ -171,12 +173,15 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
          * The workspace [basePath] is the project directory of, or null: the directory is named `project`
          * and `workspace.show` of its parent's name answers that parent as its path.
          */
-        fun conventionWs(basePath: String, client: DaemonClient): String? {
+        fun conventionWs(basePath: String, client: DaemonClient): String? = conventionWs(basePath) { client }
+
+        /** As above, the client is only asked for once the directory is named `project` (an ordinary project never starts the daemon). */
+        fun conventionWs(basePath: String, client: () -> DaemonClient): String? {
             val p = Path.of(basePath).toAbsolutePath().normalize()
             if (p.fileName?.toString() != "project") return null
             val parent = p.parent ?: return null
             val name = parent.fileName?.toString() ?: return null
-            val t = try { client.call("workspace.show", JsonObject().apply { addProperty("ws", name) }) } catch (_: DaemonException) { return null }
+            val t = try { client().call("workspace.show", JsonObject().apply { addProperty("ws", name) }) } catch (_: DaemonException) { return null }
             if (!t.ok) return null
             val shown = t.resultObject().get("path")?.asString ?: return null
             return if (sameDir(Path.of(shown), parent)) name else null

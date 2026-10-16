@@ -22,7 +22,9 @@ import java.nio.file.Path
 class DaemonService {
     @Volatile private var last: DaemonConnection? = null
 
-    fun home(): Path = DaemonHome.resolve(DeliberatorSettings.getInstance().state.home, System.getenv(), System.getProperty("user.home"))
+    fun home(): Path = DaemonHome.guardUnderTest(
+        DaemonHome.resolve(DeliberatorSettings.getInstance().state.home, System.getenv(), System.getProperty("user.home")),
+        System.getProperty("deliberator.test.homes"))
 
     fun jar(): Path? = DaemonHome.resolveJar(
         System.getProperty("deliberator.jar"), System.getenv(),
