@@ -42,6 +42,7 @@ class AttachDetachTest : HeavyPlatformTestCase() {
         ThreadLeakTracker.longRunningThreadCreated(ApplicationManager.getApplication(), "MasterPoller", "/127.0.0.1")
         daemon = TempDaemon.create()
         DeliberatorSettings.getInstance().state.home = daemon.home.toString()
+        daemon.openWorkspace("w1")
         WorkspaceService.getInstance(project).bind("w1")
         attacher = RepositoryAttacher.getInstance(project)
         work = Files.createTempDirectory(Path.of(System.getProperty("java.io.tmpdir")), "attach").toRealPath()

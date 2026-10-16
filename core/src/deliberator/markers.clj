@@ -32,8 +32,14 @@
   [ws & {:keys [file]}]
   (view (cond->> (:markers (load* ws)) file (filter #(= file (:file %))))))
 
+(defn- bad-arg [msg hint] (throw (ex-info msg {:type :marker/bad-arg :hint hint})))
+
 (defn add!
   [ws file line & {:keys [logger]}]
+  (when-not (and (integer? line) (<= 1 line Integer/MAX_VALUE))
+    (bad-arg (str "marker line must be >= 1, got " (pr-str line)) "lines are 1-based"))
+  (when (or (str/blank? (str file)) (not (str/starts-with? (str file) "/")))
+    (bad-arg (str "marker file must be an absolute path, got " (pr-str file)) "the IDE sends the absolute path of the source file"))
   (locking lock
     (let [{:keys [next markers] :as m} (load* ws)
           old (first (filter #(and (= file (:file %)) (= line (:line %))) markers))
@@ -54,14 +60,30 @@
 
 ;; matching ------------------------------------------------------------------------------------
 
-(def ^:private logback-re #"(?:^|\s)((?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*):(\d+)\s+-\s")
-(def ^:private frame-re #"\bat\s+((?:[\w$]+\.)*[\w$]+)\.(?:[\w$<>]+)\([^():]*:(\d+)\)")
+(def ^:private logback-re
+  ;; no group repetition: a repeated group recurses in java.util.regex (a 4 KB dotted token overflowed the stack)
+  #"(?:^|\s)([A-Za-z_$][\w$.]*):(\d+)\s+-\s")
+(def ^:private frame-re #"\bat\s+([\w$.]+)\.([\w$<>]+)\([^():]*:(\d+)\)")
+
+(defn- dotted-ok?
+  "Every dot-separated segment of `s` is an identifier (no empty segment, none starting with a digit)."
+  [^String s]
+  (and (not (str/ends-with? s ".")) (not (str/includes? s ".."))
+       (every? #(re-matches #"[A-Za-z_$][\w$]*" %) (str/split s #"\." -1))))
+
+(defn- first-valid
+  "First match of `re` in `s` for which `(ok groups)` yields a position."
+  [^java.util.regex.Pattern re ^String s pick]
+  (let [m (re-matcher re s)]
+    (loop []
+      (when (.find m)
+        (or (pick (re-groups m)) (recur))))))
 
 (defn position
   "`[logger line]` of a log line, or nil."
   [^String s]
-  (or (when-let [[_ l n] (re-find logback-re s)] [l (Long/parseLong n)])
-      (when-let [[_ l n] (re-find frame-re s)] [l (Long/parseLong n)])))
+  (or (first-valid logback-re s (fn [[_ l n]] (when (dotted-ok? l) [l (Long/parseLong n)])))
+      (first-valid frame-re s (fn [[_ l _ n]] (when (dotted-ok? l) [l (Long/parseLong n)])))))
 
 (defn- segments [^String s] (str/split (first (str/split s #"\$")) #"\."))
 

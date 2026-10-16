@@ -30,6 +30,7 @@ class AuditProjectsTest : HeavyPlatformTestCase() {
         com.intellij.testFramework.common.ThreadLeakTracker.longRunningThreadCreated(ApplicationManager.getApplication(), "MasterPoller", "/127.0.0.1")
         daemon = TempDaemon.create()
         DeliberatorSettings.getInstance().state.home = daemon.home.toString()
+        daemon.openWorkspace("w1")
         work = Files.createTempDirectory(Path.of(System.getProperty("java.io.tmpdir")), "audit").toRealPath()
     }
 
@@ -157,6 +158,7 @@ class AuditProjectsTest : HeavyPlatformTestCase() {
 
     /** Layer 3, first point: a project OPENED at `<workspace dir>/project` is bound by the convention, with nothing persisted and no setting. */
     fun testAProjectOpenedAtTheWorkspaceProjectDirectoryResolvesItsWorkspaceByTheDaemonsWord() {
+        daemon.openWorkspace("w9")
         val shown = bg { daemon.client.call("workspace.show", JsonObject().apply { addProperty("ws", "w9") }) }.resultObject().get("path").asString
         val projectDir = Files.createDirectories(Path.of(shown).resolve("project"))
         val p = PlatformTestUtil.loadAndOpenProject(projectDir, testRootDisposable)

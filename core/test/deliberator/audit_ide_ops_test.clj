@@ -21,20 +21,22 @@
 
 ;; --- markers: arguments that make no sense -----------------------------------------------------
 
-(deftest ^:known-bug marker-add-refuses-a-line-below-one
+(deftest marker-add-refuses-a-line-below-one
   ;; F-mark: 0, negative and absurd lines are stored (and a relative or empty file name too); no log line can ever match them
   (tu/with-temp-home
     (doseq [line [0 -3]]
-      (is (some? (thrown-type #(call "marker.add" {:file "/x/A.java" :line line}))) (str "line " line " must be refused with a typed error")))
+      (is (= :marker/bad-arg (thrown-type #(call "marker.add" {:file "/x/A.java" :line line}))) (str "line " line " must be refused with a typed error")))
+    (call "workspace.open" {})
     (is (= [] (call "marker.list" {})) "nothing was stored")))
 
-(deftest ^:known-bug marker-add-refuses-a-relative-file
+(deftest marker-add-refuses-a-relative-file
   (tu/with-temp-home
-    (is (some? (thrown-type #(call "marker.add" {:file "rel/A.java" :line 3}))) "a marker file is the absolute path of the IDE's file")))
+    (is (= :marker/bad-arg (thrown-type #(call "marker.add" {:file "rel/A.java" :line 3}))) "a marker file is the absolute path of the IDE's file")
+    (is (= :marker/bad-arg (thrown-type #(call "marker.add" {:file "" :line 3}))))))
 
 ;; --- scenario.parse -----------------------------------------------------------------------------
 
-(deftest ^:known-bug parse-error-messages-quote-non-ascii-text-intact
+(deftest parse-error-messages-quote-non-ascii-text-intact
   ;; F-moji: the offending line is quoted from the latin-1 view of the bytes; the IDE shows it as an annotation
   (let [r (call "scenario.parse" {:text "é ü\n### wait\n"})
         msg (get-in r [:errors 0 :message])]
@@ -71,7 +73,7 @@
     (is (= 2000 (count r)) "every 100th of the 200 000 normal lines is line 42")
     (is (< taken 20000) (str taken " ms"))))
 
-(deftest ^:known-bug match-lines-survives-a-line-with-thousands-of-dotted-segments
+(deftest match-lines-survives-a-line-with-thousands-of-dotted-segments
   ;; F-so: one such line (>= ~2000 `a.a.a.` segments, a 4 KB token) makes `logger:line` regex recursion overflow the stack; the whole
   ;; `logs.match` answers `internal: StackOverflowError` and the IDE highlights nothing for that log
   (let [bad (str "x " (apply str (repeat 5000 "a.")) "b 42 - x")
@@ -91,23 +93,30 @@
           _ (file-env! "default" src)]
       (testing "a bad regex filter is a typed error, not a stack trace"
         (is (some? (thrown-type #(call "logs.fetch" {:target "log/app" :filter "/(unclosed/"})))))
-      (testing "CRLF is normalised to LF in the fetched file AND in the raw blob it is linked from (rough edge F-crlf: the source bytes are not kept)"
-        (is (= "one A\n  cont\ntwo B\n" (slurp (:path (call "logs.fetch" {:target "log/app"})))))
+      (testing "the fetched file is the source byte for byte (CRLF kept); the filtered view is split into lines"
+        (is (= "one A\r\n  cont\r\ntwo B\r\n" (slurp (:path (call "logs.fetch" {:target "log/app"})))))
         (is (= "one A\n  cont\n" (slurp (:path (call "logs.fetch" {:target "log/app" :filter "A"}))))))
-      (testing "a negative window is refused (typed, although as scenario/expr, not logs/bad-arg)"
-        (is (some? (thrown-type #(call "logs.fetch" {:target "log/app" :for "-5s"})))))
+      (testing "a negative or malformed window is logs/bad-arg"
+        (is (= :logs/bad-arg (thrown-type #(call "logs.fetch" {:target "log/app" :for "-5s"}))))
+        (is (= :logs/bad-arg (thrown-type #(call "logs.fetch" {:target "log/app" :for "soon"})))))
       (testing "an empty file gives an empty log, not an error"
         (let [empty (write! (store/home) "empty.log" "")
               r (call "logs.fetch" {:target empty})]
           (is (= 0 (:lines r)))
           (is (= "" (slurp (:path r)))))))))
 
-(deftest ^:known-bug fetch-of-a-path-that-is-not-a-file-is-an-error
+(deftest fetch-of-a-path-that-is-not-a-file-is-an-error
   ;; F-nofile: a typo in the Fetch Logs dialog's target (or a directory) answers a successful, empty log
   (tu/with-temp-home
     (session/start! "default" "S1")
-    (is (some? (thrown-type #(call "logs.fetch" {:target (str (store/home) "/no/such/file.log")}))) "missing file")
-    (is (some? (thrown-type #(call "logs.fetch" {:target (str (store/home))}))) "directory")))
+    (is (= :logs/not-a-file (thrown-type #(call "logs.fetch" {:target (str (store/home) "/no/such/file.log")}))) "missing file")
+    (is (= :logs/not-a-file (thrown-type #(call "logs.fetch" {:target (str (store/home))}))) "directory")
+    (testing "unless a for window listens for the file to appear"
+      (let [f (str (store/home) "/later.log")
+            fut (future (Thread/sleep 150) (spit f "late\n"))
+            r (call "logs.fetch" {:target f :for "700ms"})]
+        @fut
+        (is (= 1 (:lines r)))))))
 
 ;; --- repo.attach: the same directory spelt three ways ----------------------------------------------
 
@@ -137,3 +146,65 @@
       (is (= [] (ids "(")))
       (is (= [] (ids ".*")))
       (is (= ["20261016-100100-b"] (ids "/w/my (x) [y].scn"))))))
+
+;; --- piece 10: the new ops and the contracts around them -----------------------------------------
+
+(deftest workspace-open-creates-explicitly-and-reads-never-do
+  (tu/with-temp-home
+    (is (= "workspace/not-found" (str (:type (ops/error-map (try (call "workspace.show" {:ws "typo"}) (catch Exception e e)))))))
+    (is (= "workspace/not-found" (str (:type (ops/error-map (try (call "env.list" {:ws "typo"}) (catch Exception e e)))))))
+    (is (not (.exists (io/file (str (store/home)) "workspaces" "typo"))) "a typo writes nothing")
+    (let [r (call "workspace.open" {:ws "typo"})]
+      (is (true? (:created r)))
+      (is (= (str (store/path "typo")) (:dir r)))
+      (is (= (str (store/path "typo" "project")) (:project r)))
+      (is (.isDirectory (io/file (:project r))))
+      (is (= ["local"] (map :name (:environments (call "env.list" {:ws "typo"}))))))
+    (is (false? (:created (call "workspace.open" {:ws "typo"}))) "idempotent")
+    (let [own (str (store/home) "/mine")
+          r (call "workspace.open" {:ws "typo" :path own})]
+      (is (= own (:project r)))
+      (is (.isDirectory (io/file own)))
+      (is (= own (:project (:workspace (call "workspace.show" {:ws "typo"}))))))
+    (is (= :bad-args (thrown-type #(call "workspace.open" {:ws "typo" :path "rel"}))))))
+
+(def ^:private ctx {:emit! (fn [_]) :on-cancel! (fn [_]) :daemon {:runs (atom {}) :checked (atom #{})}})
+
+(deftest ops-without-ws-ignore-one
+  (tu/with-temp-home
+    (is (vector? (call "scenario.kinds" {:ws "whatever"})))
+    (is (false? (:cancelled (ops/call! "scenario.cancel" ctx {:run-id "nope" :ws "whatever"}))))
+    (let [d (into {} (map (juxt :op identity)) (ops/describe))]
+      (is (= "ws" (last (:order (d "scenario.cancel")))))
+      (is (true? (get-in d ["scenario.cancel" :args "ws" :ignored]))))))
+
+(deftest session-note-persists-raw-first-then-links
+  (tu/with-temp-home
+    (call "workspace.open" {})
+    (session/start! "default" "S1")
+    (let [r (call "session.note" {:name "Ops: dialog/transcript" :text "héllo\n"})
+          f (io/file (:path r))]
+      (is (re-find #"/sessions/S1/notes/Ops-dialog-transcript-\d{8}-\d{6}\.txt$" (:path r)))
+      (is (= "héllo\n" (slurp f :encoding "UTF-8")))
+      (is (= (store/sha256 (.getBytes "héllo\n" "UTF-8"))
+             (-> (java.nio.file.Files/readAllBytes (.toPath f)) store/sha256)))
+      (let [r2 (call "session.note" {:name "Ops: dialog/transcript" :text "other\n"})]
+        (is (not= (:path r) (:path r2)) "two notes in one second do not overwrite")
+        (is (= "héllo\n" (slurp f :encoding "UTF-8")))))
+    (is (= :session/not-found (thrown-type #(call "session.note" {:name "x" :text "y" :session "nope"}))))))
+
+(deftest result-txt-is-progressive-while-a-run-is-going
+  (tu/with-temp-home
+    (call "workspace.open" {})
+    (session/start! "default" "S1")
+    (let [scn (write! (store/home) "p.scn" "### wait a\n# @for 1ms\n\n### wait b\n# @for 1500ms\n\n### wait c\n# @for 1ms\n")
+          run (future (ops/call! "scenario.run" ctx {:path scn :env "local"}))
+          rt (fn [] (some-> (first (.listFiles (io/file (str (store/path "default" "sessions" "S1" "runs"))))) (io/file "result.txt") (#(when (.exists %) (slurp %)))))
+          seen (loop [n 0] (let [t (rt)] (cond (and t (re-find #"### wait a" t) (re-find #"RUN running" t)) t (> n 100) t :else (do (Thread/sleep 50) (recur (inc n))))))]
+      (is (re-find #"### wait a . ok" (str seen)) (str seen))
+      (is (re-find #"RUN running steps 1 failed 0\n$" (str seen)))
+      (is (not (re-find #"wait b" (str seen))))
+      (let [res @run
+            final (slurp (:result (:paths res)))]
+        (is (= "ok" (name (:status res))))
+        (is (re-find #"RUN ok steps 3 failed 0\n$" final))))))

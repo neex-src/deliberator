@@ -51,6 +51,8 @@
                          "sync-env" ["runtime.sync-env" {:ws ws} (fn [_] (println "local environment follows runtime.edn"))]
                          "adopt-taskdefs" ["runtime.adopt" {:ws ws :file (str (fs/absolutize (flag more "--file")))}
                                            (fn [r] (println "runtime.edn:" (:path r) "roles" (sort (:roles r))))])
+        ;; commands that bring a runtime into being create the workspace on purpose (reading ops never do)
+        _ (when (#{"up" "sync-env" "adopt-taskdefs"} cmd) (request "workspace.open" {:ws ws}))
         t (request op args)]
     (if (:ok t)
       (do (show (:result t)) 0)

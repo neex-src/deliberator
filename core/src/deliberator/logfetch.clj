@@ -10,7 +10,7 @@
                    plus whatever arrives meanwhile, through the kind's own entry loop (`drain!`).
 
   `since` is an ISO-8601 instant or a duration ago (`10m`); `for` and `since` durations are `500ms 2s 3m 1h`.
-  Persist first: every line read is `raw-put!` as one blob (nothing is filtered at the source, not even
+  Persist first: the source is `raw-put!` as one blob (a file byte for byte, other sources their lines joined by newlines; a file that is not a regular file is `logs/not-a-file` unless `for` listens) (nothing is filtered at the source, not even
   for CloudWatch); with `filter` (`text` or `/regex/`, an entry is kept whole, as in the kind) the kept
   entries are a second blob. The answer's blob is hard-linked to `sessions/<session>/logs/<target>-<ts>.log`.
   Returns `{:path :lines :bytes :sha :target :source}` (`:source` = container, file or cloudwatch)."
@@ -55,25 +55,44 @@
         kind (cond (:container source) "container" (:file source) "file" :else "cloudwatch")
         since-i (some-> since (parse-since now))
         since-i (or since-i (when (:cloudwatch source) (.minus ^Instant now (Duration/ofMinutes 15))))
-        for-ms (when for (expr/parse-duration for))
+        for-ms (when for
+                 (try (let [ms (expr/parse-duration for)]
+                        (if (neg? ms) (throw (ex-info "negative" {})) ms))
+                      (catch Exception _ (bad (str "bad for " (pr-str for))))))
+        listening? (boolean (and for-ms (pos? for-ms)))
+        file-path (some-> (:file source) logs/->path)
+        _ (when (and file-path (not listening?)
+                     (not (java.nio.file.Files/isRegularFile file-path (make-array java.nio.file.LinkOption 0))))
+            (throw (ex-info (str "not a file: " (:file source))
+                            {:type :logs/not-a-file :target target
+                             :hint "give the path of an existing log file (a directory or a missing path is refused unless for listens for it)"})))
         pred (some-> filter logs/parse-filter)
         ctx {:ws ws :env e :session session}
-        lines (if (and for-ms (pos? for-ms))
-                (let [q (LinkedBlockingQueue.)
-                      stop (logs/start-source ctx source 0 since-i nil q)]
-                  (try (:raw (logs/drain! q (+ (System/currentTimeMillis) for-ms) (constantly false) [] (fn [_])
-                                          (str "check the log target " target " in environment " (:name e))))
-                       (finally (stop))))
-                (logs/snapshot ctx source since-i nil))
+        file-bytes (when file-path
+                     ;; a file is persisted as it is (CRLF included); `lines` is only a view of it
+                     (when listening? (Thread/sleep (long for-ms)))
+                     (if (java.nio.file.Files/isRegularFile file-path (make-array java.nio.file.LinkOption 0))
+                       (java.nio.file.Files/readAllBytes file-path)
+                       (byte-array 0)))
+        lines (cond
+                file-bytes (let [parts (str/split (String. ^bytes file-bytes "UTF-8") #"\n" -1)
+                                 parts (if (= "" (last parts)) (butlast parts) parts)]
+                             (mapv #(str/replace % #"\r$" "") parts))
+                listening? (let [q (LinkedBlockingQueue.)
+                                 stop (logs/start-source ctx source 0 since-i nil q)]
+                             (try (:raw (logs/drain! q (+ (System/currentTimeMillis) for-ms) (constantly false) [] (fn [_])
+                                                     (str "check the log target " target " in environment " (:name e))))
+                                  (finally (stop))))
+                :else (logs/snapshot ctx source since-i nil))
         text (fn [ls] (if (seq ls) (str (str/join "\n" ls) "\n") ""))
-        put! (fn [ls op-suffix]
-               (store/raw-put! ws (.getBytes ^String (text ls) "UTF-8")
+        put! (fn [bs op-suffix]
+               (store/raw-put! ws bs
                                {:source (case kind "container" :podman "file" :file :aws)
                                 :op (str "logs.fetch " target op-suffix) :env (keyword (:name e)) :at now
                                 :content-type "text/plain"}))
-        raw (put! lines "")
+        raw (put! (or file-bytes (.getBytes ^String (text lines) "UTF-8")) "")
         kept (if pred (vec (mapcat identity (clojure.core/filter #(pred (str/join "\n" %)) (logs/group-entries lines)))) lines)
-        answer (if pred (put! kept (str " (filter " filter ")")) raw)
+        answer (if pred (put! (.getBytes ^String (text kept) "UTF-8") (str " (filter " filter ")")) raw)
         path (link-answer! ws session target (:sha answer))]
     {:path (str path) :lines (count kept) :bytes (:bytes answer) :sha (:sha answer)
      :target target :source kind}))

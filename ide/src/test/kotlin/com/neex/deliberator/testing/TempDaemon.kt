@@ -28,6 +28,11 @@ class TempDaemon private constructor(val home: Path, val jar: Path) : AutoClosea
 
     val client: DaemonClient get() = connect().client
 
+    /** `workspace.open`: a workspace exists only once opened (reading ops answer `workspace/not-found` for an unknown one). */
+    fun openWorkspace(ws: String) {
+        client.call("workspace.open", com.google.gson.JsonObject().apply { addProperty("ws", ws) })
+    }
+
     /** The pid in `daemon/lock`, or null. */
     fun lockPid(): Long? =
         runCatching { Files.readString(home.resolve("daemon").resolve("lock")).trim().toLong() }.getOrNull()

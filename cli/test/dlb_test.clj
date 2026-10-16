@@ -93,7 +93,7 @@
 (deftest help-names-every-op
   (let [table (json/parse-string (:out (dlb *home* "help" "--json")) true)
         txt (:out (dlb *home* "help"))]
-    (is (= 35 (count table)))
+    (is (= 37 (count table)))
     (doseq [{:keys [op]} table]
       (is (str/includes? txt (str/replace op "." " ")) (str op " is in the help")))
     (is (= txt (:out (dlb *home*))) "no args = help")
@@ -335,3 +335,26 @@
     (is (str/includes? (:out (dlb *home* "help" "marker" "add")) "dlb marker add <file> <line> [--logger string]"))
     (is (str/includes? (:out (dlb *home* "help" "repo")) "dlb repo attach <path>"))
     (is (str/includes? (:out (dlb *home* "help" "scenario")) "dlb scenario kinds"))))
+
+;; --- piece 10: explicit workspaces, typed log errors, ws ignored by ws-less ops ------------------------
+
+(deftest workspace-open-is-the-only-way-in-for-reads
+  (let [r (dlb *home* "workspace" "show" "--ws" "typo10")]
+    (is (= 2 (:exit r)))
+    (is (str/includes? (:err r) "workspace/not-found") (:err r))
+    (is (not (fs/exists? (fs/path *home* "workspaces" "typo10"))) "the read created nothing"))
+  (let [r (dlb *home* "workspace" "open" "typo10")]
+    (is (= 0 (:exit r)) (:err r))
+    (is (fs/exists? (fs/path *home* "workspaces" "typo10" "project"))))
+  (is (= 0 (:exit (dlb *home* "workspace" "show" "--ws" "typo10")))))
+
+(deftest logs-fetch-of-a-missing-file-is-a-typed-error
+  (dlb *home* "workspace" "open" "logs10")
+  (dlb *home* "session" "start" "L1" "--ws" "logs10")
+  (let [r (dlb *home* "logs" "fetch" "/no/such.log" "--ws" "logs10")]
+    (is (= 2 (:exit r)))
+    (is (str/includes? (:err r) "logs/not-a-file") (:err r))))
+
+(deftest ops-without-ws-accept-one
+  (is (= 0 (:exit (dlb *home* "scenario" "kinds" "--ws" "whatever"))))
+  (is (str/includes? (:out (dlb *home* "help" "scenario" "cancel")) "--ws")))

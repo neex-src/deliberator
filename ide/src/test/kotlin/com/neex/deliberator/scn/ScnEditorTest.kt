@@ -43,6 +43,7 @@ class ScnEditorTest : BasePlatformTestCase() {
 
     /** Brings the daemon up and loads the registry and the targets of workspace `w1` (what opening an .scn editor does). */
     private fun online() {
+        daemon.openWorkspace("w1")
         WorkspaceService.getInstance(project).bind("w1")
         bg { ScnRegistry.getInstance().refresh(); ScnRegistry.getInstance().refreshTargets(project) }
     }
