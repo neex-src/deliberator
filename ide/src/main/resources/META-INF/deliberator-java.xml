@@ -1,0 +1,3 @@
+<idea-plugin>
+    <!-- Loaded only when the Java plugin is present; later pieces register the Java PSI features here. -->
+</idea-plugin>

@@ -1,0 +1,27 @@
+<idea-plugin>
+    <id>com.neex.deliberator</id>
+    <name>Deliberator</name>
+    <vendor email="dev@neex.dev">NEEX</vendor>
+    <description><![CDATA[
+        Deliberating a microservice and event-driven AWS estate from the IDE: the plugin talks to the
+        <code>deliberatord</code> daemon it ships, which runs on the IDE's own runtime.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends optional="true" config-file="deliberator-java.xml">com.intellij.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService serviceImplementation="com.neex.deliberator.daemon.DaemonService"/>
+        <applicationService serviceImplementation="com.neex.deliberator.daemon.DeliberatorSettings"/>
+        <applicationConfigurable parentId="tools" instanceId="deliberator" displayName="Deliberator"
+                                 id="deliberator.settings" instance="com.neex.deliberator.daemon.DeliberatorConfigurable"/>
+    </extensions>
+
+    <actions>
+        <group id="deliberator.menu" text="Deliberator" popup="true">
+            <add-to-group group-id="MainMenu" anchor="before" relative-to-action="HelpMenu"/>
+            <action id="deliberator.daemon.status" class="com.neex.deliberator.actions.DaemonStatusAction"
+                    text="Daemon Status" description="Find or start the Deliberator daemon and show its version and endpoint"/>
+        </group>
+    </actions>
+</idea-plugin>
