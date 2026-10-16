@@ -417,5 +417,5 @@
         r (dlb *home* "env" "describe" "local" "--ws" "anything")]
     (is (= 0 (:exit r)) (:err r))
     (let [f (slurp (str *home* "/workspaces/anything/environments/local.edn"))]
-      (is (str/includes? f "http://localhost:19") f)
+      (is (str/includes? f (or (System/getenv "DLB_TEST_FLOCI_URL") "http://localhost:19")) f)
       (is (not (str/includes? f ":4566"))))))
