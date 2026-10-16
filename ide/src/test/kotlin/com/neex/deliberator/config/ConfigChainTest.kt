@@ -55,6 +55,8 @@ class ConfigChainTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         try {
+            FileEditorManager.getInstance(project).openFiles.forEach { FileEditorManager.getInstance(project).closeFile(it) }
+            ConfigViews.getInstance(project).reset()
             ConfigChains.getInstance(project).reset()
             com.intellij.testFramework.PsiTestUtil.removeAllRoots(module, null)
             DeliberatorSettings.getInstance().state.home = ""
@@ -250,6 +252,7 @@ class ConfigChainTest : BasePlatformTestCase() {
     fun testInspectionNeverWaitsForTheDaemonAndTheCacheFillsInTheBackground() {
         writeSnapshot()
         bg { chains.loadIndex() }
+        chains.debounceMs = 1500   // the load lands after the highlighting pass, not in the middle of it
         open("q/src/main/resources/application.properties")
         myFixture.enableInspections(ConfigChainInspection::class.java)
         assertTrue("nothing cached yet: no problems, no wait", deliberator().isEmpty())
@@ -275,7 +278,8 @@ class ConfigChainTest : BasePlatformTestCase() {
         svc.selectEnv("staging")
         assertNull("another environment has its own cache", chains.cached("q"))
         assertNotNull(chains.cached("q", "local"))
-        try { bg { chains.load("q") }; fail("staging is not an environment of this workspace") } catch (e: Exception) { /* env/not-found, the cache stays empty */ }
+        val err = bg<Any> { try { chains.load("q") } catch (e: DaemonException) { e } }
+        assertTrue("staging is not an environment of this workspace: $err", err is DaemonException)
         assertNull(chains.cached("q"))
         svc.selectEnv("local")
         assertNotNull(chains.cached("q"))
@@ -299,16 +303,21 @@ class ConfigChainTest : BasePlatformTestCase() {
         for (s in listOf("Config chain of service q in local", "\${TABLE_NAME}", "taskdef.json.tftpl:14", "main.tf:8", "present", "Broken", "placeholder-without-entry", "parameter-missing", "Unresolved", "Extra", "UNUSED")) assertTrue("$s in\n$t", t.contains(s))
     }
 
+    /** Points the workspace's `local` environment at a closed port: a refresh must never reach a Floci that happens to run on this machine. */
+    private fun cutOffFromAws() {
+        val f = wsDir!!.resolve("environments/local.edn")
+        assertTrue("service.adopt wrote the local environment", Files.isRegularFile(f))
+        val t = Files.readString(f)
+        assertTrue(t, t.contains("http://localhost:4566"))
+        Files.writeString(f, t.replace("http://localhost:4566", "http://localhost:19"))
+    }
+
     fun testRefreshWithoutAnEndpointFailsCleanlyAndInvalidates() {
+        cutOffFromAws()
         loadAll()
         val before = chains.loads
-        try {
-            bg { ConfigRefresh.refreshNow(project) }
-            fail("this home has no Floci or AWS behind its local environment")
-        } catch (e: java.util.concurrent.ExecutionException) {
-            val d = e.cause as DaemonException
-            assertTrue(d.message, !d.message.isNullOrBlank())
-        }
+        val d = bg<Any> { try { ConfigRefresh.refreshNow(project) } catch (e: DaemonException) { e } }
+        assertTrue("this home's local environment points at a closed port: $d", d is DaemonException && !d.message.isNullOrBlank())
         wait("reloaded after the refresh") { chains.loads > before + 1 }
         assertNotNull("the old answer survives a failed refresh", chains.cached("q"))
     }

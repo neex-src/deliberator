@@ -153,6 +153,9 @@ class ConfigViews(private val project: Project) : Disposable {
 
     fun serviceOf(file: VirtualFile): String? = views.values.firstOrNull { it.file == file }?.service
 
+    /** Forgets every view (tests; the open editors are the caller's to close). */
+    fun reset() { views.clear() }
+
     fun isView(file: VirtualFile): Boolean = views.values.any { it.file == file }
 
     /** The text a view shows now (tests). */
