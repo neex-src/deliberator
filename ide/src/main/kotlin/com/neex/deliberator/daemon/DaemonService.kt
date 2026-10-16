@@ -31,7 +31,11 @@ class DaemonService {
         PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))?.pluginPath?.resolve("lib"),
     )
 
-    fun launcher(): DaemonLauncher = DaemonLauncher(System.getProperty("java.home"), jar())
+    /** `-Ddeliberator.daemon.args` (words) is appended to the daemon's command line; the test task sets `--idle-minutes 1`. */
+    fun launcher(): DaemonLauncher = DaemonLauncher(
+        System.getProperty("java.home"), jar(),
+        System.getProperty("deliberator.daemon.args")?.trim()?.split(Regex("\\s+"))?.filter { it.isNotEmpty() } ?: emptyList(),
+    )
 
     /** Finds or starts the daemon and returns the checked connection. Blocking: call off the EDT. */
     @Synchronized
@@ -39,6 +43,10 @@ class DaemonService {
         val app = ApplicationManager.getApplication()
         check(app == null || !app.isDispatchThread) { "DaemonService.ensure() blocks; call it from a background thread" }
         val home = home()
+        return ClosedHomes.whileOpen(home) { connect(home) }
+    }
+
+    private fun connect(home: Path): DaemonConnection {
         val l = launcher()
         val prev = last
         if (prev != null && prev.home == home) {

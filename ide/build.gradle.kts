@@ -1,3 +1,4 @@
+import java.util.concurrent.TimeUnit
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
 plugins {
@@ -76,6 +77,20 @@ tasks.test {
     systemProperty("idea.suppressed.plugins.id", "com.intellij.modules.ultimate")
     systemProperty("deliberator.jar", daemonJar.asFile.absolutePath)
     systemProperty("deliberator.test.homes", layout.buildDirectory.dir("th").get().asFile.absolutePath)
+    // backstop (decision 36): a daemon the service starts under test exits on its own after a minute idle
+    systemProperty("deliberator.daemon.args", "--idle-minutes 1")
+
+    // Sweep: before and after the run (also after a single --tests class), SIGTERM the exact pids of the deliberatord processes
+    // whose --home is below THIS checkout's build/th; a sibling worktree's test daemons live below its own build/th and are not touched.
+    val thPrefix = "--home " + layout.buildDirectory.dir("th").get().asFile.absolutePath + "/"
+    doFirst {
+        ProcessHandle.allProcesses().filter { val c = it.info().commandLine().orElse(""); c.contains("deliberatord") && c.contains(thPrefix) }
+            .forEach { it.destroy(); runCatching { it.onExit().get(10, TimeUnit.SECONDS) } }
+    }
+    doLast {
+        ProcessHandle.allProcesses().filter { val c = it.info().commandLine().orElse(""); c.contains("deliberatord") && c.contains(thPrefix) }
+            .forEach { logger.warn("test sweep: stopping orphan daemon pid ${it.pid()}"); it.destroy(); runCatching { it.onExit().get(10, TimeUnit.SECONDS) } }
+    }
 }
 
 // The .scn test data is the fixtures of the core and the estate scenario themselves, not a second copy (piece 05).
