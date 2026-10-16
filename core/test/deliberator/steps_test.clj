@@ -2,7 +2,7 @@
   "The plain kinds (http, sql, logs, wait) end to end through the engine. Pure parts first; the
   http and file-log tests need no runtime (a local `com.sun.net.httpserver`, a temp file); the sql,
   container-log, CloudWatch and Floci-health tests run against the REAL runtime (Floci + Postgres
-  with `log_statement=all` on host ports 14566 / 15432, brought up by the fixture in a throwaway
+  with `log_statement=all` on free host ports, brought up by the fixture in a throwaway
   workspace and removed afterwards) and skip loudly when Podman is not reachable."
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
@@ -29,8 +29,8 @@
 
 (def ^:dynamic *rt* nil)   ; {:ws .. :env ..} while the runtime is up
 
-(def floci-port 14566)
-(def pg-port 15432)
+(def floci-port (sup/free-port))
+(def pg-port (sup/free-port))
 
 (defn- runtime-config [id]
   (-> (runtime/default-config)

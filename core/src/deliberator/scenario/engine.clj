@@ -220,17 +220,18 @@
 
 (defn- elapsed [t0] (*elapsed* t0 (System/nanoTime)))
 
-(defn- call-with-timeout [st f timeout-ms]
+(defn- call-with-timeout [st f timeout-ms gone]
   (let [fut (try (spawn (:scope st) f)
                  (catch RejectedExecutionException _ (throw (InterruptedException. "run cancelled"))))]
     (try
       (try (.get fut timeout-ms TimeUnit/MILLISECONDS)
            (catch TimeoutException _
+             (reset! gone true)
              (.cancel fut true)
              (throw (ex-info (str "timed out after " timeout-ms " ms")
                              {:type :scenario/timeout :timeout-ms timeout-ms}))))
       (catch ExecutionException e (throw (or (.getCause e) e)))
-      (catch InterruptedException e (.cancel fut true) (throw e)))))
+      (catch InterruptedException e (reset! gone true) (.cancel fut true) (throw e)))))
 
 (defn- content-type [ext]
   (case ext "json" "application/json" ("txt" "log" "csv" "http" "sql") "text/plain" nil "text/plain"
@@ -350,7 +351,7 @@
                       {:message "run cancelled before the step started"}
                       {:type :scenario/unknown-var
                      :message (str "variable {{" (:name d) "}} is not available (an earlier step did not capture it)")})
-                    (err-map e)))))
+                    (if (= status :cancelled) {:message "cancelled"} (err-map e))))))
 
 (defn- run-prepared
   [st step {:keys [rstep ctx step-dir timeout-ms] :as prep} started t0]
@@ -359,11 +360,19 @@
         until-line (dir-line rstep "until")
         asserts (mapv (fn [v] [(expr/parse-assert v)]) (dir-values rstep "assert"))
         caps (mapv expr/parse-capture (dir-values rstep "capture"))
+        window-end (when until (+ (System/currentTimeMillis) (:within-ms until)))
         attempt!
         (fn [n]
           (let [ta (System/nanoTime)
-                ctx (assoc ctx :attempt n :deadline (.plusMillis (Instant/now) timeout-ms))
-                r (try (call-with-timeout st #((:run kmap) ctx rstep) timeout-ms)
+                gone (atom false)
+                deadline (.plusMillis (Instant/now) timeout-ms)
+                ctx (assoc ctx :attempt n :deadline deadline
+                           :attempt-deadline (if window-end
+                                               (let [w (Instant/ofEpochMilli window-end)]
+                                                 (if (.isBefore w deadline) w deadline))
+                                               deadline)
+                           :attempt-cancelled? (fn [] @gone))
+                r (try (call-with-timeout st #((:run kmap) ctx rstep) timeout-ms gone)
                        (catch Throwable e
                          (when-let [d (ex-data e)]
                            (when (or (:request-bytes d) (:response-bytes d))
@@ -382,7 +391,6 @@
           (when until
             (assoc (eval-assert kmap (:facts att) (:body-json att) (:assert until) :until)
                    :expr (:text (:assert until)))))
-        window-end (when until (+ (System/currentTimeMillis) (:within-ms until)))
         [att attempts uchk]
         (loop [n 1 attempts []]
           (when @(:cancelled st) (throw (InterruptedException. "run cancelled")))
@@ -599,6 +607,23 @@
         (do (interrupt-run! r "the process running it ended without finishing it")
             r))))))
 
+(defn- close-failed!
+  "Last resort of `start!`: whatever escaped the run, `run.edn` stops saying `:running` (unless a status
+  was already written) and `result.txt` exists."
+  [st ^Throwable e]
+  (let [dir ^Path (:run-dir st)
+        f (.resolve dir "run.edn")
+        run (try (store/read-edn f) (catch Throwable _ nil))]
+    (try (when (or (nil? run) (= :running (:status run)))
+           (store/write-edn! f (assoc (or run {:run-id (:run-id st)})
+                                      :status :error :finished (store/now) :error (err-map e))))
+         (catch Throwable _ nil))
+    (try (render/result! dir)
+         (catch Throwable _
+           (try (store/write-bytes-atomic! (.resolve dir "result.txt")
+                                           (.getBytes (str "RUN error: " (ex-message e) "\n") StandardCharsets/UTF_8))
+                (catch Throwable _ nil))))))
+
 (defn start!
   [ws env scenario-path & {:keys [session sink resolve-target] :as opts}]
   (let [plan' (plan ws env scenario-path opts)
@@ -634,9 +659,12 @@
                                  :failed (:failed sm) :paths (:paths res)})
                       (deliver done res))
                     (catch Throwable e
-                      (deliver done {:status :error :steps 0 :failed 0 :run-id run-id
-                                     :error (err-map e)
-                                     :paths {:run (str run-dir) :result (str result-path)}})))))
+                      (let [paths {:run (str run-dir) :result (str result-path)}]
+                        (close-failed! st e)
+                        (try (.shutdown scope) (catch Throwable _ nil))
+                        (emit! st {:event :run.finished :status :error :steps 0 :failed 0 :paths paths})
+                        (deliver done {:status :error :steps 0 :failed 0 :run-id run-id
+                                       :error (err-map e) :paths paths}))))))
           th (.newThread ^ThreadFactory factory ^Runnable work)
           run (->Run run-id run-dir
                      (fn [] (reset! cancelled true) (.shutdownNow scope))

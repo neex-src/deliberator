@@ -134,15 +134,14 @@
 
 ;; --- @until and cancel against a real long poll --------------------------------------------------------------
 
-(deftest-floci ^:known-bug until-that-cannot-hold-on-an-empty-queue-ends-near-its-window
+(deftest-floci until-that-cannot-hold-on-an-empty-queue-ends-near-its-window
   (with-queue [q e]
     (let [t0 (System/currentTimeMillis)
           res (run-text! e "### sqs receive queue/audit\n# @until count == 1 within 2s\n")
           ms (- (System/currentTimeMillis) t0)]
       (is (= :failed (:status res)))
       (is (re-find #"✗ until count == 1" (:text res)))
-      (is (< ms 8000) (str "a 2 s window took " ms " ms (decision 17: @wait defaults to what is left of the deadline, "
-                           "but the engine hides the @until window from kinds: 05b)")))))
+      (is (< ms 4500) (str "a 2 s window took " ms " ms")))))
 
 (deftest-floci a-cancelled-run-ends-a-long-poll-promptly
   (with-queue [q e]

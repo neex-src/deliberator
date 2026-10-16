@@ -30,7 +30,10 @@
   exists) `:sink` `:line!` (`(line! text)` streams a `line` event for this step) `:correlation` (run id)
   `:step-correlation` (`<run id>-NNN`) `:deadline` (Instant, the attempt's timeout) `:resolve-target`
   (`(f \"service/a\")` -> value, throws `:env/unknown-target`) `:armed` `:attempt` (1-based; >1 under
-  `@until`) `:cancelled?` (fn). Blocking calls should be interruptible: cancel and timeout interrupt
+  `@until`) `:cancelled?` (fn)
+  `:attempt-deadline` (Instant: `:deadline`, or the end of the step's `@until` window when that comes first;
+  waits of polling kinds are bounded by it, see `attempt-remaining-ms`) `:attempt-cancelled?` (fn, true once
+  the engine gave up on this attempt, by timeout or interrupt: a late reply must not act). Blocking calls should be interruptible: cancel and timeout interrupt
   the thread.
 
   `:run` RETURNS (all keys optional except what you produce):
@@ -116,7 +119,13 @@
 
 (defn fact-names [kind-map] (mapv :name (fact-specs kind-map)))
 
+(defn attempt-remaining-ms
+  "Milliseconds until `(:attempt-deadline ctx)`: the earlier of the attempt's timeout and the end of the
+  step's `@until` window. Polling kinds bound their waits by this, not by `:deadline`."
+  [ctx]
+  (max 0 (- (.toEpochMilli ^java.time.Instant (or (:attempt-deadline ctx) (:deadline ctx))) (System/currentTimeMillis))))
+
 (defn remaining-ms
-  "Milliseconds until `(:deadline ctx)`."
+  "Milliseconds until `(:deadline ctx)`, the attempt's timeout."
   [ctx]
   (max 0 (- (.toEpochMilli ^java.time.Instant (:deadline ctx)) (System/currentTimeMillis))))

@@ -17,8 +17,10 @@
   see the WHOLE entry (each filter must match somewhere in it) and a matching entry is emitted line
   for line, verbatim, to the stream (`:line!`) and to `response.log`. The default filter (no
   `@filter`) is the run's correlation id. An entry completes when the next header arrives or when
-  the source is idle for 200 ms. A container that stops ends the tail normally. Facts: `lines`
-  (emitted lines), `elapsed`."
+  the source is idle for 200 ms. A container that stops does not end the tail: the window is the only end. A line
+  `-- container X stopped at T: log stream ended --` (bypassing the filters) marks the gap, the tail
+  re-attaches when the container runs again (`-- ... running again at T --`). Facts: `lines` (matched
+  lines), `gaps` (stop events), `elapsed`."
   (:require [clojure.string :as str]
             [deliberator.aws :as aws]
             [deliberator.podman :as podman]
@@ -97,7 +99,16 @@
       (.setDaemon true) (.start))
     #(reset! stop true)))
 
-(defn- container-source [ctx name since ^LinkedBlockingQueue q]
+(defn- container-running? [client name]
+  (try (boolean (get-in (podman/inspect client name) [:State :Running]))
+       (catch Throwable _ false)))
+
+(defn- container-source
+  "Follows the container's logs. When the stream ends or breaks after the first attach (the container
+  stopped), pushes `{:gap text}` and waits for the container to run again (inspect every 500 ms), then
+  re-attaches with `since` = the last line seen (lines at or before it are skipped); pushes
+  `{:gap text}` again when it is back. Only an error of the FIRST attach is pushed as a Throwable."
+  [ctx name since ^LinkedBlockingQueue q]
   (let [cfg (runtime/read-config (:ws ctx))
         client (podman/client (get-in cfg [:podman :endpoint] (podman/default-endpoint)))
         closer (atom nil) stop (atom false)]
@@ -105,10 +116,28 @@
            ^Runnable
            (fn []
              (try
-               (let [s (podman/logs client name :since since :follow true)]
-                 (reset! closer (:close (meta s)))
-                 (doseq [e s :while (not @stop)] (.put q (:text e)))
-                 (.put q ::end))
+               (loop [since since last-at nil attached? false]
+                 (when-not @stop
+                   (let [last-at (volatile! last-at)
+                         err (try
+                               (let [s (podman/logs client name :since since :follow true)]
+                                 (reset! closer (:close (meta s)))
+                                 (doseq [e s :while (not @stop)
+                                         :when (or (nil? @last-at) (nil? (:at e)) (.isAfter ^Instant (:at e) ^Instant @last-at))]
+                                   (when (:at e) (vreset! last-at (:at e)))
+                                   (.put q (:text e)))
+                                 nil)
+                               (catch Throwable t (when-not @stop (if attached? t (throw t)))))]
+                     (when-not @stop
+                       (.put q {:stop? true :gap (str "-- container " name " stopped at " (Instant/now) ": log stream ended"
+                                          (when err (str " (" (ex-message err) ")")) " --")})
+                       (loop []
+                         (when-not (or @stop (container-running? client name))
+                           (Thread/sleep 500) (recur)))
+                       (when-not @stop
+                         (.put q {:gap (str "-- container " name " running again at " (Instant/now) ": log stream resumed --")})
+                         (recur (or @last-at since) @last-at true))))))
+               (catch InterruptedException _ nil)
                (catch Throwable t (when-not @stop (.put q t)))))
            "deliberator-logs-container")
       (.setDaemon true) (.start))
@@ -180,12 +209,12 @@
         filters (mapv parse-filter raw-filters)
         window (c/duration-dir step "for" 10000)
         t0 (System/currentTimeMillis)
-        end (min (+ t0 window) (.toEpochMilli ^Instant (:deadline ctx)))
+        end (min (+ t0 window) (.toEpochMilli ^Instant (or (:attempt-deadline ctx) (:deadline ctx))))
         q (LinkedBlockingQueue.)
         stop (cond (:file source) (file-source (:file source) offset q)
                    (:container source) (container-source ctx (:container source) at q)
                    :else (cw-source ctx (:cloudwatch source) at (cw-pattern raw-filters) q))
-        out (volatile! []) pending (volatile! [])
+        out (volatile! []) pending (volatile! []) gaps (volatile! 0) gap-lines (volatile! 0)
         emit! (fn [entry]
                 (when (entry-matches? filters entry)
                   (doseq [l entry] ((:line! ctx) l) (vswap! out conj l))))
@@ -202,6 +231,11 @@
                                 (merge {:type :logs/source :hint (str "check the log target " (:target step) " in environment " (c/env-name ctx))}
                                        (select-keys (ex-data x) [:hint]))
                                 x))
+                (map? x) (do (flush!)
+                             (when (:stop? x) (vswap! gaps inc))
+                             (vswap! gap-lines inc)
+                             ((:line! ctx) (:gap x)) (vswap! out conj (:gap x))
+                             (recur))
                 (= ::end x) (flush!)
                 :else (do (if (and (seq @pending) (continuation? x))
                             (vswap! pending conj x)
@@ -210,7 +244,9 @@
       (flush!)
       (finally (stop)))
     (let [lines @out]
-      (cond-> {:facts {"lines" (count lines)} :lines (count lines)
+      (cond-> {:facts {"lines" (- (count lines) @gap-lines)
+                       "gaps" @gaps}
+               :lines (- (count lines) @gap-lines)
                :source :file :op (str "logs " (:target step)) :content-type "text/plain"}
         (seq lines) (assoc :response-bytes (c/utf8 (str (str/join "\n" lines) "\n")) :response-ext "log")
         (empty? lines) (assoc :display (str "(no lines matched " (str/join " AND " raw-filters)
@@ -221,7 +257,7 @@
    :directives [{:name "filter" :hint "<text|/regex/>" :values ["{{correlation}}"] :repeatable? true
                  :doc "an entry must match every filter; default: the run's correlation id"}
                 {:name "for" :hint "<duration>" :values ["5s" "10s" "30s" "1m"] :doc "tail window (default 10s)"}]
-   :facts [{:name "lines" :type :number}]
+   :facts [{:name "lines" :type :number} {:name "gaps" :type :number}]
    :capture-roots #{} :concurrent? true
    :default-timeout-ms 3600000
    :arm arm :run run})

@@ -97,6 +97,7 @@
       (when out [(if (str/ends-with? out "\n") (subs out 0 (dec (count out))) out)])
       (when error
         (case status
+          :cancelled ["cancelled"]
           :skipped [(str "skipped: " (norm (:message error)))]
           (cons (str "ERROR: " (norm (str (:message error))))
                 (when (:hint error) [(str "hint: " (norm (str (:hint error))))]))))
