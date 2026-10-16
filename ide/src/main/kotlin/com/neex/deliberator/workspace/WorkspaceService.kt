@@ -96,6 +96,19 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
         return t
     }
 
+    /** As [call] but returns the request in flight (events to [onEvent], [DaemonClient.Call.cancel] closes it); `ws` added. Off the EDT. */
+    fun start(op: String, args: JsonObject = JsonObject(), cancelOnClose: Boolean = true, onEvent: (DaemonEvent) -> Unit = {}): DaemonClient.Call {
+        val w = ws ?: throw DaemonException("this project is not bound to a workspace", "workspace/unbound",
+            "Deliberator | Open workspace... or Use workspace for this project...")
+        val a = JsonObject()
+        args.entrySet().forEach { a.add(it.key, it.value) }
+        a.addProperty("ws", w)
+        return client().start(op, a, cancelOnClose, onEvent)
+    }
+
+    /** True when the user picked an environment (else the scenario's own `@env`, then `local`, decides). */
+    val envChosen: Boolean get() = state.env.isNotBlank()
+
     private fun obj(op: String, args: JsonObject = JsonObject()) = call(op, args).resultObject()
 
     // reading ------------------------------------------------------------------------------------

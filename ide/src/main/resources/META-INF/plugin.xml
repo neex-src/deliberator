@@ -41,6 +41,10 @@
         <lang.psiStructureViewFactory language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnStructureViewFactory"/>
         <completion.contributor language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnCompletionContributor"/>
         <editorFactoryListener implementation="com.neex.deliberator.scn.ScnEditorListener"/>
+
+        <!-- running from the editor (piece 06) -->
+        <projectService serviceImplementation="com.neex.deliberator.run.ScnRunner"/>
+        <editorFactoryListener implementation="com.neex.deliberator.run.RunEditorListener"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.neex.deliberator">
@@ -62,6 +66,26 @@
                     text="Detach Repository..." description="Remove an attached repository from this project (files untouched)"/>
             <action id="deliberator.ops.show" icon="AllIcons.Actions.Edit" class="com.neex.deliberator.actions.OperationsAction"
                     text="Operations..." description="Every daemon operation with a generated form"/>
+        </group>
+        <group id="deliberator.scenario" text="Deliberator Scenario" popup="true">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <add-to-group group-id="deliberator.menu" anchor="last"/>
+            <action id="deliberator.scenario.runStep" class="com.neex.deliberator.run.RunStepAction"
+                    text="Run Step at Caret" description="Run the step at the caret (scenario.run steps [n])">
+                <keyboard-shortcut keymap="$default" first-keystroke="control ENTER"/>
+            </action>
+            <action id="deliberator.scenario.runFrom" class="com.neex.deliberator.run.RunFromHereAction"
+                    text="Run From Step at Caret" description="Run the step at the caret and every step after it"/>
+            <action id="deliberator.scenario.runAll" class="com.neex.deliberator.run.RunAllAction"
+                    text="Run Scenario" description="Run every step of this scenario"/>
+            <action id="deliberator.scenario.cancel" class="com.neex.deliberator.run.CancelRunAction"
+                    text="Cancel Run" description="Cancel the run of this scenario (only while it runs)">
+                <keyboard-shortcut keymap="$default" first-keystroke="ESCAPE"/>
+            </action>
+            <action id="deliberator.scenario.toggleResults" class="com.neex.deliberator.run.ToggleResultsAction"
+                    text="Expand/Collapse Inline Results" description="Show or hide the full text of every inline step result"/>
+            <action id="deliberator.scenario.runs" class="com.neex.deliberator.run.RunHistoryAction"
+                    text="Runs of This Scenario..." description="History of this scenario: open result.txt, show inline, diff two runs"/>
         </group>
         <group id="deliberator.toolwindow.actions">
             <action id="deliberator.workspace.refresh" icon="AllIcons.Actions.Refresh" class="com.neex.deliberator.actions.RefreshAction" text="Refresh" description="Re-read the workspace from the daemon"/>
