@@ -112,7 +112,7 @@
 (defn- status-row [ws desc rows]
   (let [row (when (map? rows) (get rows (role-label (:name desc))))
         mode (topo-mode ws (:name desc))
-        st (status-of row)
+        st (if (and (not= :local mode) (= :running (:state row)) (nil? (:health row))) "running" (status-of row))
         ;; not desired by the topology: "off"/"external" once its container is down, still the real status
         ;; (and drift) while the next reconcile has not stopped it
         st (if (and (not= :local mode) (not= rows :unreachable) (not= "running" st) (not= "unhealthy" st) (not= "starting" st))

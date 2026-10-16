@@ -369,7 +369,7 @@
       :else
       (do
         (when keep
-          (emit sink {:event "runtime.recreating" :role (:role d) :reason "runtime.edn changed"})
+          (emit sink {:event "runtime.recreating" :role (:role d) :reason "spec changed (runtime.edn, description, topology, jar)"})
           (podman/remove! c (:Id keep)))
         (when-let [other (podman/inspect c (:name d))]
           (throw (ex-info (str "a container named " (:name d) " exists but is not this workspace's "

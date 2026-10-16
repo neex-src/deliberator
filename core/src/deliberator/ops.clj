@@ -33,7 +33,7 @@
     service.adopt path* taskdef name jdwp ws       -> {name created path repo module from}
     service.list env ws                            -> [{name kind repo module port jdwp image mode [url] status}]
     topology.show env* ws                          -> {env services hash}
-    topology.set env* name* mode* url log-container ws -> as show + {dependents}
+    topology.set env* name* mode* url container-url log-container ws -> as show + {dependents}
     service.show name* ws                          -> the description + {status container runtime}
     service.status name ws                         -> [{name status health detail container since drift}]
     service.build name* ws                         -> {artifact bytes took-ms log sha}   [service.build.line]
@@ -322,8 +322,8 @@
 (defn- config-refresh [_ {:keys [env path] :as args}] (config/refresh! (ws-of args) (or env "local") {:path (or path "/")}))
 (defn- service-list [_ {:keys [env] :as args}] (service/list (ws-of args) (or env "local")))
 (defn- topology-show [_ {:keys [env] :as args}] (topology/show (ws-of args) env))
-(defn- topology-set [_ {:keys [env name mode url log-container] :as args}]
-  (topology/set! (ws-of args) env name mode url {:log-container log-container}))
+(defn- topology-set [_ {:keys [env name mode url log-container container-url] :as args}]
+  (topology/set! (ws-of args) env name mode url {:log-container log-container :container-url container-url}))
 (defn- service-show [_ {:keys [name] :as args}] (service/show (ws-of args) name))
 (defn- service-status [_ {:keys [name] :as args}] (service/status (ws-of args) name))
 (defn- service-build [ctx {:keys [name] :as args}] (service/build! (ws-of args) name {:sink (:emit! ctx)}))
@@ -657,7 +657,8 @@
                    :args (ws-schema :env {:type :string :required true :doc "environment name"}
                                     :name {:type :string :required true :doc "service name"}
                                     :mode {:type :string :required true :doc "local, external or off"}
-                                    :url {:type :string :doc "base URL, for external"}
+                                    :url {:type :string :positional true :doc "base URL, for external"}
+                                    :container-url {:type :string :doc "for external: how containers reach it when the url (host view) does not work from a container; default the url with loopback turned into host.containers.internal"}
                                     :log-container {:type :string :doc "for external: the container whose log stands for log/service-<name>"})
                    :doc "Sets a service's mode in an environment. {{service/x}} and env.describe follow it; in the local environment off and external mean the service's container is not desired (the next runtime.ensure or service start/restart stops it) and the services that :depends on it are re-rendered and recreated then. Touches no container itself. Answers the new topology plus the dependents."}
    "service.show" {:fn service-show :class :read

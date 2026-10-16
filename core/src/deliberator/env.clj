@@ -65,7 +65,7 @@
   (local-for "default"))
 
 (def ^:private top-keys #{:name :kind :description :read-only :aws :targets :topology})
-(def ^:private topology-keys #{:mode :url :log})
+(def ^:private topology-keys #{:mode :url :container-url :log})
 (def ^:private local-aws-keys #{:endpoint :region :account :credentials})
 (def ^:private remote-aws-keys #{:profile :region :account :endpoint})
 
@@ -87,9 +87,13 @@
                (concat
                 (unknown-keys e topology-keys (str ":topology " n))
                 (case (:mode e)
-                  :external (when-not (and (string? (:url e)) (re-matches #"https?://[^/\s]+(:\d+)?(/\S*)?" (:url e)))
-                              [(str ":topology " n " :external needs :url like http://host:port")])
-                  :off (when (contains? e :url) [(str ":topology " n " :off takes no :url")])
+                  :external (concat
+                             (when-not (and (string? (:url e)) (re-matches #"https?://[^/\s]+(:\d+)?(/\S*)?" (:url e)))
+                               [(str ":topology " n " :external needs :url like http://host:port")])
+                             (when (and (contains? e :container-url)
+                                        (not (and (string? (:container-url e)) (re-matches #"https?://[^/\s]+(:\d+)?(/\S*)?" (:container-url e)))))
+                               [(str ":topology " n " :container-url must look like http://host:port")]))
+                  :off (when (or (contains? e :url) (contains? e :container-url)) [(str ":topology " n " :off takes no :url")])
                   [(str ":topology " n " :mode must be :external or :off (absent means local)")])
                 (when (and (contains? e :log) (not (and (map? (:log e)) (nonblank? (get-in e [:log :container])))))
                   [(str ":topology " n " :log must be {:container \"name\"}")])))]

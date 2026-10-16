@@ -8,7 +8,7 @@
 
   A description names its dependencies as `:depends {\"SERVICE_A_URL\" \"a\"}` (env var -> service). The
   container runtime serves the workspace's `local` environment, so `render-spec` follows the topology of that
-  one: external -> the variable leaves `:secrets` and becomes a plain `:env` entry (a loopback host becomes
+  one: external -> the variable leaves `:secrets` and becomes a plain `:env` entry (its `:container-url`, else the url with a loopback host turned into
   `host.containers.internal`, the host as a container sees it), off -> `http://<service>.off.invalid`, local ->
   untouched. A service whose mode there is not local is not desired as a container (`not-local`)."
   (:require [clojure.string :as str]
@@ -29,7 +29,7 @@
               :let [ent (env/service-entry e n)
                     mode (env/service-mode e n)]]
           [n (case mode
-               :external {:mode :external :url (:url ent)}
+               :external (cond-> {:mode :external :url (:url ent)} (:container-url ent) (assoc :container-url (:container-url ent)))
                :off {:mode :off}
                (cond-> {:mode :local}
                  (get-in e [:targets (keyword "service" n)]) (assoc :url (get-in e [:targets (keyword "service" n)]))))])))
@@ -61,9 +61,11 @@
 
 (defn set!
   "Sets the mode of service `svc` in environment `env-name`. `mode` is \"local\" (removes the entry), \"external\"
-  (needs `url`; `log-container` names the container whose log stands for the service's `log/service-<n>`) or
+  (needs `url`, as the host reaches it; `container-url` is how containers reach it when that differs, default
+  the url with a loopback host turned into `host.containers.internal`; `log-container` names the container whose
+  log stands for the service's `log/service-<n>`) or
   \"off\". -> `show` plus `:dependents` (their container specs change at the next reconcile)."
-  [ws env-name svc mode url {:keys [log-container]}]
+  [ws env-name svc mode url {:keys [log-container container-url]}]
   (when-not (modes mode)
     (fail :bad-args (str "mode must be local, external or off, not " (pr-str mode)) :problems ["mode"]))
   (when-not (description/read ws svc)
@@ -71,13 +73,14 @@
           :known (description/names ws) :hint "dlb service list"))
   (when (and url (not= mode "external"))
     (fail :bad-args "url is only for mode external" :problems ["url"]))
-  (when (and log-container (not= mode "external"))
-    (fail :bad-args "log-container is only for mode external" :problems ["log-container"]))
+  (when (and (or log-container container-url) (not= mode "external"))
+    (fail :bad-args "log-container and container-url are only for mode external" :problems ["log-container" "container-url"]))
   (when (and (= mode "external") (str/blank? url))
     (fail :bad-args "mode external needs a url" :problems ["url"] :hint "dlb topology set ENV SERVICE external http://host:port"))
   (let [e (env/load ws env-name)
         ent (case mode
               "external" (cond-> {:mode :external :url (str/replace url #"/+$" "")}
+                           container-url (assoc :container-url (str/replace container-url #"/+$" ""))
                            log-container (assoc :log {:container log-container}))
               "off" {:mode :off}
               nil)
@@ -117,7 +120,7 @@
     (reduce (fn [spec [var svc]]
               (let [ent (env/service-entry e svc)]
                 (case (:mode ent)
-                  :external (-> spec (update :secrets #(dissoc (or % {}) var)) (assoc-in [:env var] (container-url (:url ent))))
+                  :external (-> spec (update :secrets #(dissoc (or % {}) var)) (assoc-in [:env var] (or (:container-url ent) (container-url (:url ent)))))
                   :off (-> spec (update :secrets #(dissoc (or % {}) var)) (assoc-in [:env var] (str "http://" svc ".off.invalid")))
                   spec)))
             spec depends)))

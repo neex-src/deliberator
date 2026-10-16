@@ -91,6 +91,9 @@
         (is (not= (:hash local) (:hash ext)) "a changed spec: the container is recreated at the next ensure"))
       (call "topology.set" {:ws "w" :env "local" :name "a" :mode "external" :url "http://other.example:9"})
       (is (= "http://other.example:9" (get-in (desired-b "w") [:env "SERVICE_A_URL"])))
+      (call "topology.set" {:ws "w" :env "local" :name "a" :mode "external" :url "http://127.0.0.1:18089" :container-url "http://deliberator-w-service-a2:8081"})
+      (is (= "http://deliberator-w-service-a2:8081" (get-in (desired-b "w") [:env "SERVICE_A_URL"])) "a container-url wins over the loopback rewrite")
+      (is (= "http://127.0.0.1:18089" (env/target (env/load "w" "local") :service/a)) "the host keeps the url")
       (call "topology.set" {:ws "w" :env "local" :name "a" :mode "off"})
       (is (= "http://a.off.invalid" (get-in (desired-b "w") [:env "SERVICE_A_URL"])))
       (testing "an off or external service is not desired as a container; its role is still declared"
