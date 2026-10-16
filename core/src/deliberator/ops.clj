@@ -38,6 +38,8 @@
     service.start name* secrets-from confirm ws    -> {name status container port jdwp}   [runtime.* service.started]
     service.stop name* ws                          -> {name status container}   [service.stopped]
     service.restart name* secrets-from confirm ws  -> as start   [service.stopped runtime.* service.started]
+    config.chain name* env ws                      -> {service env module snapshot files entries extra broken unresolved hint}   (offline)
+    config.refresh env path ws                     -> {env fetched-at parameters secrets path copy raw errors}
     runtime.ensure ws infra-only timeout-ms        -> status   [runtime.pulling runtime.starting runtime.ready]
     runtime.status ws                              -> {ws podman containers}
     runtime.down ws                                -> {removed}  [runtime.removed]
@@ -70,6 +72,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [deliberator.aws :as aws]
+            [deliberator.config :as config]
             [deliberator.env :as env]
             [deliberator.logfetch :as logfetch]
             [deliberator.markers :as markers]
@@ -297,6 +300,8 @@
 
 (defn- service-adopt [_ {:keys [path taskdef name jdwp] :as args}]
   (service/adopt! (ws-of args) {:path path :taskdef taskdef :name name :jdwp jdwp}))
+(defn- config-chain [_ {:keys [name env] :as args}] (config/chain (ws-of args) name (or env "local")))
+(defn- config-refresh [_ {:keys [env path] :as args}] (config/refresh! (ws-of args) (or env "local") {:path (or path "/")}))
 (defn- service-list [_ args] (service/list (ws-of args)))
 (defn- service-show [_ {:keys [name] :as args}] (service/show (ws-of args) name))
 (defn- service-status [_ {:keys [name] :as args}] (service/status (ws-of args) name))
@@ -612,6 +617,14 @@
                                      :taskdef {:type :string :doc "absolute path of a file holding the rendered ECS container definitions (JSON)"}
                                      :name {:type :string :doc "service name; default the description's, else the container name without service-"}
                                      :jdwp {:type :int :doc "JDWP container port (overrides the description)"})}
+   "config.chain" {:fn config-chain :class :read
+                   :doc "The configuration chain of a service, offline: every ${X} / ${X:default} placeholder of its module's application*.properties|yml, the task definition entry that supplies it (environment or secrets; line in taskdef.json.tftpl, declaration in main.tf) and the SSM parameter or secret it points at, from the cached snapshot of env (config.refresh). broken lists placeholders without an entry and entries whose parameter is missing; unresolved the valueFroms that are template expressions."
+                   :args (ws-schema :name {:type :string :required true :doc "service name from service.list"}
+                                    :env {:type :string :doc "environment whose snapshot to read; default local"})}
+   "config.refresh" {:fn config-refresh :class :mutate
+                     :doc "Fetches the parameters (GetParametersByPath, no decryption) and the secrets' metadata (ListSecrets, DescribeSecret; never values) of an environment, persists every response raw and writes the snapshot config/<env>.edn (and a copy under the open session)."
+                     :args (ws-schema :env {:type :string :doc "environment name; default local"}
+                                      :path {:type :string :doc "SSM path to list recursively; default /"})}
    "service.list" {:fn service-list :class :read :args (ws-schema)
                    :doc "The services of the workspace with kind, repository, module, ports, image, mode and runtime status."}
    "service.show" {:fn service-show :class :read
@@ -737,7 +750,7 @@
             :hint "op.describe lists the operations"))
     (let [args (validate-args op (:args entry) args)]
       (when (and (contains? (:args entry) :ws)
-                 (or (str/starts-with? op "service.")   ; new families are strict, mutators too
+                 (or (str/starts-with? op "service.") (str/starts-with? op "config.")   ; new families are strict, mutators too
                      (and (= :read (:class entry)) (not= "scenario.parse" op))))
         (require-workspace! (:ws args)))
       ((:fn entry) ctx args))))
