@@ -18,6 +18,7 @@
             [deliberator.floci-util :as fu :refer [deftest-floci]]
             [deliberator.podman :as podman]
             [deliberator.runtime :as runtime]
+            [deliberator.service :as service]
             [deliberator.service.description :as description]
             [deliberator.store :as store]
             [deliberator.test-util :as tu])
@@ -196,3 +197,29 @@
             (is (>= (count lines) n) (str role " lines with " corr))
             (is (every? #(re-find #"\[corr-[0-9a-f-]+\]" (:text %)) lines))))))
     (fu/skip! "estate-end-to-end" "set ESTATE_WS=<ws> (after bb estate:up --ws <ws>) and DELIBERATOR_HOME")))
+
+(defn- ctr [ws role]
+  (let [c (podman/client (get-in (runtime/read-config ws) [:podman :endpoint]) :ws ws)]
+    (first (podman/list-containers c :all true :labels {"deliberator.workspace" ws "deliberator.role" role}))))
+
+(deftest estate-service-lifecycle
+  (if-let [ws (fu/estate-ws)]
+    (let [before (ctr ws "service-a")]
+      (is (= #{"a" "b"} (set (description/names ws))))
+      (is (empty? (filter #(= "service" (namespace %)) (keys (:containers (runtime/read-config ws))))) "runtime.edn holds no service role")
+      (is (= {"a" "running" "b" "running"} (into {} (map (juxt :name :status)) (service/list ws))))
+      (testing "stop keeps the container, start brings the same one back"
+        (is (= "stopped" (:status (service/stop! ws "a" {}))))
+        (is (= "stopped" (:status (first (service/status ws "a")))))
+        (is (= (:Id before) (:Id (ctr ws "service-a"))))
+        (let [r (service/start! ws "a" {})]
+          (is (= "running" (:status r)))
+          (is (= 8081 (:port r)))
+          (is (= 5005 (:jdwp r))))
+        (let [after (ctr ws "service-a")]
+          (is (= (:Id before) (:Id after)))
+          (is (= (:Labels before) (:Labels after)))))
+      (testing "restart keeps the labels too"
+        (is (= "running" (:status (service/restart! ws "a" {}))))
+        (is (= (:Labels before) (:Labels (ctr ws "service-a"))))))
+    (fu/skip! "estate-service-lifecycle" "set ESTATE_WS=<ws> (after bb estate:up --ws <ws>) and DELIBERATOR_HOME")))
