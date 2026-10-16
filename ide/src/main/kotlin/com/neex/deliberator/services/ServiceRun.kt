@@ -159,10 +159,16 @@ class ServiceProcessHandler(
     @Volatile var started: Started? = prestarted; private set
     private val printed = ArrayDeque<String>()
     private val pending = StringBuilder()
+    private val record = StringBuilder()
+
+    /** Everything printed so far (the last 200 KB), for tests and for a late reader. */
+    @Synchronized fun transcript(): String = record.toString()
 
     /** Text for the console (before [startNotify] it is kept and flushed by [begin]). */
     @Synchronized fun print(line: String) {
         val text = if (line.endsWith("\n")) line else line + "\n"
+        record.append(text)
+        if (record.length > RECORD_MAX) record.delete(0, record.length - RECORD_MAX)
         if (startedNotify) notifyTextAvailable(text, ProcessOutputTypes.STDOUT) else pending.append(text)
     }
 
@@ -291,6 +297,7 @@ class ServiceProcessHandler(
         /** Seconds one `logs.fetch ... for` window listens (lines reach the console at the end of a window; one file per window). */
         @Volatile internal var windowSeconds = 30
         @Volatile internal var retryMs = 5000L
+        private const val RECORD_MAX = 200_000
     }
 }
 
