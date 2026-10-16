@@ -1,0 +1,33 @@
+# the four plain kinds in one run
+# @env local
+# @var rowId = row-{{uuid}}
+
+### logs log/pg pg-statements
+# @filter {{correlation}}
+# @filter insert into plain_t
+# @for 8s
+# @assert lines >= 1
+
+### sql db/main make-table
+create table if not exists plain_t (id text primary key, note text, n int)
+
+### http health
+# @assert status == 200
+# @assert header.content-type contains json
+# @assert bytes > 0
+GET {{service/floci}}/_floci/health
+Accept: application/json
+
+### sql db/main insert
+# @assert updated == 1
+insert into plain_t values ('{{rowId}}', 'first note', 7) /* {{correlation}} */
+
+### sql db/main select
+# @assert rows == 1
+# @assert col.note == first note
+# @assert col.n == 7
+# @capture note = col.note
+select id, note, n, null as gone from plain_t where id = '{{rowId}}'
+
+### wait pause
+# @for 1s
