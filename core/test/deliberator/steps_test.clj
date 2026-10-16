@@ -48,7 +48,12 @@
 
 (use-fixtures :once
   (fn [f]
-    (binding [store/*home* (tu/temp-home)]
+    ;; with-redefs sets the ROOT of *home* as well: the `logs` kind starts plain Threads that do not
+    ;; inherit a `binding`, and their FilterLogEvents blobs used to land in the user's real home
+    ;; (audit finding, docs/plans/m1-test-report.md)
+    (let [h (tu/temp-home)]
+      (with-redefs [store/*home* h]
+        (binding [store/*home* h]
       (if-not (sup/up?)
         (do (println "SKIPPED runtime tests of deliberator.steps-test: runtime down: bb runtime:up")
             (f))
@@ -69,7 +74,7 @@
               (f))
             (finally
               (try (runtime/down! ws) (catch Exception e (println "down!" (ex-message e))))
-              (try (podman/remove-network! c (:network cfg)) (catch Exception _)))))))))
+              (try (podman/remove-network! c (:network cfg)) (catch Exception _)))))))))))
 
 (declare sql-exec!)
 
