@@ -11,22 +11,16 @@
             [deliberator.floci-util :as fu :refer [deftest-floci]]
             [deliberator.session :as session]
             [deliberator.store :as store]
-            [deliberator.test-client :as tc])
+            [deliberator.test-client :as tc]
+            [deliberator.test-util :as tu])
   (:import (java.util UUID)))
 
 (use-fixtures :once (fn [f] (f) (env/close-clients!)))
 
-(defn short-home
-  "A fresh home with a short path (a unix socket path must stay under ~104 bytes)."
-  []
-  (let [d (io/file (System/getProperty "user.dir") "target" "th" (Long/toString (mod (System/nanoTime) 60466176) 36))]
-    (.mkdirs d)
-    d))
-
 (defmacro with-daemon
   "Starts a daemon on a fresh short home (opts map), binds `h` to its handle and `home`; stops it."
   [[h opts] & body]
-  `(binding [store/*home* (short-home)]
+  `(tu/with-short-home
      (let [~h (daemon/start! ~opts)]
        (try ~@body (finally ((:stop! ~h)))))))
 
@@ -451,7 +445,7 @@
      (binding [env/*credentials-file* f#] ~@body)))
 
 (deftest-floci confirm-required-is-the-terminal-error-of-a-run-that-hit-it
-  (binding [store/*home* (short-home)]
+  (tu/with-short-home
     (with-profile
       (let [e (remote-env)
             _ (env/save! "default" e)
@@ -496,7 +490,7 @@
             (finally ((:stop! h)))))))))
 
 (deftest-floci a-run-on-a-remote-environment-checks-the-account-first
-  (binding [store/*home* (short-home)]
+  (tu/with-short-home
     (with-profile
       (env/save! "default" (remote-env :aws {:profile "dlbtest" :region "eu-central-1" :account "111111111111"
                                              :endpoint fu/url}))

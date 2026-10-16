@@ -14,6 +14,7 @@
   `runtime.edn` must already carry 14566/15432 when 4566/5432 belong to another project. The home
   is `$DELIBERATOR_HOME`."
   (:require [babashka.process :as p]
+            [core-build]
             [daemon-client]
             [estate]))
 
@@ -25,6 +26,7 @@
 (defn- run [args]
   (let [ws (or (arg args "--ws") "default")
         keep? (some #{"--keep"} args)]
+    (core-build/ensure-jar!)
     (println "== pass A: estate down, clojure -M:test")
     (estate/down ["--ws" ws])
     (let [a (clj {})

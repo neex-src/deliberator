@@ -4,16 +4,13 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [deliberator.test-client :as tc])
+            [deliberator.test-client :as tc]
+            [deliberator.test-util :as tu])
   (:import (java.util.concurrent LinkedBlockingQueue TimeUnit)))
 
 (def jar (io/file (System/getProperty "user.dir") "target" "deliberatord.jar"))
 
 (defn- java [] (str (System/getProperty "java.home") "/bin/java"))
-
-(defn- short-home []
-  (doto (io/file (System/getProperty "user.dir") "target" "th" (str "j" (Long/toString (mod (System/nanoTime) 1679616) 36)))
-    .mkdirs))
 
 (defn- spawn
   "Starts the jar with `args`; -> {:proc :lines (queue of output lines, ::eof at the end)}."
@@ -35,7 +32,7 @@
     (let [v (spawn "--version")]
       (is (= "deliberatord 0.1.0-m1" (next-line v 60000)))
       (is (zero? (.waitFor ^Process (:proc v)))))
-    (let [home (short-home)
+    (let [home (tu/short-home)
           d (spawn "--home" (str home) "--idle-minutes" "0.1")
           banner (next-line d 60000)
           ep (second (re-find #"listening on (\S+)" (str banner)))]
@@ -70,4 +67,4 @@
             (is (zero? (if (.waitFor ^Process (:proc d) 40 TimeUnit/SECONDS) (.exitValue ^Process (:proc d)) -1)))
             (is (not (.exists (io/file home "daemon" "endpoint"))))
             (is (not (.exists (io/file home "daemon" "deliberatord.sock"))))))
-        (finally (.destroy ^Process (:proc d)))))))
+        (finally (.destroy ^Process (:proc d)) (tu/release-home! home))))))
