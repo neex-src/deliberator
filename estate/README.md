@@ -4,7 +4,8 @@ A small, generic AWS test bed that Deliberator runs against: service A (inbox qu
 EventBridge, ack endpoint) and service B (bus event to ack in A and a row in Postgres `acks`), a Node Lambda
 logger, one Terraform module for Floci and real AWS. Java 21, Spring Boot 3.3.
 
-- `bb estate:build|deploy|up|status|down [--ws W]`: Maven, `terraform apply` on Floci, services as runtime containers.
+- `bb estate:build|deploy|up|status|down [--ws W]`: Maven, `terraform apply` on Floci, services as runtime containers (derived from their descriptions).
+- Each service module carries a `deliberator-service.edn` (its description); `bb estate:up` attaches this repository, adopts them (`service.adopt`) and starts them (`service.start`); `dlb service list|stop|start|restart|build`.
 - Config chain: `application.properties` placeholders, then `terraform/modules/stack/taskdef.json.tftpl` (ECS `environment` and `secrets`), then SSM `/estate/...` and secrets `estate/api-key`, `estate/db-password`.
 - Correlation: `X-Correlation-Id`, SQS attribute `correlation`, `detail.correlation`; on every log line as `[%X{correlation}]`.
 - `APP_AUTO_PUBLISH` (default false): service A publishes to the bus as soon as it stores an inbox message; `bb estate:up --auto-publish` turns it on. Off, `POST /publish/{id}` does it.

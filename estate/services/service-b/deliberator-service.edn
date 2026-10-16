@@ -1,0 +1,12 @@
+;; What service B is; `service.adopt` copies it into the workspace as services/b.edn.
+{:name "b"
+ :kind :spring-boot
+ :build {:cmd ["mvn" "-q" "-DskipTests" "-pl" "service-b" "-am" "package"]
+         :dir ".."
+         :artifact "target/service-b-0.1.0.jar"
+         :java 21}
+ :image "docker.io/library/eclipse-temurin:21-jre"
+ :port 8082
+ :jdwp 5006
+ :health "/actuator/health"
+ :taskdef {:module "estate/terraform/modules/stack" :container "service-b" :key "b"}}

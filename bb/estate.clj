@@ -5,27 +5,36 @@
   - deploy: Floci must be up. Points the workspace's `local` environment at the runtime's host ports,
             `terraform apply` of estate/terraform/floci (scrubbed environment, fake credentials, plugin
             cache under .scratch/), then writes the rendered ECS task definitions into the workspace's
-            `runtime.edn` as the `:service/a` / `:service/b` roles (`deliberator.runtime adopt-taskdefs`).
+            attaches this repository to the workspace and adopts every `estate/services/*/deliberator-service.edn`
+            with its rendered task definition (`service.adopt`); the roles are derived from the descriptions.
             `--auto-publish` sets APP_AUTO_PUBLISH=true on service A.
-  - up:     build when a jar is missing, runtime up (Floci, Postgres), deploy, runtime up (services).
+  - up:     build when a jar is missing, runtime up (Floci, Postgres), deploy, `service.start` of every service.
   - status: runtime status plus the services' health.
   - down:   removes the workspace's containers and the Floci root's Terraform state (Floci keeps
             nothing, a stale state would lie).
 
   The workspace is `--ws W` (default \"default\"); its home is $DELIBERATOR_HOME. The runtime steps
-  (`runtime up|status|down`, `sync-env`, `adopt-taskdefs`) go through the daemon (`daemon-client`); only
+  (`runtime up|status|down`, `sync-env`, `service.*`) go through the daemon (`daemon-client`; the service ops need it); only
   Maven and Terraform run out of process. `--no-daemon` runs them in one-shot JVMs as before."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.edn :as edn]
+            [clojure.pprint]
             [clojure.string :as str]
             [daemon-client]))
 
 (def repo (str (fs/absolutize ".")))
 (def tf-dir (str repo "/estate/terraform/floci"))
-(def services {"a" {:jar "estate/services/service-a/target/service-a-0.1.0.jar" :debug 5005}
-               "b" {:jar "estate/services/service-b/target/service-b-0.1.0.jar" :debug 5006}})
+(defn services
+  "name -> the estate's `deliberator-service.edn` (plus `:dir`), read from estate/services/*."
+  []
+  (into (sorted-map)
+        (for [f (sort (fs/glob (str repo "/estate/services") "*/deliberator-service.edn"))
+              :let [d (edn/read-string (slurp (str f)))]]
+          [(:name d) (assoc d :dir (str (fs/parent f)))])))
+
+(defn- jar [{:keys [dir build]}] (str dir "/" (:artifact build)))
 
 (defn- arg [args k] (second (drop-while #(not= k %) args)))
 (defn- ws-of [args] (or (arg args "--ws") "default"))
@@ -87,26 +96,38 @@
                                           "-var" (str "container_endpoint=http://" (container ws "floci") ":4566")
                                           "-var" (str "service_a_url=http://" (container ws "service-a") ":8081")
                                           "-var" (str "db_url=jdbc:postgresql://" (container ws "postgres") ":5432/deliberator"))))
-    (step "adopt task definitions"
+    (step "adopt services"
           (fn []
             (let [out (json/parse-string (:out (p/shell {:dir tf-dir :env (tf-env) :out :string}
                                                         "terraform" "output" "-json" "-no-color")))
-                  tds (get-in out ["task_definitions" "value"])
-                  d {:root repo
-                     :postgres-init (str repo "/estate/sql")
-                     :services (into {} (for [[n s] services] [n (assoc s :taskdef (get tds n))]))}
-                  f (str repo "/.scratch/estate/adopt.edn")]
-              (fs/create-dirs (fs/parent f))
-              (spit f (pr-str d))
-              (runtime args "adopt-taskdefs" "--ws" ws "--file" f))))))
+                  tds (get-in out ["task_definitions" "value"])]
+              (daemon-client/call! "repo.attach" {:ws ws :path repo})
+              (fs/create-dirs (str repo "/.scratch/estate"))
+              (doseq [[n s] (services)
+                      :let [f (str repo "/.scratch/estate/taskdef-" n ".json")]]
+                (spit f (get tds (get-in s [:taskdef :key])))
+                (daemon-client/call! "service.adopt" {:ws ws :path (:dir s) :taskdef f})))))))
+
+(defn- set-postgres-init!
+  "The estate's SQL init directory is infrastructure of the estate: set it as Postgres' `:init` in the
+  workspace's runtime.edn (created by `sync-env` when absent) before the infrastructure comes up."
+  [args ws]
+  (runtime args "sync-env" "--ws" ws)
+  (let [f (str (home) "/workspaces/" ws "/runtime.edn")
+        cfg (edn/read-string (slurp f))
+        init (str repo "/estate/sql")]
+    (when (and (get-in cfg [:containers :postgres]) (not= init (get-in cfg [:containers :postgres :init])))
+      (spit f (with-out-str (clojure.pprint/pprint (assoc-in cfg [:containers :postgres :init] init)))))))
 
 (defn up [args]
   (let [ws (ws-of args) t0 (System/nanoTime)]
-    (when-not (every? #(fs/exists? (str repo "/" (:jar %))) (vals services))
+    (when-not (every? #(fs/exists? (jar %)) (vals (services)))
       (step "build" build))
+    (set-postgres-init! args ws)
     (step "runtime (floci, postgres)" #(runtime args "up" "--infra" "--ws" ws))
     (deploy args)
-    (step "runtime (services)" #(runtime args "up" "--ws" ws))
+    (doseq [n (keys (services))]
+      (step (str "service start " n) #(daemon-client/call! "service.start" {:ws ws :name n})))
     (println (format "estate up in %d ms" (ms-since t0)))))
 
 (defn- health [url]

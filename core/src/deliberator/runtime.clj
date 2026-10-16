@@ -24,10 +24,9 @@
   (optionally `…:json-key::`); the runtime plays the ECS agent and resolves them against the workspace's
   `local` environment when it CREATES the container (so Floci must already hold them), the values go
   to Podman only, never into `runtime.edn`, the hash or a log. Services start after Floci and Postgres
-  are healthy. `(taskdef->service container-def opts)` turns an ECS container definition into such a
-  spec and `(adopt-taskdefs! ws descriptor)` writes the service roles (and `:root`, Postgres `:init`)
-  into the workspace's `runtime.edn` (`-main adopt-taskdefs --ws W --file descriptor.edn`, used by
-  `bb estate:deploy`). Distinct containers on one host port are refused as for every role.
+  are healthy. Service roles are not stored in `runtime.edn`: `effective-containers` derives one per
+  service description (`services/<name>.edn`, namespace `deliberator.service.description`) and merges the
+  runtime half `:services {\"<name>\" {:ports … :env …}}` over it. Distinct containers on one host port are refused as for every role.
 
   Contract: `(ensure! ws [opts])` reconciles network, images and containers labelled
   `deliberator.workspace=<ws>`, `deliberator.role=<role>`, `deliberator.spec=<hash>`: idempotent,
@@ -43,7 +42,7 @@
   `GET /actuator/health`. `opts`: `:sink`, `:timeout-ms` (health wait per container, default 120 s), `:infra-only` (skip
   the `:jar` service roles).
   Home resolution is the store's (`store/*home*`, `$DELIBERATOR_HOME`). `-main`: `up|status|down
-  [--ws W]` (the `bb runtime:*` tasks) plus `up --infra`, `sync-env` and `adopt-taskdefs --ws W --file descriptor.edn`."
+  [--ws W]` (the `bb runtime:*` tasks) plus `up --infra` and `sync-env`."
   (:require [clojure.data.json :as json]
             [clojure.edn]
             [clojure.string :as str]
@@ -51,6 +50,7 @@
             [deliberator.aws :as aws]
             [deliberator.env :as env]
             [deliberator.podman :as podman]
+            [deliberator.service.description :as description]
             [deliberator.store :as store])
   (:import (java.net InetSocketAddress Socket URI)
            (java.net.http HttpClient HttpClient$Version HttpRequest HttpResponse$BodyHandlers)
@@ -102,11 +102,6 @@
   "Role keyword -> label value: `:floci` -> \"floci\", `:service/a` -> \"service-a\"."
   [k]
   (str/replace (subs (str k) 1) "/" "-"))
-
-(defn- configured-name
-  "The container name of `role` in `cfg`: its `:name` or `deliberator-<ws>-<role>`."
-  [ws cfg role]
-  (or (get-in cfg [:containers role :name]) (store/container-name ws (role-name role))))
 
 (defn- template [s {:keys [ports network name role]}]
   (-> (str s)
@@ -166,8 +161,24 @@
             (seq (:secrets spec)) (assoc :secrets (into (sorted-map) (for [[k v] (:secrets spec)] [(clojure.core/name k) v]))))]
     (assoc d :hash (subs (store/sha256 (.getBytes ^String (pr-str (sorted-deep (dissoc d :health))) StandardCharsets/UTF_8)) 0 16))))
 
+(defn- merge-spec
+  "`base` (derived from a description) with the runtime half `over` (`runtime.edn :services <name>`):
+  `:env`, `:ports` and `:secrets` merge, everything else replaces."
+  [base over]
+  (reduce-kv (fn [m k v] (if (#{:env :ports :secrets} k) (update m k #(into (or % {}) v)) (assoc m k v))) base over))
+
+(defn effective-containers
+  "role -> spec of everything `ensure!` reconciles: the roles of `runtime.edn` (infrastructure, or a hand-written
+  `:jar` role) plus one `:service/<name>` role per runnable service description of the workspace
+  (`description/->spec`, merged with `runtime.edn :services <name>`). Service roles are never stored."
+  [ws cfg]
+  (merge (:containers cfg)
+         (into {} (for [d (description/list ws) :when (description/runnable? d)]
+                    [(description/role (:name d))
+                     (merge-spec (description/->spec ws d) (get-in cfg [:services (:name d)]))]))))
+
 (defn desired-all [ws cfg]
-  (mapv (fn [[role spec]] (desired ws cfg role spec)) (sort-by (comp str key) (:containers cfg))))
+  (mapv (fn [[role spec]] (desired ws cfg role spec)) (sort-by (comp str key) (effective-containers ws cfg))))
 
 (defn- resolve-one [ws local ref]
   (let [ref (str ref)
@@ -383,12 +394,12 @@
 (declare status)
 
 (defn ensure!
-  "Reconciles the runtime of `ws` with its `runtime.edn` and waits until it is healthy. Idempotent.
-  -> `(status ws)`."
+  "Reconciles the runtime of `ws` with its `runtime.edn` and the service descriptions and waits until it is healthy.
+  Idempotent. `:only` (role labels such as \"service-a\") reconciles just those. -> `(status ws)`."
   ([ws] (ensure! ws {}))
-  ([ws {:keys [sink timeout-ms infra-only] :or {timeout-ms default-timeout-ms}}]
+  ([ws {:keys [sink timeout-ms infra-only only] :or {timeout-ms default-timeout-ms}}]
    (let [cfg (load-config! ws sink)
-         ds (cond->> (desired-all ws cfg) infra-only (remove :jar-path))
+         ds (cond->> (desired-all ws cfg) infra-only (remove :jar-path) only (filter (comp (set only) :role)))
          c (connect-client ws cfg)
          socket-path (delay (or (podman/socket-path c)
                                 (throw (ex-info "cannot tell the Podman socket path for this endpoint; give :podman-socket \"/path/to/podman.sock\" in runtime.edn"
@@ -415,9 +426,10 @@
     (when (and (number? s) (pos? s)) (Instant/ofEpochSecond s))))
 
 (defn status
-  "State of the workspace's runtime without changing it (see the namespace docstring)."
+  "State of the workspace's runtime without changing it (see the namespace docstring). `:only` (role labels)
+  restricts the rows and the probes."
   ([ws] (status ws {}))
-  ([ws _opts]
+  ([ws {:keys [only]}]
    (let [cfg (read-config ws)
          endpoint (get-in cfg [:podman :endpoint] (podman/default-endpoint))
          c (podman/client endpoint :ws (store/ws-name ws))]
@@ -425,7 +437,8 @@
        {:ws (store/ws-name ws) :podman {:endpoint endpoint :reachable false :hint "systemctl --user enable --now podman.socket"}
         :containers []}
        (let [ds (when cfg (into {} (map (juxt :role identity)) (desired-all ws cfg)))
-             ctrs (podman/list-containers c :all true :labels (ws-labels ws))
+             ctrs (cond->> (podman/list-containers c :all true :labels (ws-labels ws))
+                    only (filter #((set only) (label % "deliberator.role"))))
              rows (for [ctr ctrs
                         :let [role (label ctr "deliberator.role")
                               d (get ds role)
@@ -437,7 +450,7 @@
                              :ports (into (sorted-map) (for [p (:Ports ctr)] [(:container_port p) (:host_port p)]))}
                       d (assoc :drift? (not= (:hash d) (label ctr "deliberator.spec")))))
              present (set (map :role rows))
-             absent (for [[role d] ds :when (not (present role))]
+             absent (for [[role d] ds :when (and (not (present role)) (or (nil? only) ((set only) role)))]
                       {:role role :name (:name d) :image (:image d) :state :absent :ports (:ports d)})
              v (podman/info c)]
          {:ws (store/ws-name ws)
@@ -458,6 +471,15 @@
                           (emit sink {:event "runtime.removed" :role (label ctr "deliberator.role") :name (first (:Names ctr))})
                           {:role (label ctr "deliberator.role") :name (first (:Names ctr))})))})))
 
+(defn stop-role!
+  "Stops (keeps) the container of `role` (label, e.g. \"service-a\") of `ws`. -> the container name stopped, nil when there is none."
+  [ws role]
+  (let [c (connect-client ws (read-config ws))
+        ctr (first (podman/list-containers c :all true :labels (assoc (ws-labels ws) "deliberator.role" role)))]
+    (when ctr
+      (podman/stop! c (:Id ctr))
+      (first (:Names ctr)))))
+
 (defn logs
   "Log events of `role` of `ws` (`{:stream :at :text}`), mirrored to `logs/services/<role>/<date>.log`.
   `opts`: `:since` Instant, `:follow`, `:tail`."
@@ -472,22 +494,7 @@
            (mapcat identity (select-keys opts [:since :follow :tail :until])))))
 
 ;; ---------------------------------------------------------------------------------------------
-;; ECS task definitions -> service roles
-
-(defn taskdef->service
-  "An ECS container definition (the map, string keys as in the JSON) -> a `:jar` service spec.
-  `environment` becomes `:env`, `secrets` becomes `:secrets`, the container ports are published on
-  the same host ports. `opts`: `:jar` (required), `:image` (default eclipse-temurin 21 JRE), `:debug`
-  (JDWP container port, published too), `:java-opts`."
-  [container-def {:keys [jar image debug java-opts]}]
-  (let [ports (concat (map #(get % "containerPort") (get container-def "portMappings")) (when debug [debug]))]
-    (cond-> {:image (or image "docker.io/library/eclipse-temurin:21-jre")
-             :jar jar
-             :ports (into (sorted-map) (map (fn [p] [p p]) ports))
-             :env (into (sorted-map) (map (fn [e] [(get e "name") (get e "value")]) (get container-def "environment")))
-             :secrets (into (sorted-map) (map (fn [e] [(get e "name") (get e "valueFrom")]) (get container-def "secrets")))}
-      debug (assoc :debug debug)
-      java-opts (assoc :java-opts (vec java-opts)))))
+;; local environment follows the runtime
 
 (defn- db-url
   "The JDBC URL `url` on host port `port`, with the Postgres credentials of the runtime's `:postgres`
@@ -500,38 +507,27 @@
       (str url (if (str/includes? url "?") "&" "?") "user=" user (when pw (str "&password=" pw))))))
 
 (defn sync-local-env!
-  "Points the workspace's `local` environment at the host ports of `cfg` (Floci endpoint, Postgres
-  and service targets), leaving every other field alone. `db/main` carries the runtime's Postgres
-  credentials (`?user=&password=`) so the `sql` kind can connect."
+  "Points the workspace's `local` environment at the host ports of `cfg` (Floci endpoint, Postgres)
+  and at the service roles in effect (`effective-containers`: `service/<name>` on the host port of the
+  service's port, `log/service-<name>` the container), leaving every other field alone. `db/main` carries
+  the runtime's Postgres credentials (`?user=&password=`) so the `sql` kind can connect."
   [ws cfg]
   (let [hp (fn [role cp] (get-in cfg [:containers role :ports cp]))
         e (env/load ws "local")
         e (cond-> e
             (hp :floci 4566) (assoc-in [:aws :endpoint] (str "http://localhost:" (hp :floci 4566)))
             (and (hp :postgres 5432) (string? (get-in e [:targets :db/main])))
-            (update-in [:targets :db/main] #(db-url % (hp :postgres 5432) (get-in cfg [:containers :postgres :env])))
-            (get-in cfg [:containers :service/a]) (assoc-in [:targets :log/service-a] {:container (configured-name ws cfg :service/a)})
-            (get-in cfg [:containers :service/b]) (assoc-in [:targets :log/service-b] {:container (configured-name ws cfg :service/b)})
-            (hp :service/a 8081) (assoc-in [:targets :service/a] (str "http://localhost:" (hp :service/a 8081)))
-            (hp :service/b 8082) (assoc-in [:targets :service/b] (str "http://localhost:" (hp :service/b 8082))))]
+            (update-in [:targets :db/main] #(db-url % (hp :postgres 5432) (get-in cfg [:containers :postgres :env]))))
+        e (reduce (fn [e [role spec]]
+                    (if (and (= "service" (namespace role)) (:jar spec))
+                      (let [n (name role)
+                            port (:port (service-health spec))
+                            host (get (:ports spec) port)]
+                        (cond-> (assoc-in e [:targets (keyword "log" (str "service-" n))] {:container (or (:name spec) (store/container-name ws (role-name role)))})
+                          host (assoc-in [:targets role] (str "http://localhost:" host))))
+                      e))
+                  e (sort-by (comp str key) (effective-containers ws cfg)))]
     (env/save! ws e)))
-
-(defn adopt-taskdefs!
-  "Writes service roles into the workspace's `runtime.edn` (created from the default when absent).
-  `descriptor`: `{:root \"/abs/repo\" :postgres-init \"/abs/dir\" :services {\"a\" {:taskdef <JSON text of
-  the container definitions> :jar \"rel/or/abs.jar\" :debug 5005 :java-opts […] :image …}}}`.
-  Roles not named stay as they are; the `local` environment follows the host ports (`sync-local-env!`). -> the new config."
-  [ws {:keys [root postgres-init services]}]
-  (let [cfg (load-config! ws nil)
-        roles (into {} (for [[n {:keys [taskdef] :as s}] services
-                             :let [cd (first (json/read-str (str taskdef)))]]
-                         [(keyword "service" (name n)) (taskdef->service cd s)]))
-        cfg (cond-> (update cfg :containers merge roles)
-              root (assoc :root (str root))
-              (and postgres-init (get-in cfg [:containers :postgres])) (assoc-in [:containers :postgres :init] (str postgres-init)))]
-    (store/write-edn! (config-path ws) cfg)
-    (sync-local-env! ws cfg)
-    cfg))
 
 (defn sync-env!
   "Creates `runtime.edn` when absent (the default config) and points the workspace's `local`
@@ -567,9 +563,6 @@
                  "status" (print-status (status ws opts))
                  "down" (doseq [r (:removed (down! ws opts))] (println "removed" (:name r)))
                  "sync-env" (do (sync-env! ws) (println "local environment follows runtime.edn"))
-                 "adopt-taskdefs" (let [f (second (drop-while #(not= "--file" %) more))
-                                        cfg (adopt-taskdefs! ws (clojure.edn/read-string (slurp f)))]
-                                    (println "runtime.edn:" (config-path ws) "roles" (sort (map str (keys (:containers cfg))))))
                  (do (println "usage: runtime up|status|down [--ws NAME]") (throw (ex-info "usage" {:type :usage}))))
                0
                (catch clojure.lang.ExceptionInfo e

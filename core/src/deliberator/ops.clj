@@ -30,7 +30,14 @@
     env.check name* ws                             -> {ok account expected targets [error]}
     daemon.stop                                    -> {stopping pid runs}   (the daemon exits a moment later)
     runtime.sync-env ws                            -> {ws path}
-    runtime.adopt file* ws                         -> {ws path roles}
+    service.adopt path* taskdef name jdwp ws       -> {name created path repo module from}
+    service.list ws                                -> [{name kind repo module port jdwp image mode status}]
+    service.show name* ws                          -> the description + {status container runtime}
+    service.status name ws                         -> [{name status health detail container since drift}]
+    service.build name* ws                         -> {artifact bytes took-ms log sha}   [service.build.line]
+    service.start name* secrets-from confirm ws    -> {name status container port jdwp}   [runtime.* service.started]
+    service.stop name* ws                          -> {name status container}   [service.stopped]
+    service.restart name* secrets-from confirm ws  -> as start   [service.stopped runtime.* service.started]
     runtime.ensure ws infra-only timeout-ms        -> status   [runtime.pulling runtime.starting runtime.ready]
     runtime.status ws                              -> {ws podman containers}
     runtime.down ws                                -> {removed}  [runtime.removed]
@@ -72,6 +79,7 @@
             [deliberator.scenario.engine :as engine]
             [deliberator.scenario.parse :as parse]
             [deliberator.scenario.render :as render]
+            [deliberator.service :as service]
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.workspace :as workspace])
@@ -90,7 +98,7 @@
 
 (def ^:private error-keys
   [:hint :known :problems :line :token :summary :step :confirmations :result :expires :target :env
-   :role :key :sha :schema :account :expected :found])
+   :role :key :sha :schema :account :expected :found :log :exit])
 
 (defn error-map
   "The wire error of a throwable: `{:type :message [:hint ...]}`."
@@ -287,10 +295,17 @@
 
 (defn- runtime-sync-env [_ args] (runtime/sync-env! (ws-of args)))
 
-(defn- runtime-adopt [_ {:keys [file] :as args}]
-  (let [cfg (runtime/adopt-taskdefs! (ws-of args) (clojure.edn/read-string (slurp (str file))))]
-    {:ws (store/ws-name (ws-of args)) :path (str (runtime/config-path (ws-of args)))
-     :roles (mapv #(subs (str %) 1) (sort (keys (:containers cfg))))}))
+(defn- service-adopt [_ {:keys [path taskdef name jdwp] :as args}]
+  (service/adopt! (ws-of args) {:path path :taskdef taskdef :name name :jdwp jdwp}))
+(defn- service-list [_ args] (service/list (ws-of args)))
+(defn- service-show [_ {:keys [name] :as args}] (service/show (ws-of args) name))
+(defn- service-status [_ {:keys [name] :as args}] (service/status (ws-of args) name))
+(defn- service-build [ctx {:keys [name] :as args}] (service/build! (ws-of args) name {:sink (:emit! ctx)}))
+(defn- service-start [ctx {:keys [name secrets-from confirm] :as args}]
+  (service/start! (ws-of args) name {:sink (:emit! ctx) :secrets-from secrets-from :confirm confirm}))
+(defn- service-stop [ctx {:keys [name] :as args}] (service/stop! (ws-of args) name {:sink (:emit! ctx)}))
+(defn- service-restart [ctx {:keys [name secrets-from confirm] :as args}]
+  (service/restart! (ws-of args) name {:sink (:emit! ctx) :secrets-from secrets-from :confirm confirm}))
 
 (defn- daemon-stop [ctx _]
   (let [d (:daemon ctx)
@@ -591,9 +606,40 @@
                                       :timeout-ms {:type :int :doc "health wait per container"})}
    "runtime.sync-env" {:fn runtime-sync-env :class :mutate :args (ws-schema)
                        :doc "Writes the default runtime.edn when absent and points the workspace's local environment at its host ports and container names."}
-   "runtime.adopt" {:fn runtime-adopt :class :mutate
-                    :doc "Writes the service roles of an ECS task-definition descriptor (EDN file, see runtime/adopt-taskdefs!) into the workspace's runtime.edn."
-                    :args (ws-schema :file {:type :string :required true :doc "absolute path of the descriptor.edn"})}
+   "service.adopt" {:fn service-adopt :class :mutate
+                    :doc "Writes services/<name>.edn from the module at path: its deliberator-service.edn, else derived from a rendered Terraform task definition (taskdef = file with the container definitions JSON). taskdef also supplies the adopted environment and secret references. The workspace must exist."
+                    :args (ws-schema :path {:type :string :required true :doc "absolute path of the service's module directory"}
+                                     :taskdef {:type :string :doc "absolute path of a file holding the rendered ECS container definitions (JSON)"}
+                                     :name {:type :string :doc "service name; default the description's, else the container name without service-"}
+                                     :jdwp {:type :int :doc "JDWP container port (overrides the description)"})}
+   "service.list" {:fn service-list :class :read :args (ws-schema)
+                   :doc "The services of the workspace with kind, repository, module, ports, image, mode and runtime status."}
+   "service.show" {:fn service-show :class :read
+                   :doc "One service: its description (task definition entries included) and its runtime status."
+                   :args (ws-schema :name {:type :string :required true :doc "service name from service.list"})}
+   "service.status" {:fn service-status :class :read
+                     :doc "Runtime status (running, unhealthy, starting, stopped, absent, unreachable) of one service or all."
+                     :args (ws-schema :name {:type :string :positional true :doc "service name; default all"})}
+   "service.build" {:fn service-build :class :mutate
+                    :doc "Runs the service's build command in its module; the output streams as service.build.line events, is appended to logs/build/ as it arrives and is stored raw. Answers the artifact."
+                    :events ["service.build.line"]
+                    :args (ws-schema :name {:type :string :required true :doc "service name"})}
+   "service.start" {:fn service-start :class :mutate
+                    :doc "Creates, recreates (spec or jar changed) or starts the service's container and waits until healthy. secrets-from asks for real secret values of an environment: two confirmations, then (until piece 08) service/secrets-not-built; nothing is ever injected here."
+                    :events ["runtime.pulling" "runtime.starting" "runtime.ready" "service.started"]
+                    :args (ws-schema :name {:type :string :required true :doc "service name"}
+                                     :secrets-from {:type :string :doc "environment to take real secret values from (gated)"}
+                                     :confirm {:type :string :doc "confirmation token from a confirm-required error"})}
+   "service.stop" {:fn service-stop :class :mutate
+                   :doc "Stops the service's container and keeps it; start reuses it."
+                   :events ["service.stopped"]
+                   :args (ws-schema :name {:type :string :required true :doc "service name"})}
+   "service.restart" {:fn service-restart :class :mutate
+                      :doc "Stop, then start (a rebuilt jar recreates the container)."
+                      :events ["service.stopped" "runtime.pulling" "runtime.starting" "runtime.ready" "service.started"]
+                      :args (ws-schema :name {:type :string :required true :doc "service name"}
+                                       :secrets-from {:type :string :doc "environment to take real secret values from (gated)"}
+                                       :confirm {:type :string :doc "confirmation token from a confirm-required error"})}
    "runtime.status" {:fn runtime-status :class :read :args (ws-schema)
                      :doc "Containers of the workspace's runtime with state and health; changes nothing."}
    "runtime.down" {:fn runtime-down :class :mutate :args (ws-schema)
@@ -690,6 +736,8 @@
       (fail :unknown-op (str "no such operation " op) :known (vec (sort (keys table)))
             :hint "op.describe lists the operations"))
     (let [args (validate-args op (:args entry) args)]
-      (when (and (= :read (:class entry)) (contains? (:args entry) :ws) (not= "scenario.parse" op))
+      (when (and (contains? (:args entry) :ws)
+                 (or (str/starts-with? op "service.")   ; new families are strict, mutators too
+                     (and (= :read (:class entry)) (not= "scenario.parse" op))))
         (require-workspace! (:ws args)))
       ((:fn entry) ctx args))))

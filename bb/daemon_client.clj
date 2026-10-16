@@ -1,8 +1,8 @@
 (ns daemon-client
   "The runtime half of `bb runtime:*` and `bb estate:*` through the daemon instead of a JVM per call
  . `(runtime & args)` takes the arguments of `clojure -M -m deliberator.runtime` (`up
-  [--infra] | status | down | sync-env | adopt-taskdefs --file F`, `--ws W`) and sends the matching op
-  (`runtime.ensure|status|down|sync-env|adopt`) to the daemon of $DELIBERATOR_HOME, started by
+  [--infra] | status | down | sync-env`, `--ws W`) and sends the matching op
+  (`runtime.ensure|status|down|sync-env`) to the daemon of $DELIBERATOR_HOME, started by
   `dlb.endpoint/connect-compatible!` when it is not running; events are printed as `dlb` prints them.
   `--no-daemon`, or no daemon jar (core/target/deliberatord.jar, $DELIBERATOR_JAR), runs the one-shot
   JVM exactly as before. -> exit code 0 / 1.
@@ -42,17 +42,26 @@
                                      (fn [ev] (when-let [l (render/event-line steps ev)] (println l) (flush)))))
          (finally (client/close! channel)))))
 
+(defn call!
+  "Sends `op` with `args` to the daemon of $DELIBERATOR_HOME (started when needed), printing its events;
+  -> the result map, or throws `ex-info` with the op's error (`:babashka/exit 1`) for the task to stop on."
+  [op args]
+  (let [t (request op args)]
+    (if (:ok t)
+      (:result t)
+      (throw (ex-info (str op " failed: " (get-in t [:error :type]) ": " (get-in t [:error :message])
+                           (when-let [h (get-in t [:error :hint])] (str "\n  hint: " h)))
+                      {:babashka/exit 1 :error (:error t)})))))
+
 (defn- via-daemon [[cmd & more]]
   (let [ws (or (flag more "--ws") "default")
         [op args show] (case cmd
                          "up" ["runtime.ensure" (cond-> {:ws ws} (some #{"--infra"} more) (assoc :infra-only true)) print-status]
                          "status" ["runtime.status" {:ws ws} print-status]
                          "down" ["runtime.down" {:ws ws} (fn [r] (doseq [x (:removed r)] (println "removed" (:name x))))]
-                         "sync-env" ["runtime.sync-env" {:ws ws} (fn [_] (println "local environment follows runtime.edn"))]
-                         "adopt-taskdefs" ["runtime.adopt" {:ws ws :file (str (fs/absolutize (flag more "--file")))}
-                                           (fn [r] (println "runtime.edn:" (:path r) "roles" (sort (:roles r))))])
+                         "sync-env" ["runtime.sync-env" {:ws ws} (fn [_] (println "local environment follows runtime.edn"))])
         ;; commands that bring a runtime into being create the workspace on purpose (reading ops never do)
-        _ (when (#{"up" "sync-env" "adopt-taskdefs"} cmd) (request "workspace.open" {:ws ws}))
+        _ (when (#{"up" "sync-env"} cmd) (request "workspace.open" {:ws ws}))
         t (request op args)]
     (if (:ok t)
       (do (show (:result t)) 0)
