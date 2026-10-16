@@ -48,7 +48,7 @@
 (def two-waits "### wait one\n# @for 100ms\n\n### wait two\n# @for 100ms\n")
 
 (def expected-ops
-  ["hello" "op.describe" "workspace.show" "session.start" "session.end" "session.list" "session.current"
+  ["hello" "op.describe" "daemon.stop" "runtime.sync-env" "runtime.adopt" "workspace.show" "session.start" "session.end" "session.list" "session.current"
    "env.list" "env.describe" "env.check" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs"
    "scenario.run" "scenario.cancel" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
 
@@ -158,7 +158,47 @@
         (is (= {:type "string" :required true} (select-keys (get-in by ["scenario.run" :args :path]) [:type :required])))
         (is (= "int[]" (get-in by ["scenario.run" :args :steps :type])))
         (is (= "default" (get-in by ["session.list" :args :ws :default])))
-        (is (= ["run.started" "step.started" "line" "confirm.required" "step.finished" "run.finished"] (get-in by ["scenario.run" :events])))))))
+        (is (= ["run.started" "step.started" "line" "confirm.required" "step.finished" "run.finished"] (get-in by ["scenario.run" :events])))
+        (testing "order = the declared order of the arguments, positionals first by that order"
+          (is (every? (fn [{:keys [order args]}] (= (set order) (set (map name (keys args))))) result))
+          (is (= ["key" "title" "ws"] (get-in by ["session.start" :order])))
+          (is (= ["a" "b" "session" "ws"] (get-in by ["runs.diff" :order])))
+          (is (= ["role" "since" "follow" "tail" "ws"] (get-in by ["runtime.logs" :order])))
+          (is (= ["path" "env" "session" "steps" "confirm" "ws"] (get-in by ["scenario.run" :order])))
+          (is (= ["client" "version"] (get-in by ["hello" :order]))))))))
+
+(deftest daemon-stop-finalises-runs-and-exits
+  (with-daemon [h {:idle-minutes 0}]
+    (let [dir (io/file (str (store/home)) "daemon")]
+      (with-client [c h]
+        (ok! c "session.start" {:key "T-STOP"})
+        (let [path (write-file "long.scn" "### wait long\n# @for 60s\n")
+              runner (tc/connect (:endpoint h))
+              fut (future (tc/request runner "scenario.run" {:path path}))]
+          (try
+            (loop [n 0] (when (and (zero? (:runs (:result (ok! c "hello" {})))) (< n 100)) (Thread/sleep 50) (recur (inc n))))
+            (is (= 1 (:runs (:result (ok! c "hello" {})))) "hello counts the runs in flight")
+            (let [{:keys [result]} (ok! c "daemon.stop" {})]
+              (is (true? (:stopping result)))
+              (is (= (:pid h) (:pid result)))
+              (is (= 1 (count (:runs result)))))
+            (is (= :requested (deref (:stopped h) 10000 :timeout)) "the same stop! ran")
+            (is (not (.exists (io/file dir "endpoint"))))
+            (is (not (.exists (io/file dir "deliberatord.sock"))))
+            (let [run-dir (first (filter #(.isDirectory %) (.listFiles (io/file (str (store/home)) "workspaces" "default" "sessions" "T-STOP" "runs"))))
+                  run (store/read-edn (.toPath (io/file run-dir "run.edn")))]
+              (is (not= :running (:status run)) "the run was finalised, not left running")
+              (is (.exists (io/file run-dir "result.txt"))))
+            (finally (tc/close! runner) (future-cancel fut))))))))
+
+(deftest runtime-sync-env-writes-config-and-points-the-log-targets
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [c h]
+      (let [{:keys [result]} (ok! c "runtime.sync-env" {:ws "w-sync"})]
+        (is (.exists (io/file (:path result))))
+        (let [e (env/load "w-sync" "local")]
+          (is (= "http://localhost:4566" (get-in e [:aws :endpoint])))
+          (is (= {:container "deliberator-w-sync-service-a"} (get-in e [:targets :log/service-a]))))))))
 
 (deftest arguments-are-validated-against-the-schema
   (with-daemon [h {:idle-minutes 0}]

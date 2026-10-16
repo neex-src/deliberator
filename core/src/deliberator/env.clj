@@ -38,11 +38,12 @@
 
 ;; schema -------------------------------------------------------------------------------------
 
-(def default-local
-  "The environment written on first use of \"local\": the runtime of the local Floci, fake account,
-  and the names of the estate (`estate/`): services on 8081/8082, the container logs of the runtime's
-  `deliberator-service-*`, Postgres `deliberator`. A workspace whose runtime.edn moved the host ports
-  edits its own copy (endpoint, db/main)."
+(defn local-for
+  "The environment written on first use of \"local\" in workspace `ws`: the runtime of the local Floci,
+  fake account, and the names of the estate (`estate/`): services on 8081/8082, the container logs of
+  the workspace's `deliberator-<ws>-service-*`, Postgres `deliberator`. A workspace whose runtime.edn
+  moved the host ports gets its copy fixed by `runtime/sync-local-env!` (endpoint, db/main, log targets)."
+  [ws]
   {:name "local" :kind :local
    :description "Local runtime and the estate."
    :aws {:endpoint "http://localhost:4566" :region "eu-central-1" :account "000000000000"
@@ -53,11 +54,15 @@
              :queue/b-events "estate-b-events"
              :table/messages "estate-messages"
              :bus/main "estate-bus"
-             :log/service-a {:container "deliberator-service-a"}
-             :log/service-b {:container "deliberator-service-b"}
+             :log/service-a {:container (store/container-name ws "service-a")}
+             :log/service-b {:container (store/container-name ws "service-b")}
              :log/logger {:cloudwatch "/aws/lambda/estate-logger"}
              :db/main "jdbc:postgresql://localhost:5432/deliberator"
              :function/logger "estate-logger"}})
+
+(def default-local
+  "`(local-for \"default\")`: the record of the default workspace; tests build on it."
+  (local-for "default"))
 
 (def ^:private top-keys #{:name :kind :description :read-only :aws :targets})
 (def ^:private local-aws-keys #{:endpoint :region :account :credentials})
@@ -142,7 +147,7 @@
   (let [n (store/safe-name name)
         f (env-file ws n)
         raw (or (store/read-edn f)
-                (when (= n "local") (store/write-edn! f default-local) default-local)
+                (when (= n "local") (let [e (local-for ws)] (store/write-edn! f e) e))
                 (throw (ex-info (str "no such environment " n ", known: " (pr-str (names ws)))
                                 {:type :env/not-found :name n :known (names ws)})))
         env (validate raw)]

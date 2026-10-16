@@ -75,6 +75,12 @@
 (defn ws-name [ws]
   (safe-name (if (map? ws) (:name ws) ws)))
 
+(defn container-name
+  "The runtime container name of `role` (a role label such as \"floci\" or \"service-a\") in workspace
+  `ws`: `deliberator-<ws>-<role>`, so two workspaces on one host never collide by name."
+  [ws role]
+  (str "deliberator-" (ws-name ws) "-" role))
+
 (defn path
   "`<home>/workspaces/<ws>/parts...` as a Path."
   ^Path [ws & parts]

@@ -5,7 +5,7 @@
 
   Shape: `{:podman {:endpoint \"unix:///…\"} :network \"deliberator\" :containers {<role> spec}}`.
   A spec: `:image`, `:ports {container-port host-port}` (published on `:host-ip`, default
-  127.0.0.1), `:env`, `:command`, `:name` (default `deliberator-<role>`), `:mounts [{:source
+  127.0.0.1), `:env`, `:command`, `:name` (default `deliberator-<ws>-<role>`), `:mounts [{:source
   :destination :options}]`, `:init <dir>` (mounted at `/docker-entrypoint-initdb.d`, relative to
   the workspace directory), `:podman-socket true|\"/path\"` (mounts the socket of the Podman that
   runs the container at `/var/run/docker.sock`; the path is taken from the endpoint, or from
@@ -103,6 +103,11 @@
   [k]
   (str/replace (subs (str k) 1) "/" "-"))
 
+(defn- configured-name
+  "The container name of `role` in `cfg`: its `:name` or `deliberator-<ws>-<role>`."
+  [ws cfg role]
+  (or (get-in cfg [:containers role :name]) (store/container-name ws (role-name role))))
+
 (defn- template [s {:keys [ports network name role]}]
   (-> (str s)
       (str/replace #"\{\{port:(\d+)\}\}" (fn [[_ cp]] (str (get ports (Long/parseLong cp) cp))))
@@ -141,7 +146,7 @@
                     {:type :runtime/invalid-config :role role})))
   (let [rn (role-name role)
         network (:network cfg)
-        name (or (:name spec) (str "deliberator-" rn))
+        name (or (:name spec) (store/container-name ws rn))
         ports (into (sorted-map) (:ports spec))
         ctx {:ports ports :network network :name name :role rn}
         jar (when (:jar spec) (jar-file cfg role spec))
@@ -505,6 +510,8 @@
             (hp :floci 4566) (assoc-in [:aws :endpoint] (str "http://localhost:" (hp :floci 4566)))
             (and (hp :postgres 5432) (string? (get-in e [:targets :db/main])))
             (update-in [:targets :db/main] #(db-url % (hp :postgres 5432) (get-in cfg [:containers :postgres :env])))
+            (get-in cfg [:containers :service/a]) (assoc-in [:targets :log/service-a] {:container (configured-name ws cfg :service/a)})
+            (get-in cfg [:containers :service/b]) (assoc-in [:targets :log/service-b] {:container (configured-name ws cfg :service/b)})
             (hp :service/a 8081) (assoc-in [:targets :service/a] (str "http://localhost:" (hp :service/a 8081)))
             (hp :service/b 8082) (assoc-in [:targets :service/b] (str "http://localhost:" (hp :service/b 8082))))]
     (env/save! ws e)))
@@ -525,6 +532,14 @@
     (store/write-edn! (config-path ws) cfg)
     (sync-local-env! ws cfg)
     cfg))
+
+(defn sync-env!
+  "Creates `runtime.edn` when absent (the default config) and points the workspace's `local`
+  environment at its host ports and container names. -> `{:ws :path}` of the runtime.edn."
+  [ws]
+  (load-config! ws nil)
+  (sync-local-env! ws (read-config ws))
+  {:ws (store/ws-name ws) :path (str (config-path ws))})
 
 ;; ---------------------------------------------------------------------------------------------
 ;; Command line
@@ -551,9 +566,7 @@
                  "up" (print-status (ensure! ws (assoc opts :infra-only (boolean (some #{"--infra"} more)))))
                  "status" (print-status (status ws opts))
                  "down" (doseq [r (:removed (down! ws opts))] (println "removed" (:name r)))
-                 "sync-env" (do (load-config! ws nil)
-                                (sync-local-env! ws (read-config ws))
-                                (println "local environment follows runtime.edn"))
+                 "sync-env" (do (sync-env! ws) (println "local environment follows runtime.edn"))
                  "adopt-taskdefs" (let [f (second (drop-while #(not= "--file" %) more))
                                         cfg (adopt-taskdefs! ws (clojure.edn/read-string (slurp f)))]
                                     (println "runtime.edn:" (config-path ws) "roles" (sort (map str (keys (:containers cfg))))))

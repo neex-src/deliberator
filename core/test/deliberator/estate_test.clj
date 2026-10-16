@@ -60,7 +60,7 @@
         (is (some #(and (= "/app/app.jar" (:destination %)) (= (str jar) (:source %)) (some #{"ro"} (:options %))) (:mounts d)))
         (is (= {:http "/actuator/health" :port 8081} (:health d)))
         (is (= "service-a" (:role d)))
-        (is (= "deliberator-service-a" (:name d))))
+        (is (= "deliberator-w-service-a" (:name d))))
       (testing "secret references are in the spec, their values never in the environment"
         (is (= 2 (count (:secrets d))))
         (is (not (contains? (:env d) "API_KEY"))))
