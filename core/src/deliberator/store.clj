@@ -59,13 +59,17 @@
               (str (System/getProperty "user.home") "/.local/share/deliberator"))]
     (.toAbsolutePath (.normalize (.toPath (io/file (str h)))))))
 
+(def max-name-length "Longest workspace name, session key or run id." 100)
+
 (defn safe-name
   "Validates a workspace name or session key (no path separators, no leading dot); returns it as
   a string."
   [x]
   (let [s (if (keyword? x) (name x) (str x))]
-    (when-not (re-matches #"[A-Za-z0-9_][A-Za-z0-9._-]*" s)
-      (throw (ex-info (str "invalid name: " (pr-str x)) {:type :store/invalid-name :name x})))
+    (when-not (and (re-matches #"[A-Za-z0-9_][A-Za-z0-9._-]*" s) (<= (count s) max-name-length))
+      (throw (ex-info (str "invalid name: " (pr-str (if (> (count s) 80) (str (subs s 0 80) "...") x)))
+                      (cond-> {:type :store/invalid-name :name (if (> (count s) 80) (subs s 0 80) x)}
+                        (> (count s) max-name-length) (assoc :hint (str "at most " max-name-length " characters"))))))
     s))
 
 (defn ws-name [ws]

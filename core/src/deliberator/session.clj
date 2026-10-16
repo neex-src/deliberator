@@ -71,12 +71,18 @@
 
 (def ^:private stamp (.withZone (DateTimeFormatter/ofPattern "yyyyMMdd-HHmmss") ZoneOffset/UTC))
 
+(def ^:private max-scenario-part 64)
+
 (defn run-dir!
   "Allocates and creates a fresh run directory in the session; returns its Path."
   [ws key scenario-name]
   (let [runs (.resolve (dir ws key) "runs")
-        scn (let [s (str/replace (str scenario-name) #"[^A-Za-z0-9._-]+" "-")]
-              (if (str/blank? s) "scenario" s))
+        scn (let [full (str scenario-name)
+                  s (str/replace full #"[^A-Za-z0-9._-]+" "-")
+                  s (if (str/blank? s) "scenario" s)]
+              (if (<= (count s) max-scenario-part)
+                s
+                (str (subs s 0 (- max-scenario-part 9)) "-" (subs (store/sha256 (.getBytes full "UTF-8")) 0 8))))
         base (str (.format stamp (store/now)) "-" scn)]
     (mkdirs runs)
     (loop [n 1]
