@@ -92,9 +92,10 @@ class AuditDaemonTest {
         val st = d.launcher.stopDaemon(d.home)
         assertTrue(st.running && st.gone)
         assertEquals("the stop answer names the cancelled run", 1, st.runs)
-        val e = try { call.terminal.get(15, TimeUnit.SECONDS); null } catch (x: ExecutionException) { x.cause as DaemonException }
-        assertNotNull("the run's stream has no terminal answer, only a closed connection", e)
-        assertEquals("daemon/closed", e!!.type)
+        // the stop drains the open streams: the client gets the run's own terminal, status cancelled (not daemon/closed)
+        val t = call.terminal.get(15, TimeUnit.SECONDS)
+        assertTrue(t.raw, t.ok)
+        assertEquals("cancelled", t.resultObject().get("status").asString)
         val results = Files.walk(d.home).use { s -> s.filter { it.fileName.toString() == "result.txt" && it.toString().contains(runId) }.toList() }
         assertEquals("the daemon finalised the run on disk: $results", 1, results.size)
         assertTrue(Files.readString(results[0]).contains("RUN cancelled"))

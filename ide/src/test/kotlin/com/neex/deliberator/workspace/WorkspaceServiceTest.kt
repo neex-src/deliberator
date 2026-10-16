@@ -61,6 +61,7 @@ class WorkspaceServiceTest : BasePlatformTestCase() {
 
     fun testTheDirectoryConventionIsConfirmedByTheDaemon() {
         val client = daemon.client
+        daemon.openWorkspace("w1")
         val shown = client.call("workspace.show", args("ws" to "w1")).resultObject().get("path").asString
         // <workspace directory>/project is the window of w1 ...
         assertEquals("w1", WorkspaceService.conventionWs("$shown/project", client))
@@ -70,6 +71,7 @@ class WorkspaceServiceTest : BasePlatformTestCase() {
     }
 
     fun testSessionStartAndEndAreReflectedInTheModel() {
+        daemon.openWorkspace("w2")
         svc.bind("w2")
         assertEquals("w2", svc.ws)
         val seen = mutableListOf<WorkspaceModel>()
