@@ -234,3 +234,42 @@
      :steps (vec (map-indexed
                   (fn [k [hi end]] (parse-step bs s (inc k) lines hi end path kinds))
                   (map vector heads ends)))}))
+
+(defn describe
+  "Parse for editors (`scenario.parse`): `{:header {:env :vars [{:name :value :line}]} :steps [{:index
+  :kind :verb :target :name :line :end-line :directives [{:name :value :line}] :body-lines :body-line
+  :body-file}] :errors [{:line :message}]}` over `text` with the registered kinds. A syntax error is data,
+  not a throw: `:errors` holds it and `:steps` is empty (the parser stops at the first error).
+  `:body-lines` counts the inline body's lines, `:body-line` is its first line (1-based);
+  `:end-line` is the line before the next step (or the last line). `path` only resolves `# @body`."
+  [text & {:keys [path kinds]}]
+  (try
+    (let [bs (->bytes text)
+          s (String. bs StandardCharsets/UTF_8)
+          total (count (str/split-lines s))
+          total (if (str/ends-with? s "\n") total (max total 1))
+          line-at (fn [off] (inc (count (filter #(= \newline %)
+                                                (String. bs 0 (int off) StandardCharsets/ISO_8859_1)))))
+          {:keys [header steps]} (parse bs :path path :kinds kinds)
+          ends (conj (mapv #(dec (:line %)) (rest steps)) (max total (or (:line (last steps)) 1)))]
+      {:header {:env (:env header)
+                :vars (mapv #(select-keys % [:name :value :line]) (:vars header))}
+       :steps (vec (map-indexed
+                    (fn [i st]
+                      (let [[from to] (:body-range st)]
+                        (cond-> {:index (:n st) :kind (:kind st) :verb (:verb st) :target (:target st)
+                                 :name (:name st) :line (:line st) :end-line (nth ends i)
+                                 :directives (mapv #(select-keys % [:name :value :line]) (:directives st))
+                                 :body-lines (if from
+                                               (count (str/split-lines (String. bs (int from) (int (- to from)) StandardCharsets/ISO_8859_1)))
+                                               0)}
+                          from (assoc :body-line (line-at from))
+                          (:body-file st) (assoc :body-file (:body-file st)))))
+                    steps))
+       :errors []})
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :scenario/parse (:type (ex-data e)))
+        (let [d (ex-data e)]
+          {:header nil :steps []
+           :errors [{:line (:line d) :message (or (:message d) (ex-message e))}]})
+        (throw e)))))

@@ -129,3 +129,26 @@
   "Milliseconds until `(:deadline ctx)`, the attempt's timeout."
   [ctx]
   (max 0 (- (.toEpochMilli ^java.time.Instant (:deadline ctx)) (System/currentTimeMillis))))
+
+(defn describe-kinds
+  "The registry as data for the IDE and agents (`scenario.kinds`): a vector sorted by kind of
+  `{:kind :verbs :verb-optional :target :directives :facts :capture-roots :concurrent :default-timeout-ms}`.
+  `:verbs` are the words (sorted); `:verb-optional` is true when the verb may be absent. A directive is
+  `{:name :hint :type :values :repeatable :doc :engine}` (`:type` repeats the hint: the registry declares
+  no other type; `:engine` marks the directives every kind has); a fact is `{:name :type}` with the
+  implicit `elapsed`; a trailing `*` in a name is a family."
+  []
+  (let [engine (set (map :name engine-directives))]
+    (vec (for [[_ k] (sort-by key (registry))]
+           {:kind (:kind k)
+            :verbs (vec (sort (remove nil? (:verbs k))))
+            :verb-optional (or (nil? (:verbs k)) (contains? (:verbs k) nil))
+            :target (name (or (:target k) :optional))
+            :directives (vec (for [d (directive-specs k)]
+                               {:name (:name d) :hint (:hint d) :type (:hint d) :values (vec (:values d))
+                                :repeatable (boolean (:repeatable? d)) :doc (:doc d)
+                                :engine (contains? engine (:name d))}))
+            :facts (vec (for [f (fact-specs k)] {:name (:name f) :type (name (:type f))}))
+            :capture-roots (vec (sort (:capture-roots k)))
+            :concurrent (boolean (:concurrent? k))
+            :default-timeout-ms (:default-timeout-ms k)}))))

@@ -36,7 +36,17 @@
     scenario.run path* env session steps confirm ws -> {status steps failed checks failed-checks run-id paths}
                                                       [run.started step.started line confirm.required step.finished run.finished]
     scenario.cancel run-id*                        -> {run-id cancelled}
-    runs.list ws session limit                     -> {session runs}
+    scenario.kinds                                 -> [{kind verbs verb-optional target directives facts capture-roots concurrent default-timeout-ms}]
+    scenario.parse path text ws                    -> {header steps errors}   (a syntax error is data in errors, not an op error)
+    runs.list ws session scenario limit            -> {session runs}
+    repo.attach path* kind ws                      -> {name path kind attached-at}
+    repo.detach name* ws                           -> {removed}
+    repo.list ws                                   -> [{name path kind attached-at}]
+    logs.fetch target* env since for filter session ws -> {path lines bytes sha target source}
+    logs.match path* markers ws                    -> {lines [{n marker-id}] path scanned}
+    marker.add file* line* logger ws               -> [{id file line logger}]   (the marker list after the change)
+    marker.remove file* line* ws                   -> [{id file line logger}]
+    marker.list file ws                            -> [{id file line logger}]
     runs.show run* ws session                      -> {run paths}
     runs.render run* ws session                    -> {paths trailer}
     runs.diff a* b* ws session                     -> {equal diff a b}
@@ -52,7 +62,11 @@
             [clojure.string :as str]
             [deliberator.aws :as aws]
             [deliberator.env :as env]
+            [deliberator.logfetch :as logfetch]
+            [deliberator.markers :as markers]
+            [deliberator.repo :as repo]
             [deliberator.runtime :as runtime]
+            [deliberator.scenario.kinds :as kinds]
             [deliberator.scenario.engine :as engine]
             [deliberator.scenario.parse :as parse]
             [deliberator.scenario.render :as render]
@@ -372,16 +386,70 @@
      :finished (:finished r) :scenario (get-in r [:scenario :path]) :env (:env r)
      :steps (get-in r [:summary :steps]) :failed (get-in r [:summary :failed]) :path (str dir)}))
 
-(defn- runs-list [_ {:keys [limit] :as args}]
+(defn scenario-matches?
+  "Does the run's scenario path `p` denote `want`: the same path, a path suffix (`estate/scenarios/order.scn`),
+  or a name (`order.scn` or `order`)?"
+  [want p]
+  (let [want (str/replace (str want) #"/+$" "")
+        p (str p)
+        base (last (str/split p #"/"))]
+    (boolean (and (not (str/blank? want)) p
+                  (or (= want p)
+                      (str/ends-with? p (str "/" want))
+                      (and (not (str/includes? want "/"))
+                           (or (= want base) (= want (str/replace base #"\.scn$" "")))))))))
+
+(defn- runs-list [_ {:keys [limit scenario] :as args}]
   (let [ws (ws-of args)
         sess (session-key ws args)
         d (runs-dir ws sess)
-        dirs (if (exists? d)
+        rows (if (exists? d)
                (with-open [st (Files/list d)]
                  (->> (iterator-seq (.iterator st)) (filter #(exists? (.resolve ^Path % "run.edn")))
-                      (sort-by #(str (.getFileName ^Path %))) reverse (take limit) vec))
+                      (sort-by #(str (.getFileName ^Path %))) reverse
+                      (map run-row)
+                      (filter #(or (nil? scenario) (scenario-matches? scenario (:scenario %))))
+                      (take limit) vec))
                [])]
-    {:session sess :runs (mapv run-row dirs)}))
+    {:session sess :runs rows}))
+
+;; handlers: IDE support (kinds, parse, repositories, logs, markers) ------------------------------
+
+(defn- scenario-kinds [_ _] (kinds/describe-kinds))
+
+(defn- scenario-parse [_ {:keys [path text] :as args}]
+  (when-not (or path text)
+    (fail :bad-args "scenario.parse needs path or text" :hint "pass a scenario file path, or text for an unsaved buffer"))
+  (let [ws (ws-of args)
+        file (when path
+               (if (or text (.isAbsolute (io/file path)))
+                 path
+                 (resolve-scenario ws (session-key ws args) path)))
+        content (or text (slurp (io/file file) :encoding "UTF-8"))]
+    (parse/describe content :path file :kinds (kinds/registry))))
+
+(defn- repo-attach [_ {:keys [path kind] :as args}] (repo/attach! (ws-of args) path :kind kind))
+(defn- repo-detach [_ {:keys [name] :as args}] {:removed (repo/detach! (ws-of args) name)})
+(defn- repo-list [_ args] (repo/list (ws-of args)))
+
+(defn- logs-fetch [_ {:keys [target env since for filter] :as args}]
+  (let [ws (ws-of args)]
+    (logfetch/fetch! ws (or env "local") target :session (session-key ws args) :since since :for for :filter filter)))
+
+(defn- marker-add [_ {:keys [file line logger] :as args}] (markers/add! (ws-of args) file line :logger logger))
+(defn- marker-remove [_ {:keys [file line] :as args}] (markers/remove! (ws-of args) file line))
+(defn- marker-list [_ {:keys [file] :as args}] (markers/list (ws-of args) :file file))
+
+(defn- logs-match [_ {:keys [path markers] :as args}]
+  (let [ws (ws-of args)
+        p (if (.isAbsolute (io/file path))
+            (io/file path)
+            (io/file (str (.resolve (session/dir ws (session-key ws args)) "logs")) path))
+        _ (when-not (.isFile p)
+            (fail :logs/not-found (str "no log file " p) :hint "a fetched log's path from logs.fetch; relative paths are looked up in the session's logs/"))
+        ms (cond->> (markers/list ws) (seq markers) (clojure.core/filter #(contains? (set markers) (:id %))))
+        lines (str/split (slurp p :encoding "UTF-8") #"\r?\n" -1)]
+    {:lines (markers/match-lines ms lines) :path (str p) :scanned (count lines)}))
 
 (defn- run-paths [^Path dir]
   {:run (str dir) :run-edn (str (.resolve dir "run.edn")) :result (str (.resolve dir "result.txt"))})
@@ -502,9 +570,50 @@
    "scenario.cancel" {:fn scenario-cancel :class :mutate
                       :doc "Cancels a running scenario by run id; the scenario.run request ends with status cancelled."
                       :args {:run-id {:type :string :required true :doc "run id from the run.started event"}}}
+   "scenario.kinds" {:fn scenario-kinds :class :read :args {}
+                     :doc "The registered step kinds as data: verbs, target rule, directives (engine-owned ones marked), facts, capture roots, concurrency. Completion and documentation are generated from it."}
+   "scenario.parse" {:fn scenario-parse :class :read
+                     :doc "Parses a scenario with the daemon's parser: header, steps (kind, verb, target, name, lines, directives, body size) and errors. A syntax error is returned in errors (steps empty), not raised. With text, an unsaved buffer is parsed; path then only resolves # @body."
+                     :args (ws-schema :path {:type :string :doc "scenario file; relative paths are looked up in the session's scenarios/"}
+                                      :text {:type :string :doc "scenario text (an unsaved buffer); wins over the file's content"})}
+   "repo.attach" {:fn repo-attach :class :mutate
+                  :doc "Records an existing checkout in the workspace (workspace.edn repositories): name = directory name, kind detected (gradle, maven, plain). Files are untouched."
+                  :args (ws-schema :path {:type :string :required true :doc "absolute path of the repository directory"}
+                                   :kind {:type :string :doc "gradle, maven or plain; detected when absent"})}
+   "repo.detach" {:fn repo-detach :class :mutate
+                  :doc "Removes an attached repository's entry from the workspace; files untouched."
+                  :args (ws-schema :name {:type :string :required true :doc "repository name from repo.list"})}
+   "repo.list" {:fn repo-list :class :read :args (ws-schema)
+                :doc "The repositories attached to the workspace, in attach order."}
+   "logs.fetch" {:fn logs-fetch :class :mutate
+                 :doc "Fetches a log target (container, file or CloudWatch group of the environment) into the session as logs/<target>-<ts>.log, hard-linked from the raw blobs. Without for: one shot; with for: also listens that long. filter keeps whole matching entries."
+                 :args (ws-schema :target {:type :string :required true :doc "environment target such as log/service-a, or an absolute file path"}
+                                  :env {:type :string :doc "environment name; default local"}
+                                  :since {:type :string :doc "ISO-8601 instant or a duration ago like 10m; default all (CloudWatch: 15m)"}
+                                  :for {:type :string :doc "keep listening this long, e.g. 5s"}
+                                  :filter {:type :string :doc "text or /regex/ an entry must match"}
+                                  :session {:type :string :doc "session key; default the current session"})}
+   "logs.match" {:fn logs-match :class :read
+                 :doc "Which lines of a fetched log carry a marked logger and line (logback pattern logger:line - msg, or a stack frame at pkg.Class.m(File.java:N)); pure over the file."
+                 :args (ws-schema :path {:type :string :required true :doc "log file, absolute or relative to the session's logs/"}
+                                  :markers {:type :strings :doc "marker ids to match; default all"}
+                                  :session {:type :string :doc "session key for a relative path"})}
+   "marker.add" {:fn marker-add :class :mutate
+                 :doc "Marks a source line (idempotent per file and line); answers all markers."
+                 :args (ws-schema :file {:type :string :required true :doc "source file path"}
+                                  :line {:type :int :required true :doc "1-based line"}
+                                  :logger {:type :string :doc "the class the IDE derives, e.g. com.acme.ServiceA"})}
+   "marker.remove" {:fn marker-remove :class :mutate
+                    :doc "Removes the marker at file and line; answers the remaining markers."
+                    :args (ws-schema :file {:type :string :required true :doc "source file path"}
+                                     :line {:type :int :required true :doc "1-based line"})}
+   "marker.list" {:fn marker-list :class :read
+                  :doc "The markers of the workspace, by file and line."
+                  :args (ws-schema :file {:type :string :doc "only this file"})}
    "runs.list" {:fn runs-list :class :read
-                :doc "The runs of a session, newest first."
+                :doc "The runs of a session, newest first; scenario keeps the runs of one scenario."
                 :args (ws-schema :session {:type :string :doc "session key; default the current session"}
+                                 :scenario {:type :string :doc "scenario path, path suffix or name (order, order.scn)"}
                                  :limit {:type :int :default 30 :doc "at most this many runs"})}
    "runs.show" {:fn runs-show :class :read
                 :doc "run.edn of a run (scenario, vars, per-step summaries) and its paths."

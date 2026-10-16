@@ -50,7 +50,7 @@
 (def expected-ops
   ["hello" "op.describe" "daemon.stop" "runtime.sync-env" "runtime.adopt" "workspace.show" "session.start" "session.end" "session.list" "session.current"
    "env.list" "env.describe" "env.check" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs"
-   "scenario.run" "scenario.cancel" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
+   "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "repo.attach" "repo.detach" "repo.list" "logs.fetch" "logs.match" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
 
 ;; --- lifecycle ----------------------------------------------------------------------------------
 
