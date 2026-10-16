@@ -15,7 +15,7 @@
             [clojure.test :as t :refer [deftest is testing]]
             [deliberator.aws :as aws]
             [deliberator.env :as env]
-            [deliberator.floci-util :refer [deftest-floci]]
+            [deliberator.floci-util :as fu :refer [deftest-floci]]
             [deliberator.podman :as podman]
             [deliberator.runtime :as runtime]
             [deliberator.store :as store]
@@ -95,7 +95,7 @@
 
 (deftest-floci resolve-secrets-by-arn-and-name
   (tu/with-temp-home
-    (let [local (env/load "w" "local")
+    (let [local (do (env/save! "w" (fu/local-env)) (env/load "w" "local"))
           id (subs (str (UUID/randomUUID)) 0 8)
           p (str "/dlbtest/" id "/param")
           s (str "dlbtest/" id "/secret")]

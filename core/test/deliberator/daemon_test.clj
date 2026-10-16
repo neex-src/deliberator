@@ -1,14 +1,14 @@
 (ns deliberator.daemon-test
   "Layer 3: the daemon in this JVM on a temporary home (unix socket and --tcp), driven by the tiny
   test client. Scenarios use the `wait` and `logs` (file) kinds, so no runtime is needed except for the
-  tests that say so (they skip when Floci on :4566 is down)."
+  tests that say so (they skip when the test Floci (floci-util/url) is down)."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [deliberator.aws :as aws]
             [deliberator.daemon :as daemon]
             [deliberator.env :as env]
-            [deliberator.floci-util :refer [deftest-floci]]
+            [deliberator.floci-util :as fu :refer [deftest-floci]]
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.test-client :as tc])
@@ -207,6 +207,7 @@
 
 (deftest-floci env-check-compares-the-account
   (with-daemon [h {:idle-minutes 0}]
+    (env/save! "w1" (fu/local-env))
     (with-client [c h]
       (let [r (:result (ok! c "env.check" {:ws "w1" :name "local"}))]
         (is (true? (:ok r)))
@@ -400,7 +401,7 @@
 (defn remote-env [& {:as over}]
   (env/validate (merge {:name "dlbdev" :kind :remote
                         :aws {:profile "dlbtest" :region "eu-central-1" :account "000000000000"
-                              :endpoint "http://localhost:4566"}
+                              :endpoint fu/url}
                         :targets {:queue/q (str "dlbtest-d-" (subs (str (UUID/randomUUID)) 0 8))}}
                        over)))
 
@@ -415,7 +416,7 @@
       (let [e (remote-env)
             _ (env/save! "default" e)
             q (:queue/q (:targets e))]
-        (is (not (aws/error? (aws/invoke! {:ws "default"} env/default-local :sqs :CreateQueue {:QueueName q}))))
+        (is (not (aws/error? (aws/invoke! {:ws "default"} (fu/local-env) :sqs :CreateQueue {:QueueName q}))))
         (let [h (daemon/start! {:idle-minutes 0})]
           (try
             (with-client [c h]
@@ -458,7 +459,7 @@
   (binding [store/*home* (short-home)]
     (with-profile
       (env/save! "default" (remote-env :aws {:profile "dlbtest" :region "eu-central-1" :account "111111111111"
-                                             :endpoint "http://localhost:4566"}))
+                                             :endpoint fu/url}))
       (let [h (daemon/start! {:idle-minutes 0})]
         (try
           (with-client [c h]
