@@ -60,6 +60,8 @@
       (fn [text]
         (-> (replace-all text (concat run-pairs var-pairs fact-pairs))
             (str/replace uuid-re "<uuid>")
+            ;; SQS hashes the attribute values, which carry the run's ids: it changes with them
+            (str/replace #"(?<=\"MD5OfMessageAttributes\":\")[0-9a-f]{32}" "<md5>")
             (str/replace instant-re "<instant>"))))))
 
 (defn- show [v]
