@@ -67,11 +67,11 @@
 
 ;; --- sources: each pushes raw lines onto a queue; ::end closes the stream --------------------------
 
-(defn- ->path ^Path [p] (Paths/get (str p) (make-array String 0)))
+(defn ->path ^Path [p] (Paths/get (str p) (make-array String 0)))
 
 (defn- put-lines! [^LinkedBlockingQueue q lines] (doseq [l lines] (.put q l)))
 
-(defn- file-source
+(defn file-source
   "Polls `path` from `offset`. Returns a stop fn; pushes lines, never ends by itself."
   [path offset ^LinkedBlockingQueue q]
   (let [p (->path path) stop (atom false)]
@@ -103,14 +103,17 @@
   (try (boolean (get-in (podman/inspect client name) [:State :Running]))
        (catch Throwable _ false)))
 
-(defn- container-source
+(defn podman-client [ctx]
+  (let [cfg (runtime/read-config (:ws ctx))]
+    (podman/client (get-in cfg [:podman :endpoint] (podman/default-endpoint)))))
+
+(defn container-source
   "Follows the container's logs. When the stream ends or breaks after the first attach (the container
   stopped), pushes `{:gap text}` and waits for the container to run again (inspect every 500 ms), then
   re-attaches with `since` = the last line seen (lines at or before it are skipped); pushes
   `{:gap text}` again when it is back. Only an error of the FIRST attach is pushed as a Throwable."
   [ctx name since ^LinkedBlockingQueue q]
-  (let [cfg (runtime/read-config (:ws ctx))
-        client (podman/client (get-in cfg [:podman :endpoint] (podman/default-endpoint)))
+  (let [client (podman-client ctx)
         closer (atom nil) stop (atom false)]
     (doto (Thread.
            ^Runnable
@@ -150,25 +153,32 @@
   (when-let [f (first filters-raw)]
     (let [s (str/trim f)] (when (re-matches #"[A-Za-z0-9_]+" s) s))))
 
-(defn- cw-source [ctx group since pattern ^LinkedBlockingQueue q]
-  (let [stop (atom false)
-        call (fn [req] (let [r (aws/invoke! {:ws (:ws ctx) :session (:session ctx)} (:env ctx) :logs :FilterLogEvents req)]
-                         (if (aws/error? r)
-                           (throw (ex-info (str "FilterLogEvents on " group ": " (or (:message r) (:code r) "failed"))
-                                           {:type :logs/cloudwatch :hint (:hint r) :aws r}))
-                           r)))]
+(defn- cw-call [ctx group req]
+  (let [r (aws/invoke! {:ws (:ws ctx) :session (:session ctx)} (:env ctx) :logs :FilterLogEvents req)]
+    (if (aws/error? r)
+      (throw (ex-info (str "FilterLogEvents on " group ": " (or (:message r) (:code r) "failed"))
+                      {:type :logs/cloudwatch :hint (:hint r) :aws r}))
+      r)))
+
+(defn cw-events
+  "All events of `group` from `start` (epoch ms) on, paged, as given by FilterLogEvents."
+  [ctx group start pattern]
+  (loop [token nil acc []]
+    (let [r (cw-call ctx group (cond-> {:logGroupName group :startTime start}
+                                 pattern (assoc :filterPattern pattern)
+                                 token (assoc :nextToken token)))
+          acc (into acc (:events r))]
+      (if-let [t (:nextToken r)] (recur t acc) acc))))
+
+(defn cw-source [ctx group since pattern ^LinkedBlockingQueue q]
+  (let [stop (atom false)]
     (doto (Thread.
            ^Runnable
            (fn []
              (try
                (loop [start (.toEpochMilli ^Instant since) seen #{}]
                  (when-not @stop
-                   (let [events (loop [token nil acc []]
-                                  (let [r (call (cond-> {:logGroupName group :startTime start}
-                                                  pattern (assoc :filterPattern pattern)
-                                                  token (assoc :nextToken token)))
-                                        acc (into acc (:events r))]
-                                    (if-let [t (:nextToken r)] (recur t acc) acc)))
+                   (let [events (cw-events ctx group start pattern)
                          fresh (remove #(contains? seen (:eventId %)) (sort-by :timestamp events))]
                      (doseq [e fresh]
                        (put-lines! q (str/split (str/replace (:message e) #"\n$" "") #"\n")))
@@ -183,24 +193,88 @@
 
 ;; --- the kind ---------------------------------------------------------------------------------------
 
-(defn- resolve-source [ctx step]
-  (let [t (:target step)
-        _ (when (str/blank? t)
+(defn resolve-target-source
+  "The source map `{:container n}|{:file p}|{:cloudwatch g}` of target key `t`, resolved with `resolve`
+  (`(f \"log/service-a\")`); `where` names the environment in hints."
+  [resolve t where]
+  (let [_ (when (str/blank? t)
             (throw (ex-info "logs needs a log target" {:type :logs/no-target :hint "### logs log/<name>"})))
-        v ((:resolve-target ctx) t)]
+        v (resolve t)]
     (cond (string? v) {:file v}
           (and (map? v) (or (:container v) (:file v) (:cloudwatch v))) v
           :else (throw (ex-info (str "target " t " is not a log target: " (pr-str v))
                                 {:type :logs/bad-target
-                                 :hint (str "environment " (c/env-name ctx) " must map it to {:container n}, {:file p} or {:cloudwatch group}")})))))
+                                 :hint (str "environment " where " must map it to {:container n}, {:file p} or {:cloudwatch group}")})))))
 
-(defn- file-size [path]
+(defn- resolve-source [ctx step]
+  (resolve-target-source (:resolve-target ctx) (:target step) (c/env-name ctx)))
+
+(defn file-size [path]
   (let [p (->path path)] (if (Files/isRegularFile p (make-array java.nio.file.LinkOption 0)) (Files/size p) 0)))
 
 (defn arm [ctx step]
   (let [src (resolve-source ctx step)]
     {:at (Instant/now) :source src
      :offset (when (:file src) (file-size (:file src)))}))
+
+(defn snapshot
+  "One-shot read of `source`: a vector of its lines now. File: the whole file. Container: its logs from
+  `since` (Instant or nil = all) without following. CloudWatch: the events from `since` (required),
+  paged, split into lines; `pattern` is the optional filterPattern."
+  [ctx source since pattern]
+  (cond
+    (:file source) (let [p (->path (:file source))]
+                     (if (Files/isRegularFile p (make-array java.nio.file.LinkOption 0))
+                       (let [parts (str/split (c/text (Files/readAllBytes p)) #"\n" -1)
+                             parts (if (= "" (last parts)) (butlast parts) parts)]
+                         (mapv #(str/replace % #"\r$" "") parts))
+                       []))
+    (:container source) (vec (map :text (podman/logs (podman-client ctx) (:container source) :since since)))
+    :else (vec (mapcat #(str/split (str/replace (:message %) #"\n$" "") #"\n")
+                       (sort-by :timestamp (cw-events ctx (:cloudwatch source) (.toEpochMilli ^Instant since) pattern))))))
+
+(defn start-source
+  "Starts the source of `source` feeding queue `q`; returns its stop fn. `offset` (file) and `at`
+  (container, CloudWatch: an Instant) say where it starts; `pattern` is the CloudWatch filterPattern."
+  [ctx source offset at pattern q]
+  (cond (:file source) (file-source (:file source) offset q)
+        (:container source) (container-source ctx (:container source) at q)
+        :else (cw-source ctx (:cloudwatch source) at pattern q)))
+
+(defn drain!
+  "Consumes queue `q` until epoch-ms `end` or `(cancelled?)`: groups lines into entries, emits (calls
+  `line!` for) the entries matching every filter and the gap lines, throws `:logs/source` with `hint` when
+  the source failed. Returns `{:out [emitted lines] :raw [every source line] :gaps n :gap-lines n}`."
+  [^LinkedBlockingQueue q end cancelled? filters line! hint]
+  (let [out (volatile! []) raw (volatile! []) pending (volatile! []) gaps (volatile! 0) gap-lines (volatile! 0)
+        emit! (fn [entry]
+                (when (entry-matches? filters entry)
+                  (doseq [l entry] (line! l) (vswap! out conj l))))
+        flush! (fn [] (when (seq @pending) (emit! @pending) (vreset! pending [])))]
+    (loop []
+      (let [left (- end (System/currentTimeMillis))]
+        (when (and (pos? left) (not (cancelled?)))
+          (let [x (.poll q (min 200 left) TimeUnit/MILLISECONDS)]
+            (cond
+              (nil? x) (do (flush!) (recur))
+              (instance? Throwable x)
+              (throw (ex-info (or (ex-message x) (str (class x)))
+                              (merge {:type :logs/source :hint hint}
+                                     (select-keys (ex-data x) [:hint]))
+                              x))
+              (map? x) (do (flush!)
+                           (when (:stop? x) (vswap! gaps inc))
+                           (vswap! gap-lines inc)
+                           (line! (:gap x)) (vswap! out conj (:gap x))
+                           (recur))
+              (= ::end x) (flush!)
+              :else (do (vswap! raw conj x)
+                        (if (and (seq @pending) (continuation? x))
+                          (vswap! pending conj x)
+                          (do (flush!) (vreset! pending [x])))
+                        (recur)))))))
+    (flush!)
+    {:out @out :raw @raw :gaps @gaps :gap-lines @gap-lines}))
 
 (defn run [ctx step]
   (let [{:keys [at source offset]} (or (:armed ctx) (arm ctx step))
@@ -211,38 +285,12 @@
         t0 (System/currentTimeMillis)
         end (min (+ t0 window) (.toEpochMilli ^Instant (or (:attempt-deadline ctx) (:deadline ctx))))
         q (LinkedBlockingQueue.)
-        stop (cond (:file source) (file-source (:file source) offset q)
-                   (:container source) (container-source ctx (:container source) at q)
-                   :else (cw-source ctx (:cloudwatch source) at (cw-pattern raw-filters) q))
-        out (volatile! []) pending (volatile! []) gaps (volatile! 0) gap-lines (volatile! 0)
-        emit! (fn [entry]
-                (when (entry-matches? filters entry)
-                  (doseq [l entry] ((:line! ctx) l) (vswap! out conj l))))
-        flush! (fn [] (when (seq @pending) (emit! @pending) (vreset! pending [])))]
-    (try
-      (loop []
-        (let [left (- end (System/currentTimeMillis))]
-          (when (and (pos? left) (not ((:cancelled? ctx))))
-            (let [x (.poll q (min 200 left) TimeUnit/MILLISECONDS)]
-              (cond
-                (nil? x) (do (flush!) (recur))
-                (instance? Throwable x)
-                (throw (ex-info (or (ex-message x) (str (class x)))
-                                (merge {:type :logs/source :hint (str "check the log target " (:target step) " in environment " (c/env-name ctx))}
-                                       (select-keys (ex-data x) [:hint]))
-                                x))
-                (map? x) (do (flush!)
-                             (when (:stop? x) (vswap! gaps inc))
-                             (vswap! gap-lines inc)
-                             ((:line! ctx) (:gap x)) (vswap! out conj (:gap x))
-                             (recur))
-                (= ::end x) (flush!)
-                :else (do (if (and (seq @pending) (continuation? x))
-                            (vswap! pending conj x)
-                            (do (flush!) (vreset! pending [x])))
-                          (recur)))))))
-      (flush!)
-      (finally (stop)))
+        stop (start-source ctx source offset at (cw-pattern raw-filters) q)
+        {out :out gaps :gaps gap-lines :gap-lines}
+        (try (drain! q end (:cancelled? ctx) filters (:line! ctx)
+                     (str "check the log target " (:target step) " in environment " (c/env-name ctx)))
+             (finally (stop)))
+        gaps (volatile! gaps) gap-lines (volatile! gap-lines) out (volatile! out)]
     (let [lines @out]
       (cond-> {:facts {"lines" (- (count lines) @gap-lines)
                        "gaps" @gaps}

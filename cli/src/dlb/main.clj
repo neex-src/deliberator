@@ -44,13 +44,19 @@
     (= "confirm-required" (:type error)) 1
     :else 2))
 
+(def ^:private path-args
+  "Operations whose file argument is sent absolute when it exists relative to the shell's cwd."
+  {"scenario.run" :path "scenario.parse" :path "logs.match" :path "repo.attach" :path
+   "marker.add" :file "marker.remove" :file "marker.list" :file})
+
 (defn- absolutize-path
-  "A scenario path that exists relative to the shell's cwd is sent absolute (the daemon's cwd is not
-  ours); anything else is left for the daemon to look up in the session's scenarios/."
+  "A path argument that exists relative to the shell's cwd is sent absolute (the daemon's cwd is not
+  ours); anything else is left for the daemon (a scenario or log path is looked up in the session)."
   [op args]
-  (let [p (:path args)]
-    (if (and (= "scenario.run" (:op op)) p (fs/exists? p))
-      (assoc args :path (str (fs/absolutize p)))
+  (let [k (get path-args (:op op))
+        p (get args k)]
+    (if (and k p (fs/exists? p))
+      (assoc args k (str (fs/absolutize p)))
       args)))
 
 (defn- describe [ch]

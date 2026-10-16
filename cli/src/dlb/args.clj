@@ -52,9 +52,10 @@
   (vec (or (:order entry) (sort (map name (keys (:args entry)))))))
 
 (defn required-order
-  "Names of the required args in declared order: the positional slots."
+  "Names of the required args, and of those flagged `positional` (optional, but the natural first word,
+  like `scenario.parse path`), in declared order: the positional slots."
   [entry]
-  (vec (filter #(:required (get (:args entry) (keyword %))) (arg-order entry))))
+  (vec (filter #(let [a (get (:args entry) (keyword %))] (or (:required a) (:positional a))) (arg-order entry))))
 
 (defn parse
   "Maps `words` (after the op) onto args of `entry`. Throws a `bad-args` ex-info with `:cli true`."
