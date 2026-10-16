@@ -1,0 +1,22 @@
+[
+  {
+    "name": ${jsonencode(name)},
+    "image": ${jsonencode(image)},
+    "essential": true,
+    "portMappings": [{ "containerPort": ${port} }],
+    "environment": [
+%{ for k, v in environment ~}
+      { "name": ${jsonencode(k)}, "value": ${jsonencode(v)} }${k == keys(environment)[length(environment) - 1] ? "" : ","}
+%{ endfor ~}
+    ],
+    "secrets": [
+%{ for k, v in secrets ~}
+      { "name": ${jsonencode(k)}, "valueFrom": ${jsonencode(v)} }${k == keys(secrets)[length(secrets) - 1] ? "" : ","}
+%{ endfor ~}
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": { "awslogs-group": ${jsonencode(log_group)}, "awslogs-region": ${jsonencode(region)}, "awslogs-stream-prefix": "ecs" }
+    }
+  }
+]

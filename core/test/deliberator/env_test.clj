@@ -82,7 +82,7 @@
   (let [e (env/validate env/default-local)]
     (is (= "estate-inbox" (env/target e :queue/inbox)))
     (is (= "estate-inbox" (env/target e "queue/inbox")))
-    (is (= {:container "estate-service-a"} (env/target e :log/service-a)))
+    (is (= {:container "deliberator-service-a"} (env/target e :log/service-a)))
     (let [x (try (env/target e :queue/nope) (catch clojure.lang.ExceptionInfo x x))
           d (ex-data x)]
       (is (= :env/unknown-target (:type d)))
