@@ -111,8 +111,11 @@
 (defn- tail [v]
   (let [s (str v)] (if (> (count s) 60) (str "…" (subs s (- (count s) 59))) s)))
 
+(defn- scalars? [v] (and (sequential? v) (seq v) (every? scalar? v)))
+
 (defn- compact [m]
-  (str/join " " (for [[k v] m :when (and (scalar? v) (some? v))] (str (name k) "=" (tail v)))))
+  (str/join " " (for [[k v] m :when (or (and (scalar? v) (some? v)) (scalars? v))]
+                  (str (name k) "=" (if (scalars? v) (str/join "," v) (tail v))))))
 
 (defn run-summary [{:keys [status steps failed checks failed-checks]}]
   (str (str/upper-case (str status)) "  " steps " steps, " failed " failed"
@@ -125,6 +128,9 @@
   "Prints an ok result generically: run summaries, `diff`, `label: path` lines, scalars and rows."
   [op result]
   (cond
+    (and (sequential? result) (every? map? result))
+    (do (println (str (count result) (if (= 1 (count result)) " row" " rows")))
+        (doseq [row result] (println (str "  " (compact row)))))
     (not (map? result)) (println (json/generate-string result))
     (and (contains? result :status) (contains? result :steps))
     (do (println (run-summary result))

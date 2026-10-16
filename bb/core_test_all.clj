@@ -34,7 +34,8 @@
                       "-n" "deliberator.aws-test" "-n" "deliberator.daemon-test"
                       "-n" "deliberator.estate-test" "-n" "deliberator.audit-estate-test"
                       "-n" "deliberator.audit-runtime-test"
-                      "-n" "deliberator.steps-test" "-n" "deliberator.aws-kinds-test")
+                      "-n" "deliberator.steps-test" "-n" "deliberator.aws-kinds-test"
+                      "-n" "deliberator.ide-ops-test")
                  (finally (when-not keep? (estate/down ["--ws" ws]))))]
       (println "== pass A exit" a ", pass B exit" b)
       (if (and (zero? a) (zero? b)) 0 1))))
