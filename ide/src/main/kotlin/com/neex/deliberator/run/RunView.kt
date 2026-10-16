@@ -195,7 +195,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
             ApplicationManager.getApplication().invokeLater({
                 loading = false
                 if (snap != null && !Disposer.isDisposed(this) && runner.state(path).snapshot == null && !runner.isRunning(path)) runner.show(path, snap)
-            }, com.intellij.openapi.application.ModalityState.any())
+            }, com.intellij.openapi.application.ModalityState.nonModal())
         }
     }
 

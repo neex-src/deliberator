@@ -73,7 +73,7 @@ class ScnRunner(private val project: Project) : Disposable {
             yes = Messages.showYesNoDialog(project,
                 "Step ${c.step} needs confirmation:\n\n${c.summary}\n\nRun it again with this confirmation?",
                 "Confirm Remote Change", "Confirm and Run", "Cancel", Messages.getWarningIcon()) == Messages.YES
-        }, ModalityState.any())
+        }, ModalityState.nonModal())
         yes
     }
 
@@ -83,7 +83,7 @@ class ScnRunner(private val project: Project) : Disposable {
         ApplicationManager.getApplication().invokeAndWait({
             key = Messages.showInputDialog(project, "Running a scenario needs a session. Session key:", "Start Session", null,
                 "S-" + java.time.LocalDate.now().toString().replace("-", ""), null)?.trim()?.takeIf { it.isNotEmpty() }
-        }, ModalityState.any())
+        }, ModalityState.nonModal())
         key
     }
 
@@ -102,7 +102,7 @@ class ScnRunner(private val project: Project) : Disposable {
     fun run(file: VirtualFile, steps: List<Int>?) {
         val doc = FileDocumentManager.getInstance().getCachedDocument(file)
         if (doc != null) {
-            ApplicationManager.getApplication().invokeAndWait({ FileDocumentManager.getInstance().saveDocument(doc) }, ModalityState.any())
+            ApplicationManager.getApplication().invokeAndWait({ FileDocumentManager.getInstance().saveDocument(doc) }, ModalityState.nonModal())
         }
         val path = file.path
         val st = state(path)
@@ -202,7 +202,7 @@ class ScnRunner(private val project: Project) : Disposable {
         ApplicationManager.getApplication().invokeLater({
             project.messageBus.syncPublisher(ScnRunListener.TOPIC).runFinished(path, snap)
             project.messageBus.syncPublisher(ScnRunListener.TOPIC).stateChanged(path)
-        }, ModalityState.any())
+        }, ModalityState.nonModal())
         return snap
     }
 
@@ -224,7 +224,8 @@ class ScnRunner(private val project: Project) : Disposable {
         if (id == null) { st.call?.cancel(); return }
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                WorkspaceService.getInstance(project).call("scenario.cancel", JsonObject().apply { addProperty("run-id", id) })
+                // scenario.cancel takes no ws: the run id is global to the daemon
+                WorkspaceService.getInstance(project).client().call("scenario.cancel", JsonObject().apply { addProperty("run-id", id) })
             } catch (e: DaemonException) {
                 Ui.notify(project, "Cancel", e.message ?: "cancel failed", NotificationType.WARNING)
             }
@@ -271,7 +272,7 @@ class ScnRunner(private val project: Project) : Disposable {
     }
 
     private fun publish(path: String) {
-        ApplicationManager.getApplication().invokeLater({ project.messageBus.syncPublisher(ScnRunListener.TOPIC).stateChanged(path) }, ModalityState.any())
+        ApplicationManager.getApplication().invokeLater({ project.messageBus.syncPublisher(ScnRunListener.TOPIC).stateChanged(path) }, ModalityState.nonModal())
     }
 
     companion object {
