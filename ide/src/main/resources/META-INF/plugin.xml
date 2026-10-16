@@ -53,6 +53,7 @@
         <projectService serviceImplementation="com.neex.deliberator.logs.LogMatcher"/>
         <projectService serviceImplementation="com.neex.deliberator.logs.LogService"/>
         <editorFactoryListener implementation="com.neex.deliberator.logs.LogsEditorListener"/>
+        <editorNotificationProvider implementation="com.neex.deliberator.logs.TruncatedLogBanner"/>
     </extensions>
 
     <applicationListeners>

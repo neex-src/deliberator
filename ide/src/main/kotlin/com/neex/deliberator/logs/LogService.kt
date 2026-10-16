@@ -28,7 +28,7 @@ class LogService(private val project: Project) {
         val a = JsonObject().apply {
             addProperty("target", req.target)
             addProperty("env", svc.selectedEnv)
-            req.since?.takeIf { it.isNotBlank() }?.let { addProperty("since", it.trim()) }
+            req.since?.takeIf { it.isNotBlank() && !FetchForm.isFileTarget(req.target) }?.let { addProperty("since", it.trim()) }
             req.`for`?.takeIf { it.isNotBlank() }?.let { addProperty("for", it.trim()) }
             req.filter?.takeIf { it.isNotBlank() }?.let { addProperty("filter", it) }
         }

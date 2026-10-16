@@ -27,7 +27,7 @@ class MarkerIcon(private val gutter: MarkerGutter, val marker: Marker) : GutterI
     override fun getTooltipText(): String {
         val last = gutter.matcher.lastMatch(marker.id)
         return "Deliberator marker ${marker.logger ?: "(file name)"}:${marker.line}" +
-            (last?.let { " - last matched line ${it.second} of ${java.nio.file.Path.of(it.first).fileName}" } ?: " - no matched log line yet")
+            (last?.let { " - last matched line ${it.second} of ${java.nio.file.Path.of(it.first).fileName}" + (gutter.matcher.beyond(it.first)?.takeIf { b -> it.second > b.loadedLines }?.let { b -> " (beyond the ${b.loadedLines} lines the editor loaded)" } ?: "") } ?: " - no matched log line yet")
     }
     override fun getAlignment(): Alignment = Alignment.LEFT
     override fun isNavigateAction(): Boolean = true

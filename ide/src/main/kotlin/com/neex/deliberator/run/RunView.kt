@@ -234,8 +234,9 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
             bannerText?.let { add(0, true, ResultRenderer(this, null, null, null, it)) }
             for (s in steps) {
                 val n = s.index
-                val section = if (running) null else snap?.sections?.get(n)
-                val live = if (running) st.live[n] else null
+                // during the run the file is the truth for the steps it already holds; the events only fill the gap before it is rewritten
+                val section = if (running) st.progress?.sections?.get(n) else snap?.sections?.get(n)
+                val live = if (running && section == null) st.live[n] else null
                 if (section == null && live == null) continue
                 val line = doc.getLineNumber(s.textRange.startOffset)
                 add(doc.getLineEndOffset(line), false, ResultRenderer(this, n, section, live, null))
@@ -251,7 +252,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
     }
 
     private fun banner(st: RunState, snap: RunSnapshot?): String? {
-        if (st.running) return "▶ running" + (st.runId?.let { " $it" } ?: "") + "  (Esc cancels)"
+        if (st.running) return "▶ running" + (st.runId?.let { " $it" } ?: "") + (st.progress?.trailer?.takeIf { it.isNotEmpty() }?.let { "  ·  " + it.joinToString(" · ") } ?: "") + "  (Esc cancels)"
         if (snap == null) return null
         if (snap.problem != null) return "RUN ${snap.status} · ${snap.problem}"
         val t = snap.trailer.joinToString(" · ")
@@ -276,8 +277,10 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
         val base = "Step $n"
         if (running) {
             val live = st.live[n]
+            val section = st.progress?.sections?.get(n)
             return when {
-                live != null && live.status == "running" -> Triple(AllIcons.Actions.Suspend, "$base running: click or Esc to cancel the run", true)
+                live != null && live.status == "running" && section == null -> Triple(AllIcons.Actions.Suspend, "$base running: click or Esc to cancel the run", true)
+                section != null -> Triple(statusIcon(section.status), "$base ${section.status}", false)
                 live != null -> Triple(statusIcon(live.status), "$base ${live.status}", false)
                 st.asked.isEmpty() || n in st.asked -> Triple(AllIcons.RunConfigurations.TestNotRan, "$base waits for its turn", false)
                 else -> Triple(AllIcons.RunConfigurations.TestState.Run, "Run $base (Ctrl+Enter), run from here, run all", false)

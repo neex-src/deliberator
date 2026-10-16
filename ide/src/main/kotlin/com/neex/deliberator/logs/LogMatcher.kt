@@ -41,7 +41,7 @@ private class EditorHighlights(val highlighters: MutableList<Pair<LogHit, RangeH
  */
 @Service(Service.Level.PROJECT)
 class LogMatcher(private val project: Project) : Disposable {
-    private class Match(val seq: Long, val hits: List<LogHit>)
+    private class Match(val seq: Long, val hits: List<LogHit>, val loadedLines: Int)
 
     private val matches = ConcurrentHashMap<String, Match>()
     private val clock = java.util.concurrent.atomic.AtomicLong()
@@ -103,14 +103,15 @@ class LogMatcher(private val project: Project) : Disposable {
         val doc = editor.document
         val markers = MarkerService.getInstance(project)
         for (hit in hits) {
-            if (hit.n < 1 || hit.n > doc.lineCount) continue
+            if (hit.n < 1 || hit.n > doc.lineCount) continue // beyond the loaded part: kept in the match, reported by [beyond]
             val h = editor.markupModel.addLineHighlighter(MATCHED, hit.n - 1, HighlighterLayer.SELECTION - 1)
             val m = markers.byId(hit.markerId)
             h.setErrorStripeMarkColor(STRIPE)
             h.setErrorStripeTooltip("marker " + (m?.let { "${it.logger ?: Path.of(it.file).fileName}:${it.line}" } ?: hit.markerId))
             state.highlighters += hit to h
         }
-        matches[path] = Match(clock.incrementAndGet(), hits)
+        matches[path] = Match(clock.incrementAndGet(), hits, doc.lineCount)
+        FileDocumentManager.getInstance().getFile(doc)?.let { com.intellij.ui.EditorNotifications.getInstance(project).updateNotifications(it) }
         project.messageBus.syncPublisher(MarkerListener.TOPIC).matchesChanged(path)
     }
 
@@ -123,11 +124,26 @@ class LogMatcher(private val project: Project) : Disposable {
         matches.entries.filter { e -> e.value.hits.any { it.markerId == markerId } }
             .maxByOrNull { it.value.seq }?.let { e -> e.key to e.value.hits.filter { it.markerId == markerId }.maxOf { it.n } }
 
-    /** Opens [path] in the editor with the caret on 1-based [line]. EDT. */
+    /** The hits of the last match of [path] that lie below the lines its editor loaded (count and first line), or null. */
+    fun beyond(path: String): BeyondHits? {
+        val m = matches[path] ?: return null
+        val out = m.hits.filter { it.n > m.loadedLines }
+        return if (out.isEmpty()) null else BeyondHits(out.size, out.minOf { it.n }, m.loadedLines)
+    }
+
+    /**
+     * Opens [path] in the editor with the caret on 1-based [line]. EDT. When the editor holds fewer lines than [line] (the platform
+     * loads only the head of a very large file) the caret stays at the end and a balloon says where the line is.
+     */
     fun open(path: String, line: Int): Editor? {
         val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(Path.of(path)) ?: return null
         LogFiles.register(path)
-        return Ui.openEditor(project, vf, line - 1)
+        val ed = Ui.openEditor(project, vf, line - 1) ?: return null
+        if (line > ed.document.lineCount) {
+            Ui.notify(project, "Log line $line", "${vf.name} is shown only up to line ${ed.document.lineCount}: line $line is beyond what the editor loaded (see the banner above the log).",
+                com.intellij.notification.NotificationType.WARNING)
+        }
+        return ed
     }
 
     /** Forgets the latest run and every match (the light test project outlives a test). */

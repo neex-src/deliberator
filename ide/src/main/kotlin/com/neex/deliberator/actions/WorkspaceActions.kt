@@ -50,19 +50,35 @@ class RefreshAction : WorkspaceAction() {
 /** `deliberator.session.start`: key and optional title. */
 class StartSessionAction : WorkspaceAction() {
     override fun perform(project: Project, svc: WorkspaceService) {
-        val key = JBTextField(24)
-        val title = JBTextField(24)
-        val dlg = object : DialogWrapper(project) {
-            init { this.title = "Start session"; init() }
-            override fun createCenterPanel(): JComponent = panel {
-                row("Key:") { cell(key).focused() }
-                row("Title:") { cell(title) }
-            }
-            override fun getPreferredFocusedComponent() = key
-        }
-        if (!dlg.showAndGet() || key.text.isBlank()) return
-        Ui.background(project, "Deliberator: start session", { svc.startSession(key.text.trim(), title.text.trim().ifEmpty { null }) })
+        val dlg = StartSessionDialog(project)
+        if (!dlg.showAndGet()) return
+        val (key, title) = dlg.answer()
+        Ui.background(project, "Deliberator: start session", { svc.startSession(key, title) })
     }
+}
+
+/** The Start Session dialog: a key (required) and an optional title. */
+class StartSessionDialog(project: Project) : DialogWrapper(project) {
+    private val key = JBTextField(24)
+    private val titleField = JBTextField(24)
+
+    init { title = "Start session"; init() }
+
+    override fun createCenterPanel(): JComponent = panel {
+        row("Key:") { cell(key).focused() }
+        row("Title:") { cell(titleField) }
+    }
+
+    override fun doValidate(): com.intellij.openapi.ui.ValidationInfo? =
+        if (key.text.isBlank()) com.intellij.openapi.ui.ValidationInfo("A session needs a key (a ticket id, a date, anything short)", key) else null
+
+    override fun getPreferredFocusedComponent() = key
+
+    /** Key and title as `session.start` takes them. */
+    fun answer(): Pair<String, String?> = key.text.trim() to titleField.text.trim().ifEmpty { null }
+
+    internal fun type(k: String, t: String = "") { key.text = k; titleField.text = t }
+    internal fun validation() = doValidate()
 }
 
 /** `deliberator.session.end`: ends the current session. */

@@ -215,6 +215,8 @@ class AuditEditorTest : BasePlatformTestCase() {
         val r = bg(300) { LogService.getInstance(project).fetchNow(FetchRequest(src.toString())) }
         val ed = LogMatcher.getInstance(project).open(r.get("path").asString, 1)
         assertNotNull(ed)
+        val vf0 = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getFile(ed!!.document)!!
+        println("EXPERIMENT: len=${vf0.length} textLength=${ed.document.textLength} lines=${ed.document.lineCount} LARGE=${com.intellij.openapi.util.io.FileUtilRt.LARGE_FOR_CONTENT_LOADING} tooLarge=${com.intellij.openapi.util.io.FileUtilRt.isTooLarge(vf0.length)} fileType=${vf0.fileType.name}")
         assertTrue("the editor shows ${ed!!.document.lineCount} of ${r.get("lines")} lines and the plugin does not say so", ed.document.lineCount >= r.get("lines").asInt)
     }
 }
