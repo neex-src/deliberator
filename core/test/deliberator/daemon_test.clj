@@ -158,7 +158,7 @@
         (is (= {:type "string" :required true} (select-keys (get-in by ["scenario.run" :args :path]) [:type :required])))
         (is (= "int[]" (get-in by ["scenario.run" :args :steps :type])))
         (is (= "default" (get-in by ["session.list" :args :ws :default])))
-        (is (= ["run.started" "step.started" "line" "step.finished" "run.finished"] (get-in by ["scenario.run" :events])))))))
+        (is (= ["run.started" "step.started" "line" "confirm.required" "step.finished" "run.finished"] (get-in by ["scenario.run" :events])))))))
 
 (deftest arguments-are-validated-against-the-schema
   (with-daemon [h {:idle-minutes 0}]
@@ -433,6 +433,11 @@
                 (is (.isFile (io/file (get-in err [:result :paths :result]))))
                 (is (= "run.finished" (:event (last events))))
                 (is (= "error" (:status (first (filter #(= "step.finished" (:event %)) events)))))
+                (testing "the token is an event of its own, never in the step's error"
+                  (let [ev (first (filter #(= "confirm.required" (:event %)) events))]
+                    (is (= (:token err) (:token ev)))
+                    (is (= 1 (:step ev)))
+                    (is (not (str/includes? (pr-str (filter #(= "step.finished" (:event %)) events)) (:token err))))))
                 (testing "the step.finished event says why"
                   (is (str/includes? (get-in (first (filter #(= "step.finished" (:event %)) events)) [:error :message])
                                      "needs confirmation")))

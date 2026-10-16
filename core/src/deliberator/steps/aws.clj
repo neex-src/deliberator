@@ -8,8 +8,8 @@
   class, status -- stays the blob's meta) and links the blob into the step directory as
   `request.edn` and `response.<json|xml|txt|bin>`. Failures: `call!` turns an `invoke!` error map
   into a thrown ERROR (message = AWS code and message, `:hint` from the error, bytes of the failed
-  call in the ex-data); a confirmation request (remote mutate) becomes an ERROR too, carrying
-  `:confirm {:token :summary :expires}` in its ex-data; `call!` passes the run's `:confirm` token (ctx,
+  call in the ex-data); a confirmation request (remote mutate) becomes an ERROR too, and the token and summary go out as a `:confirm.required` event on the run's
+  sink (never into the ERROR, step.edn or run.edn); `call!` passes the run's `:confirm` token (ctx,
   from the daemon's `scenario.run` `confirm`) on to `invoke!`, which lets exactly that request through.
 
   Targets: `target-value` takes an `http(s)://` URL, an `arn:` or a bare name (no `/`) as written
@@ -18,6 +18,7 @@
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [deliberator.aws :as aws]
+            [deliberator.scenario.engine :as engine]
             [deliberator.steps.common :as c]
             [deliberator.store :as store]))
 
@@ -93,11 +94,14 @@
   [ctx r]
   (let [code (:code r) msg (:message r)]
     (if (= :confirm-required (:type r))
-      (ex-info (str (:summary r) " needs confirmation")
-               {:type :aws/confirm-required
-                :confirm (select-keys r [:token :summary :expires])
-                :hint (str "environment " (c/env-name ctx) " is remote: a mutating call must be confirmed, "
-                           "and needs a confirmation token: re-run with confirm set to the token of this error (it is bound to the exact request), or use a read operation")})
+      (do
+        (try (engine/event! (:sink ctx) {:event :confirm.required :step (:n (:step ctx))
+                                         :token (:token r) :summary (:summary r) :expires (:expires r)})
+             (catch Throwable _ nil))
+        (ex-info (str (:summary r) " needs confirmation")
+                 {:type :aws/confirm-required
+                  :hint (str "environment " (c/env-name ctx) " is remote: a mutating call must be confirmed; "
+                             "re-run with confirm set to the token of the confirm.required event (it is bound to the exact request), or use a read operation")}))
       (ex-info (cond (and code msg (not (str/includes? msg (str code)))) (str code ": " msg)
                      :else (or msg code (str (:category r))))
                (merge {:type :aws/error :hint (:hint r) :aws (dissoc r :raw)}

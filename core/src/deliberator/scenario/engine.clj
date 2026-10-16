@@ -273,8 +273,7 @@
   (let [d (ex-data e)]
     (cond-> {:message (or (ex-message e) (str (class e)))}
       (:type d) (assoc :type (:type d))
-      (:hint d) (assoc :hint (:hint d))
-      (:confirm d) (assoc :confirm (:confirm d)))))
+      (:hint d) (assoc :hint (:hint d)))))
 
 (defn- vars-for [st step corr]
   (assoc @(:vars st) "step.correlation" corr))

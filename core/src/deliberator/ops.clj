@@ -31,7 +31,7 @@
     runtime.down ws                                -> {removed}  [runtime.removed]
     runtime.logs role* ws since follow tail        -> {lines paths}   [line {stream at text}]
     scenario.run path* env session steps confirm ws -> {status steps failed checks failed-checks run-id paths}
-                                                      [run.started step.started line step.finished run.finished]
+                                                      [run.started step.started line confirm.required step.finished run.finished]
     scenario.cancel run-id*                        -> {run-id cancelled}
     runs.list ws session limit                     -> {session runs}
     runs.show run* ws session                      -> {run paths}
@@ -274,10 +274,6 @@
                         :expected (:expected r) :found (:account r) :env (:name e)
                         :hint "log in to the right account (aws sso login) or fix the record")))))))
 
-(defn- confirmation-of [ev]
-  (let [err (:error ev)]
-    (when (= :aws/confirm-required (:type err))
-      (merge {:step (:step ev)} (select-keys (:confirm err) [:token :summary :expires])))))
 
 (defn- scenario-run [ctx {:keys [path env session steps confirm] :as args}]
   (let [ws (ws-of args)
@@ -289,9 +285,10 @@
         _ (verify-account! d ws sess e)
         confirmations (atom [])
         sink (fn [ev]
-               (when (= :step.finished (:event ev))
-                 (when-let [c (confirmation-of ev)] (swap! confirmations conj c)))
-               ((:emit! ctx) ev))
+               (let [ev-name (:event ev)]
+               (when (= :confirm.required ev-name)
+                 (swap! confirmations conj (select-keys ev [:step :token :summary :expires])))
+               ((:emit! ctx) ev)))
         run (apply engine/start! ws e file
                    (mapcat identity
                            (cond-> {:session sess :sink sink
@@ -458,7 +455,7 @@
                                     :tail {:type :int :doc "only the last n lines"})}
    "scenario.run" {:fn scenario-run :class :mutate
                    :doc "Runs a scenario file in a session against an environment; streams the engine's events; the result is the run summary with paths."
-                   :events ["run.started" "step.started" "line" "step.finished" "run.finished"]
+                   :events ["run.started" "step.started" "line" "confirm.required" "step.finished" "run.finished"]
                    :args (ws-schema :path {:type :string :required true :doc "scenario file; relative paths are looked up in the session's scenarios/"}
                                     :env {:type :string :doc "environment name; default the scenario's @env, else local"}
                                     :session {:type :string :doc "session key; default the current session"}
