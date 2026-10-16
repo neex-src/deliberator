@@ -12,6 +12,23 @@
   `info` for tcp), `:health`. Env values may use `{{port:<container-port>}}` (the host port),
   `{{network}}`, `{{name}}`, `{{role}}`.
 
+  Service containers (role `:service/<name>`, a spec with `:jar`): the estate's Spring services.
+  `{:image \"docker.io/library/eclipse-temurin:21-jre\" :jar \"estate/services/service-a/target/x.jar\"
+  :ports {8081 8081 5005 5005} :debug 5005 :java-opts [\"-Xmx256m\"] :health {:http \"/actuator/health\"
+  :port 8081} :env {…} :secrets {\"API_KEY\" <valueFrom>}}`. The jar (relative to the top-level `:root`
+  of `runtime.edn`, or absolute) is mounted read-only at `/app/app.jar` and run as `java
+  [-agentlib:jdwp=…,suspend=n,address=*:<debug>] <java-opts> -jar /app/app.jar` unless `:command` is
+  given; its size and mtime are part of the spec hash, so a rebuilt jar recreates the container on the
+  next `ensure!`. `:secrets` is what an ECS task definition's `secrets` is: env name -> `valueFrom`, an
+  SSM parameter ARN or name (`arn:aws:ssm:…:parameter/x/y`, `/x/y`) or a Secrets Manager ARN or name
+  (optionally `…:json-key::`); the runtime plays the ECS agent and resolves them against the workspace's
+  `local` environment when it CREATES the container (so Floci must already hold them), the values go
+  to Podman only, never into `runtime.edn`, the hash or a log. Services start after Floci and Postgres
+  are healthy. `(taskdef->service container-def opts)` turns an ECS container definition into such a
+  spec and `(adopt-taskdefs! ws descriptor)` writes the service roles (and `:root`, Postgres `:init`)
+  into the workspace's `runtime.edn` (`-main adopt-taskdefs --ws W --file descriptor.edn`, used by
+  `bb estate:deploy`). Distinct containers on one host port are refused as for every role.
+
   Contract: `(ensure! ws [opts])` reconciles network, images and containers labelled
   `deliberator.workspace=<ws>`, `deliberator.role=<role>`, `deliberator.spec=<hash>`: idempotent,
   a changed spec recreates the container, a host port that is taken throws `:runtime/port-conflict`
@@ -23,12 +40,16 @@
   container's logs through `podman/logs` and mirrors them to `logs/services/<role>/<date>.log`.
   Health per role (overridable with `:health {:http path :port cp}` or `{:exec [cmd…]}`): Floci
   `GET /_floci/health` with every service `running`, Postgres `pg_isready` via exec, `service-*`
-  `GET /actuator/health`. `opts`: `:sink`, `:timeout-ms` (health wait per container, default 120 s).
+  `GET /actuator/health`. `opts`: `:sink`, `:timeout-ms` (health wait per container, default 120 s), `:infra-only` (skip
+  the `:jar` service roles).
   Home resolution is the store's (`store/*home*`, `$DELIBERATOR_HOME`). `-main`: `up|status|down
-  [--ws W]` (the `bb runtime:*` tasks)."
+  [--ws W]` (the `bb runtime:*` tasks) plus `up --infra`, `sync-env` and `adopt-taskdefs --ws W --file descriptor.edn`."
   (:require [clojure.data.json :as json]
+            [clojure.edn]
             [clojure.string :as str]
             [clojure.walk :as walk]
+            [deliberator.aws :as aws]
+            [deliberator.env :as env]
             [deliberator.podman :as podman]
             [deliberator.store :as store])
   (:import (java.net InetSocketAddress Socket URI)
@@ -92,34 +113,87 @@
 (defn- sorted-deep [x]
   (walk/postwalk (fn [v] (if (map? v) (into (sorted-map-by #(compare (pr-str %1) (pr-str %2))) v) v)) x))
 
+(defn- jar-file ^java.io.File [cfg _role spec]
+  (let [p (str (:jar spec))
+        f (if (str/starts-with? p "/") (java.io.File. p) (java.io.File. ^String (or (:root cfg) ".") p))]
+    f))
+
+(defn- service-command [{:keys [debug java-opts]}]
+  (vec (concat ["java"]
+               (when debug [(str "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:" debug)])
+               java-opts
+               ["-jar" "/app/app.jar"])))
+
+(defn- service-health [{:keys [ports debug health]}]
+  {:http (or (:http health) "/actuator/health")
+   :port (or (:port health) (first (remove #{debug} (keys (into (sorted-map) ports)))))})
+
 (defn desired
   "One container of the config resolved into what will be created:
-  `{:role :name :image :ports {cp hp} :host-ip :env :command :mounts :health :podman-socket :hash}`.
-  `:hash` covers everything that would change the container."
+  `{:role :name :image :ports {cp hp} :host-ip :env :command :mounts :health :podman-socket
+  [:secrets] [:jar-stamp] :hash}`. `:hash` covers everything that would change the container (secret
+  references, never their values)."
   [ws cfg role spec]
   (when-not (:image spec)
     (throw (ex-info (str "runtime.edn: " role " has no :image") {:type :runtime/invalid-config :role role})))
   (when (:from spec)
-    (throw (ex-info (str "runtime.edn: " role " uses :from (service containers arrive with the estate)")
+    (throw (ex-info (str "runtime.edn: " role " uses :from (not supported; give the service its :jar and :env)")
                     {:type :runtime/invalid-config :role role})))
   (let [rn (role-name role)
         network (:network cfg)
         name (or (:name spec) (str "deliberator-" rn))
         ports (into (sorted-map) (:ports spec))
         ctx {:ports ports :network network :name name :role rn}
+        jar (when (:jar spec) (jar-file cfg role spec))
         mounts (vec (concat (:mounts spec)
+                            (when jar [{:source (str jar) :destination "/app/app.jar" :options ["ro" "z"]}])
                             (when-let [init (:init spec)]
                               [{:source (if (str/starts-with? (str init) "/") (str init) (str (store/path ws init)))
                                 :destination "/docker-entrypoint-initdb.d" :options ["ro" "z"]}])))
         d {:role rn :name name :image (:image spec) :ports ports
            :host-ip (or (:host-ip spec) "127.0.0.1")
            :env (into (sorted-map) (for [[k v] (:env spec)] [(str (clojure.core/name k)) (template v ctx)]))
-           :command (:command spec) :mounts mounts :network network
-           :health (:health spec) :podman-socket (:podman-socket spec)}]
+           :command (or (:command spec) (when jar (service-command spec))) :mounts mounts :network network
+           :health (if jar (service-health spec) (:health spec))
+           :podman-socket (:podman-socket spec)}
+        d (cond-> d
+            jar (assoc :jar-stamp [(.length jar) (.lastModified jar)] :jar-path (str jar))
+            (seq (:secrets spec)) (assoc :secrets (into (sorted-map) (for [[k v] (:secrets spec)] [(clojure.core/name k) v]))))]
     (assoc d :hash (subs (store/sha256 (.getBytes ^String (pr-str (sorted-deep (dissoc d :health))) StandardCharsets/UTF_8)) 0 16))))
 
 (defn desired-all [ws cfg]
   (mapv (fn [[role spec]] (desired ws cfg role spec)) (sort-by (comp str key) (:containers cfg))))
+
+(defn- resolve-one [ws local ref]
+  (let [ref (str ref)
+        ctx {:ws ws}
+        arn (re-matches #"arn:[^:]*:(ssm|secretsmanager):[^:]*:[^:]*:(parameter|secret)[:/](.+)" ref)
+        ssm? (or (and arn (= "ssm" (second arn))) (str/starts-with? ref "/"))
+        [secret-id json-key] (if (and arn (not ssm?))
+                               (let [parts (str/split (nth arn 3) #":" -1)
+                                     name-part (first parts)]
+                                 (if (and (> (count parts) 1) (seq (second parts)))
+                                   [(str/join ":" (take 7 (str/split ref #":" -1))) (second parts)]
+                                   [ref nil]))
+                               [ref nil])
+        r (if ssm?
+            (aws/invoke! ctx local :ssm :GetParameter {:Name (if arn (str "/" (nth arn 3)) ref) :WithDecryption true})
+            (aws/invoke! ctx local :secretsmanager :GetSecretValue {:SecretId secret-id}))
+        v (if ssm? (get-in r [:Parameter :Value]) (:SecretString r))]
+    (when (or (aws/error? r) (nil? v))
+      (throw (ex-info (str "cannot resolve " ref " against the local environment"
+                           (when (aws/error? r) (str ": " (or (:message r) (:category r) (:type r))))
+                           " (bb estate:deploy seeds it)")
+                      {:type :runtime/secret-unresolved :ref ref :hint "bb estate:deploy"})))
+    (if json-key (get (json/read-str v) json-key v) v)))
+
+(defn resolve-secrets
+  "env name -> value for a `:secrets` map of `valueFrom` references, read from the workspace's
+  `local` environment (never persisted by the runtime)."
+  [ws secrets]
+  (when (seq secrets)
+    (let [local (env/load ws "local")]
+      (into {} (for [[k ref] secrets] [k (resolve-one ws local ref)])))))
 
 (defn- container-spec
   "The libpod creation body for `d`."
@@ -127,7 +201,7 @@
   {"name" (:name d)
    "image" (:image d)
    "labels" {"deliberator.workspace" (store/ws-name ws) "deliberator.role" (:role d) "deliberator.spec" (:hash d)}
-   "env" (:env d)
+   "env" (merge (resolve-secrets ws (:secrets d)) (:env d))
    "command" (:command d)
    "netns" {"nsmode" "bridge"}
    "Networks" {(:network d) {}}
@@ -307,22 +381,28 @@
   "Reconciles the runtime of `ws` with its `runtime.edn` and waits until it is healthy. Idempotent.
   -> `(status ws)`."
   ([ws] (ensure! ws {}))
-  ([ws {:keys [sink timeout-ms] :or {timeout-ms default-timeout-ms}}]
+  ([ws {:keys [sink timeout-ms infra-only] :or {timeout-ms default-timeout-ms}}]
    (let [cfg (load-config! ws sink)
-         ds (desired-all ws cfg)
+         ds (cond->> (desired-all ws cfg) infra-only (remove :jar-path))
          c (connect-client ws cfg)
          socket-path (delay (or (podman/socket-path c)
                                 (throw (ex-info "cannot tell the Podman socket path for this endpoint; give :podman-socket \"/path/to/podman.sock\" in runtime.edn"
                                                 {:type :runtime/no-socket-path}))))]
+     (doseq [d ds :when (and (:jar-path d) (not (.isFile (java.io.File. ^String (:jar-path d)))))]
+       (throw (ex-info (str "runtime.edn: " (:role d) " jar " (:jar-path d) " does not exist (bb estate:build)")
+                       {:type :runtime/missing-jar :role (:role d) :jar (:jar-path d) :hint "bb estate:build"})))
      (podman/ensure-network! c (:network cfg))
      (doseq [d ds] (ensure-image! c d sink))
-     (let [started (doall (for [d ds]
-                            (assoc (reconcile! c ws d (when (:podman-socket d)
-                                                        (if (string? (:podman-socket d)) (:podman-socket d) @socket-path))
-                                               sink)
-                                   :d d)))]
-       (doseq [{:keys [d id]} started]
-         (await-healthy! c ws d id sink timeout-ms)))
+     ;; infrastructure first, then the services that need it (their secrets live in Floci)
+     (doseq [group ((juxt remove filter) #(some? (seq (filter (fn [m] (= "/app/app.jar" (:destination m))) (:mounts %)))) ds)
+             :when (seq group)]
+       (let [started (doall (for [d group]
+                              (assoc (reconcile! c ws d (when (:podman-socket d)
+                                                          (if (string? (:podman-socket d)) (:podman-socket d) @socket-path))
+                                                 sink)
+                                     :d d)))]
+         (doseq [{:keys [d id]} started]
+           (await-healthy! c ws d id sink timeout-ms))))
      (status ws))))
 
 (defn- since-instant [ctr]
@@ -387,6 +467,55 @@
            (mapcat identity (select-keys opts [:since :follow :tail :until])))))
 
 ;; ---------------------------------------------------------------------------------------------
+;; ECS task definitions -> service roles
+
+(defn taskdef->service
+  "An ECS container definition (the map, string keys as in the JSON) -> a `:jar` service spec.
+  `environment` becomes `:env`, `secrets` becomes `:secrets`, the container ports are published on
+  the same host ports. `opts`: `:jar` (required), `:image` (default eclipse-temurin 21 JRE), `:debug`
+  (JDWP container port, published too), `:java-opts`."
+  [container-def {:keys [jar image debug java-opts]}]
+  (let [ports (concat (map #(get % "containerPort") (get container-def "portMappings")) (when debug [debug]))]
+    (cond-> {:image (or image "docker.io/library/eclipse-temurin:21-jre")
+             :jar jar
+             :ports (into (sorted-map) (map (fn [p] [p p]) ports))
+             :env (into (sorted-map) (map (fn [e] [(get e "name") (get e "value")]) (get container-def "environment")))
+             :secrets (into (sorted-map) (map (fn [e] [(get e "name") (get e "valueFrom")]) (get container-def "secrets")))}
+      debug (assoc :debug debug)
+      java-opts (assoc :java-opts (vec java-opts)))))
+
+(defn sync-local-env!
+  "Points the workspace's `local` environment at the host ports of `cfg` (Floci endpoint, Postgres
+  and service targets), leaving every other field alone."
+  [ws cfg]
+  (let [hp (fn [role cp] (get-in cfg [:containers role :ports cp]))
+        e (env/load ws "local")
+        e (cond-> e
+            (hp :floci 4566) (assoc-in [:aws :endpoint] (str "http://localhost:" (hp :floci 4566)))
+            (and (hp :postgres 5432) (get-in e [:targets :db/main]))
+            (update-in [:targets :db/main] str/replace #"//localhost:\d+/" (str "//localhost:" (hp :postgres 5432) "/"))
+            (hp :service/a 8081) (assoc-in [:targets :service/a] (str "http://localhost:" (hp :service/a 8081)))
+            (hp :service/b 8082) (assoc-in [:targets :service/b] (str "http://localhost:" (hp :service/b 8082))))]
+    (env/save! ws e)))
+
+(defn adopt-taskdefs!
+  "Writes service roles into the workspace's `runtime.edn` (created from the default when absent).
+  `descriptor`: `{:root \"/abs/repo\" :postgres-init \"/abs/dir\" :services {\"a\" {:taskdef <JSON text of
+  the container definitions> :jar \"rel/or/abs.jar\" :debug 5005 :java-opts […] :image …}}}`.
+  Roles not named stay as they are; the `local` environment follows the host ports (`sync-local-env!`). -> the new config."
+  [ws {:keys [root postgres-init services]}]
+  (let [cfg (load-config! ws nil)
+        roles (into {} (for [[n {:keys [taskdef] :as s}] services
+                             :let [cd (first (json/read-str (str taskdef)))]]
+                         [(keyword "service" (name n)) (taskdef->service cd s)]))
+        cfg (cond-> (update cfg :containers merge roles)
+              root (assoc :root (str root))
+              (and postgres-init (get-in cfg [:containers :postgres])) (assoc-in [:containers :postgres :init] (str postgres-init)))]
+    (store/write-edn! (config-path ws) cfg)
+    (sync-local-env! ws cfg)
+    cfg))
+
+;; ---------------------------------------------------------------------------------------------
 ;; Command line
 
 (defn- print-event [{:keys [event role image detail name ms]}]
@@ -408,9 +537,15 @@
         opts {:sink print-event}
         code (try
                (case cmd
-                 "up" (print-status (ensure! ws opts))
+                 "up" (print-status (ensure! ws (assoc opts :infra-only (boolean (some #{"--infra"} more)))))
                  "status" (print-status (status ws opts))
                  "down" (doseq [r (:removed (down! ws opts))] (println "removed" (:name r)))
+                 "sync-env" (do (load-config! ws nil)
+                                (sync-local-env! ws (read-config ws))
+                                (println "local environment follows runtime.edn"))
+                 "adopt-taskdefs" (let [f (second (drop-while #(not= "--file" %) more))
+                                        cfg (adopt-taskdefs! ws (clojure.edn/read-string (slurp f)))]
+                                    (println "runtime.edn:" (config-path ws) "roles" (sort (map str (keys (:containers cfg))))))
                  (do (println "usage: runtime up|status|down [--ws NAME]") (throw (ex-info "usage" {:type :usage}))))
                0
                (catch clojure.lang.ExceptionInfo e

@@ -13,6 +13,21 @@
                   :task (apply shell {:dir "core"} "clojure" "-M" "-m" "deliberator.runtime" "status" *command-line-args*)}
   runtime:down {:doc "Remove this workspace's runtime containers"
                 :task (apply shell {:dir "core"} "clojure" "-M" "-m" "deliberator.runtime" "down" *command-line-args*)}
+  estate:build {:doc "Build the estate services (Maven, JDK 21)"
+                :requires ([estate])
+                :task (estate/build)}
+  estate:deploy {:doc "terraform apply on Floci + write the service roles into runtime.edn; args: --ws W [--auto-publish]"
+                 :requires ([estate])
+                 :task (estate/deploy *command-line-args*)}
+  estate:up {:doc "Runtime (Floci, Postgres) -> deploy -> services; args: --ws W [--auto-publish]"
+             :requires ([estate])
+             :task (estate/up *command-line-args*)}
+  estate:status {:doc "Runtime status and the services' health; args: --ws W"
+                 :requires ([estate])
+                 :task (estate/status *command-line-args*)}
+  estate:down {:doc "Remove the workspace's containers and the Floci root's Terraform state; args: --ws W"
+               :requires ([estate])
+               :task (estate/down *command-line-args*)}
   cli:install {:doc "Symlink cli/dlb into ~/.local/bin"
                :requires ([cli-install])
                :task (cli-install/-main)}}}

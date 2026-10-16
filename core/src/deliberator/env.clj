@@ -39,19 +39,25 @@
 ;; schema -------------------------------------------------------------------------------------
 
 (def default-local
-  "The environment written on first use of \"local\": the runtime of the local Floci, fake account.
-  Targets are placeholders until the estate fixes them."
+  "The environment written on first use of \"local\": the runtime of the local Floci, fake account,
+  and the names of the estate (`estate/`): services on 8081/8082, the container logs of the runtime's
+  `deliberator-service-*`, Postgres `deliberator`. A workspace whose runtime.edn moved the host ports
+  edits its own copy (endpoint, db/main)."
   {:name "local" :kind :local
-   :description "Local runtime. Targets are placeholders until the estate fixes them."
+   :description "Local runtime and the estate."
    :aws {:endpoint "http://localhost:4566" :region "eu-central-1" :account "000000000000"
          :credentials {:access-key-id "test" :secret-access-key "test"}}
    :targets {:service/a "http://localhost:8081"
              :service/b "http://localhost:8082"
              :queue/inbox "estate-inbox"
+             :queue/b-events "estate-b-events"
              :table/messages "estate-messages"
              :bus/main "estate-bus"
-             :log/service-a {:container "estate-service-a"}
-             :db/main "jdbc:postgresql://localhost:5432/estate"}})
+             :log/service-a {:container "deliberator-service-a"}
+             :log/service-b {:container "deliberator-service-b"}
+             :log/logger {:cloudwatch "/aws/lambda/estate-logger"}
+             :db/main "jdbc:postgresql://localhost:5432/deliberator"
+             :function/logger "estate-logger"}})
 
 (def ^:private top-keys #{:name :kind :description :read-only :aws :targets})
 (def ^:private local-aws-keys #{:endpoint :region :account :credentials})
