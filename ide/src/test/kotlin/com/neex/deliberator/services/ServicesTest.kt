@@ -35,9 +35,9 @@ import javax.tools.ToolProvider
 
 /**
  * Piece 06 against the real daemon on a temp home. Headless part (no container): the tab's rows from `service.list`, the topology switch through
- * the ops, the run configuration (persistence, editor, runners), the reload rendering, the tail merge, the console links, the process handler's
+ * the ops, the run configuration (persistence, editor, runners), the reload rendering, the console links, the process handler's
  * failure path. Container part: a stub service (a 15-line HttpServer jar compiled here, on the plain temurin image, host ports 19181/19185
- * in `runtime.edn :services`, no infrastructure containers) runs through the configuration: start, tail through `logs.fetch ... for`, the debug
+ * in `runtime.edn :services`, no infrastructure containers) runs through the configuration: start, tail through ONE `logs.fetch {follow true}`, the debug
  * state's `RemoteConnection`, reload into the console, Stop. It skips with the reason when the container engine is unreachable or there is no
  * compiler; `runtime.down` in `tearDown` removes the container.
  */
@@ -55,7 +55,6 @@ class ServicesTest : BasePlatformTestCase() {
         svc.loadState(WorkspaceService.State())
         daemon.openWorkspace("w6")
         svc.bind("w6")
-        ServiceProcessHandler.windowSeconds = 2
         ServiceProcessHandler.retryMs = 300
         wsDir = Path.of(bg { svc.call("workspace.show").resultObject().get("path").asString })
     }
@@ -66,7 +65,6 @@ class ServicesTest : BasePlatformTestCase() {
             val rm = RunManager.getInstance(project)
             rm.allSettings.filter { it.type.id == ServiceRunConfigurationType.ID }.forEach { rm.removeConfiguration(it) }
             runCatching { bg { svc.call("runtime.down") } }
-            ServiceProcessHandler.windowSeconds = 30
             ServiceProcessHandler.retryMs = 5000
             DeliberatorSettings.getInstance().state.home = ""
             daemon.close()
@@ -301,15 +299,6 @@ class ServicesTest : BasePlatformTestCase() {
         assertEquals("every line also reached the sink", o.lines, out)
     }
 
-    fun testTheTailMergeDropsOnlyTheOverlap() {
-        assertEquals(listOf("c", "d"), TailMerge.newLines(listOf("a", "b"), listOf("b", "c", "d")))
-        assertEquals(listOf("x", "y"), TailMerge.newLines(listOf("a", "b"), listOf("x", "y")))
-        assertEquals(emptyList<String>(), TailMerge.newLines(listOf("a", "b"), listOf("a", "b")))
-        assertEquals(listOf("z"), TailMerge.newLines(listOf("a", "y", "y"), listOf("y", "y", "z")))
-        assertEquals(listOf("1"), TailMerge.newLines(emptyList(), listOf("1")))
-        assertEquals(emptyList<String>(), TailMerge.newLines(listOf("a"), emptyList()))
-    }
-
     // a real container ----------------------------------------------------------------------------------------------------
 
     /** The JVM's own compiler when it has one (the platform's runtime usually does not), else the `javac` on the PATH. */
@@ -433,6 +422,8 @@ class ServicesTest : BasePlatformTestCase() {
         assertTrue("a debug session's Stop is a detach", h.detachIsDefault())
         h.begin()
         wait("tail") { text.contains("stub tick") }
+        val followFiles = Files.list(wsDir.resolve("sessions").resolve("T-6").resolve("logs")).use { st -> st.filter { it.fileName.toString().startsWith("log-service-stub") }.count() }
+        assertEquals("one follow call for the whole session: one file, not one per window", 1L, followFiles)
         h.detachProcess()
         wait("detached") { h.isProcessTerminated }
         assertTrue(text.toString(), text.contains("debugger detached; the service keeps running"))

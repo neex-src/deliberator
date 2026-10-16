@@ -177,8 +177,7 @@ class ServiceConsoles {
 }
 
 /**
- * Run: starts the service (`service.start`, events in the console), follows its log (`logs.fetch ... for` windows, re-issued while the process
- * lives), and on Stop calls `service.stop`. Debug: the runner has already started it ([prestarted]); the handler only follows the log, and
+ * Run: starts the service (`service.start`, events in the console), follows its log (one `logs.fetch {follow true}`, each line printed as the daemon streams it), and on Stop calls `service.stop`. Debug: the runner has already started it ([prestarted]); the handler only follows the log, and
  * Stop detaches (the service keeps running).
  */
 class ServiceProcessHandler(
@@ -192,7 +191,6 @@ class ServiceProcessHandler(
     private val stopped = AtomicBoolean(false)
     @Volatile private var inFlight: DaemonClient.Call? = null
     @Volatile var started: Started? = prestarted; private set
-    private val printed = ArrayDeque<String>()
     private val pending = StringBuilder()
     private val record = StringBuilder()
 
@@ -256,28 +254,35 @@ class ServiceProcessHandler(
         return if (parts.isEmpty()) "" else " $parts"
     }
 
+    /** Arrival time of the last log line shown (`logs.line.at`): where a re-follow after a failure starts. */
+    @Volatile private var lastAt: String? = null
+
+    /**
+     * One `logs.fetch {follow true}` for the whole Run session: the daemon streams each line as a `logs.line` event, printed
+     * the moment it arrives, and keeps ONE file. After a failure the follow starts again from the last line's time.
+     */
     private fun tail() {
         val svc = WorkspaceService.getInstance(project)
-        var since: String? = "5m"
         var failures = 0
         while (!stopped.get()) {
-            val t0 = Instant.now()
             try {
                 ScnRunner.getInstance(project).ensureSession(svc)
                 val a = JsonObject().apply {
                     addProperty("target", ServiceOps.logTarget(service))
                     addProperty("env", env)
-                    since?.let { addProperty("since", it) }
-                    addProperty("for", "${windowSeconds}s")
+                    addProperty("since", lastAt ?: "5m")
+                    addProperty("follow", true)
                 }
-                val call = svc.start("logs.fetch", a, true)
+                val call = svc.start("logs.fetch", a, true) { ev ->
+                    if (ev.name == "logs.line") {
+                        ev.json.get("text")?.takeIf { it.isJsonPrimitive }?.asString?.let { print(it) }
+                        ev.json.get("at")?.takeIf { it.isJsonPrimitive }?.asString?.let { lastAt = it }
+                    }
+                }
                 inFlight = call
                 val t = call.await()
                 if (!t.ok) throw DaemonException(t.errorMessage ?: "logs.fetch failed", t.errorType ?: "daemon/error", t.error?.get("hint")?.takeIf { it.isJsonPrimitive }?.asString)
-                val path = t.resultObject().get("path")?.asString
-                if (path != null) show(Files.readAllLines(Path.of(path)))
-                failures = 0
-                since = t0.plusSeconds(windowSeconds.toLong()).toString()
+                if (!stopped.get()) Thread.sleep(retryMs)   // a follow only ends when cancelled; if it ended anyway, follow again
             } catch (e: java.util.concurrent.CancellationException) {
                 break
             } catch (e: DaemonException) {
@@ -294,13 +299,6 @@ class ServiceProcessHandler(
                 inFlight = null
             }
         }
-    }
-
-    private fun show(lines: List<String>) {
-        val fresh = TailMerge.newLines(printed.toList(), lines)
-        fresh.forEach { print(it) }
-        printed.addAll(fresh)
-        while (printed.size > 200) printed.removeFirst()
     }
 
     private fun finish(code: Int) { if (!isProcessTerminated && !isProcessTerminating) notifyProcessTerminated(code) }
@@ -334,8 +332,6 @@ class ServiceProcessHandler(
     override fun getProcessInput(): OutputStream? = null
 
     companion object {
-        /** Seconds one `logs.fetch ... for` window listens (lines reach the console at the end of a window; one file per window). */
-        @Volatile internal var windowSeconds = 30
         @Volatile internal var retryMs = 5000L
         private const val RECORD_MAX = 200_000
     }

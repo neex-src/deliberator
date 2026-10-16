@@ -111,3 +111,25 @@
     (doseq [f ["store" "workspace" "session"]]
       (let [src (slurp (io/file (System/getProperty "user.dir") "src" "deliberator" (str f ".clj")))]
         (is (not (re-find #"Files/delete|deleteIfExists|delete-file|\.delete\b|deleteOnExit" src)) f)))))
+
+(deftest raw-adopt-links-a-finished-file-into-the-store
+  (t/with-temp-home
+    (let [f (io/file (str (store/home)) "followed.log")
+          _ (io/make-parents f)
+          _ (spit f "line 1\nline 2\n")
+          m {:source :file :op "logs.fetch x (follow)" :env nil :at (store/now) :content-type "text/plain"}
+          r (store/raw-adopt! "w" f m)]
+      (is (= (store/sha256 (.getBytes "line 1\nline 2\n" "UTF-8")) (:sha r)))
+      (is (true? (:new? r)))
+      (is (= 14 (:bytes r)))
+      (is (java.nio.file.Files/isSameFile (.toPath f) (store/raw-path "w" (:sha r))) "one inode under two names")
+      (is (not (.canWrite f)) "read-only like every blob")
+      (is (= "line 1\nline 2\n" (String. (store/raw-get "w" (:sha r)) "UTF-8")))
+      (is (= :file (:source (store/raw-meta "w" (:sha r)))))
+      (testing "the same bytes again: not new, the first blob stays"
+        (let [g (io/file (str (store/home)) "again.log")]
+          (spit g "line 1\nline 2\n")
+          (let [r2 (store/raw-adopt! "w" g m)]
+            (is (false? (:new? r2)))
+            (is (= (:sha r) (:sha r2)))
+            (is (not (java.nio.file.Files/isSameFile (.toPath g) (store/raw-path "w" (:sha r)))))))))))

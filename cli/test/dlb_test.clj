@@ -333,7 +333,7 @@
     (let [m (json-line (:out (dlb *home* "marker" "list" "--json")))]
       (is (= [(str (fs/normalize root) "/cli/test/fixtures/wait.scn")] (map :file (:result m))))))
   (testing "help reads well for the new areas"
-    (is (str/includes? (:out (dlb *home* "help" "logs" "fetch")) "dlb logs fetch <target> [--env string] [--since string] [--for string] [--filter string] [--session string] [--ws string]"))
+    (is (str/includes? (:out (dlb *home* "help" "logs" "fetch")) "dlb logs fetch <target> [--env string] [--since string] [--for string] [--follow] [--filter string] [--session string] [--ws string]"))
     (is (str/includes? (:out (dlb *home* "help" "marker" "add")) "dlb marker add <file> <line> [--logger string]"))
     (is (str/includes? (:out (dlb *home* "help" "repo")) "dlb repo attach <path>"))
     (is (str/includes? (:out (dlb *home* "help" "scenario")) "dlb scenario kinds"))))

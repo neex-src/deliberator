@@ -38,6 +38,7 @@
             [deliberator.steps.sql]
             [deliberator.steps.sqs]
             [deliberator.steps.wait]
+            [deliberator.logfetch :as logfetch]
             [deliberator.store :as store]
             [deliberator.tunnel :as tunnel])
   (:import (java.lang ProcessHandle)
@@ -154,6 +155,9 @@
       (try
         (let [orphans (try (binding [store/*home* home] (engine/mark-orphans! home))
                            (catch Throwable e (log "orphan scan failed" (ex-message e)) []))
+              adopted (try (binding [store/*home* home] (logfetch/adopt-orphans! home))
+                           (catch Throwable e (log "follow adoption failed" (ex-message e)) []))
+              _ (when (seq adopted) (log "adopted unfinished log follows:" (str/join "," adopted)))
               _ (when (seq orphans) (log "marked interrupted:" (str/join "," (map #(.getFileName ^Path %) orphans))))
               {:keys [ssc endpoint]} (listener dir tcp log)
               last-activity (atom (System/currentTimeMillis))

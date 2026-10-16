@@ -56,7 +56,7 @@
     repo.attach path* kind ws                      -> {name path kind attached-at}
     repo.detach name* ws                           -> {removed}
     repo.list ws                                   -> [{name path kind attached-at}]
-    logs.fetch target* env since for filter session ws -> {path lines bytes sha target source}
+    logs.fetch target* env since for follow filter session ws -> {path lines bytes sha target source [follow]}   [logs.line]
     logs.match path* markers ws                    -> {lines [{n marker-id}] path scanned}
     marker.add file* line* logger ws               -> [{id file line logger}]   (the marker list after the change)
     marker.remove file* line* ws                   -> [{id file line logger}]
@@ -515,9 +515,10 @@
 (defn- repo-detach [_ {:keys [name] :as args}] {:removed (repo/detach! (ws-of args) name)})
 (defn- repo-list [_ args] (repo/list (ws-of args)))
 
-(defn- logs-fetch [_ {:keys [target env since for filter] :as args}]
+(defn- logs-fetch [ctx {:keys [target env since for filter follow] :as args}]
   (let [ws (ws-of args)]
-    (logfetch/fetch! ws (or env "local") target :session (session-key ws args) :since since :for for :filter filter)))
+    (logfetch/fetch! ws (or env "local") target :session (session-key ws args) :since since :for for :filter filter
+                     :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))))
 
 (defn- marker-add [_ {:keys [file line logger] :as args}] (markers/add! (ws-of args) file line :logger logger))
 (defn- marker-remove [_ {:keys [file line] :as args}] (markers/remove! (ws-of args) file line))
@@ -736,11 +737,13 @@
    "repo.list" {:fn repo-list :class :read :args (ws-schema)
                 :doc "The repositories attached to the workspace, in attach order."}
    "logs.fetch" {:fn logs-fetch :class :mutate
-                 :doc "Fetches a log target (container, file or CloudWatch group of the environment) into the session as logs/<target>-<ts>.log, hard-linked from the raw blobs. Without for: one shot; with for: also listens that long. filter keeps whole matching entries."
+                 :doc "Fetches a log target (container, file or CloudWatch group of the environment) into the session as logs/<target>-<ts>.log, hard-linked from the raw blobs. Without for: one shot; with for: also listens that long, streaming every line as a logs.line event while it arrives. follow (or for until-cancelled) listens until the request is cancelled or the client leaves, with ONE file for the whole follow, written as lines arrive. filter keeps whole matching entries."
+                 :events ["logs.line"]
                  :args (ws-schema :target {:type :string :required true :doc "environment target such as log/service-a, or an absolute file path"}
                                   :env {:type :string :doc "environment name; default local"}
                                   :since {:type :string :doc "ISO-8601 instant or a duration ago like 10m; default all (CloudWatch: 15m)"}
-                                  :for {:type :string :doc "keep listening this long, e.g. 5s"}
+                                  :for {:type :string :doc "keep listening this long, e.g. 5s; until-cancelled = follow"}
+                                  :follow {:type :bool :doc "listen until cancelled (Ctrl-C / the client leaving), one file for the whole follow"}
                                   :filter {:type :string :doc "text or /regex/ an entry must match"}
                                   :session {:type :string :doc "session key; default the current session"})}
    "logs.match" {:fn logs-match :class :read

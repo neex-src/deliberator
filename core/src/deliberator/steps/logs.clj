@@ -244,37 +244,42 @@
 (defn drain!
   "Consumes queue `q` until epoch-ms `end` or `(cancelled?)`: groups lines into entries, emits (calls
   `line!` for) the entries matching every filter and the gap lines, throws `:logs/source` with `hint` when
-  the source failed. Returns `{:out [emitted lines] :raw [every source line] :gaps n :gap-lines n}`."
-  [^LinkedBlockingQueue q end cancelled? filters line! hint]
-  (let [out (volatile! []) raw (volatile! []) pending (volatile! []) gaps (volatile! 0) gap-lines (volatile! 0)
-        emit! (fn [entry]
-                (when (entry-matches? filters entry)
-                  (doseq [l entry] (line! l) (vswap! out conj l))))
-        flush! (fn [] (when (seq @pending) (emit! @pending) (vreset! pending [])))]
-    (loop []
-      (let [left (- end (System/currentTimeMillis))]
-        (when (and (pos? left) (not (cancelled?)))
-          (let [x (.poll q (min 200 left) TimeUnit/MILLISECONDS)]
-            (cond
-              (nil? x) (do (flush!) (recur))
-              (instance? Throwable x)
-              (throw (ex-info (or (ex-message x) (str (class x)))
-                              (merge {:type :logs/source :hint hint}
-                                     (select-keys (ex-data x) [:hint]))
-                              x))
-              (map? x) (do (flush!)
-                           (when (:stop? x) (vswap! gaps inc))
-                           (vswap! gap-lines inc)
-                           (line! (:gap x)) (vswap! out conj (:gap x))
-                           (recur))
-              (= ::end x) (flush!)
-              :else (do (vswap! raw conj x)
-                        (if (and (seq @pending) (continuation? x))
-                          (vswap! pending conj x)
-                          (do (flush!) (vreset! pending [x])))
-                        (recur)))))))
-    (flush!)
-    {:out @out :raw @raw :gaps @gaps :gap-lines @gap-lines}))
+  the source failed. Returns `{:out [emitted lines] :raw [every source line] :gaps n :gap-lines n}`.
+  Options (a map as the 7th argument, for a follow that must not hold the stream in memory): `:raw!` is called
+  with every source line as it arrives, `:gap!` instead of `line!` for gap lines, `:collect? false` keeps `:out`
+  and `:raw` empty."
+  ([q end cancelled? filters line! hint] (drain! q end cancelled? filters line! hint {}))
+  ([^LinkedBlockingQueue q end cancelled? filters line! hint {:keys [raw! gap! collect?] :or {collect? true}}]
+   (let [out (volatile! []) raw (volatile! []) pending (volatile! []) gaps (volatile! 0) gap-lines (volatile! 0)
+         emit! (fn [entry]
+                 (when (entry-matches? filters entry)
+                   (doseq [l entry] (line! l) (when collect? (vswap! out conj l)))))
+         flush! (fn [] (when (seq @pending) (emit! @pending) (vreset! pending [])))]
+     (loop []
+       (let [left (- end (System/currentTimeMillis))]
+         (when (and (pos? left) (not (cancelled?)))
+           (let [x (.poll q (min 200 left) TimeUnit/MILLISECONDS)]
+             (cond
+               (nil? x) (do (flush!) (recur))
+               (instance? Throwable x)
+               (throw (ex-info (or (ex-message x) (str (class x)))
+                               (merge {:type :logs/source :hint hint}
+                                      (select-keys (ex-data x) [:hint]))
+                               x))
+               (map? x) (do (flush!)
+                            (when (:stop? x) (vswap! gaps inc))
+                            (vswap! gap-lines inc)
+                            ((or gap! line!) (:gap x)) (when collect? (vswap! out conj (:gap x)))
+                            (recur))
+               (= ::end x) (flush!)
+               :else (do (when collect? (vswap! raw conj x))
+                         (when raw! (raw! x))
+                         (if (and (seq @pending) (continuation? x))
+                           (vswap! pending conj x)
+                           (do (flush!) (vreset! pending [x])))
+                         (recur)))))))
+     (flush!)
+     {:out @out :raw @raw :gaps @gaps :gap-lines @gap-lines})))
 
 (defn run [ctx step]
   (let [{:keys [at source offset]} (or (:armed ctx) (arm ctx step))
