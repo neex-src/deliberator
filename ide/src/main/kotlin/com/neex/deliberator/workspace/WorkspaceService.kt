@@ -122,7 +122,12 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
         var m = model.takeIf { it.ws == name } ?: WorkspaceModel(name)
         var error: String? = null
         fun <T> part(f: () -> T): T? = try { f() } catch (e: DaemonException) { if (error == null) error = describe(e); null }
-        part { obj("workspace.show") }?.let { m = m.copy(path = it.get("path")?.asString) }
+        val shown = try { obj("workspace.show") } catch (e: DaemonException) {
+            // a workspace the daemon does not know is a state of its own (never created by a refresh): nothing else is asked
+            if (e.type == "workspace/not-found") return publish(WorkspaceModel(name, selectedEnv = selectedEnv, missing = true, fetchedAt = Instant.now()))
+            error = describe(e); null
+        }
+        shown?.let { m = m.copy(path = it.get("path")?.asString, missing = false) }
         part { WorkspaceModel.parseSessions(obj("session.list")) }?.let { (s, c) -> m = m.copy(sessions = s, currentSession = c) }
         part { WorkspaceModel.parseRuntime(obj("runtime.status")) }?.let { (r, h, c) -> m = m.copy(engineReachable = r, engineHint = h, containers = c) }
         part { WorkspaceModel.parseEnvs(obj("env.list")) }?.let { m = m.copy(envs = it) }
@@ -138,6 +143,13 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
     }
 
     // acting -------------------------------------------------------------------------------------
+
+    /** `workspace.open` for the bound workspace (the one way a missing workspace comes to exist); refreshes. Blocking. */
+    fun openWorkspace(): JsonObject {
+        val r = call("workspace.open").resultObject()
+        refreshNow()
+        return r
+    }
 
     fun startSession(key: String, title: String?): WorkspaceModel {
         call("session.start", JsonObject().apply { addProperty("key", key); if (!title.isNullOrBlank()) addProperty("title", title) })

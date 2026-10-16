@@ -3,6 +3,7 @@ package com.neex.deliberator.audit
 import com.google.gson.JsonObject
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.testFramework.PlatformTestUtil
@@ -95,19 +96,30 @@ class AuditEditorTest : BasePlatformTestCase() {
 
     // --- the project's workspace binding edited by hand ------------------------------------------
 
-    fun testAWorkspaceNamedByHandThatDoesNotExistIsAnEmptyModelAndRefreshMaterialisesIt() {
+    fun testAWorkspaceNamedByHandThatDoesNotExistIsShownAsMissingAndOnlyOpenWorkspaceCreatesIt() {
         svc.loadState(WorkspaceService.State().apply { ws = "no-such-ws" })
+        val dir = daemon.home.resolve("workspaces").resolve("no-such-ws")
         val m = bg { svc.refreshNow() }
         assertEquals("no-such-ws", m.ws)
-        assertNull("a workspace nobody created is shown empty, not as an error: ${m.error}", m.error)
-        assertTrue(m.sessions.isEmpty())
-        assertNull(m.currentSession)
-        val made = Path.of(bg { svc.call("workspace.show").resultObject().get("path").asString })
-        println("AUDIT-GHOST-WS: after refreshNow the directory exists=${Files.exists(made)} " + (if (Files.exists(made)) Files.walk(made).use { s -> s.map { made.relativize(it).toString() }.toList() } else ""))
-        // audit finding (rough edge): a typo in .idea/deliberator.xml silently makes a new workspace on the first refresh (env.list writes the
-        // default environment), the same lazy creation `dlb --ws typo` has; the model shows it as an empty, healthy workspace
-        assertTrue("env.list materialises the workspace", Files.isDirectory(made.resolve("environments")))
-        assertNotNull(DeliberatorPanel.headerText(m))
+        assertTrue("the daemon does not know it: the model says so", m.missing)
+        assertNull("not an error, a state of its own: ${m.error}", m.error)
+        assertTrue(m.sessions.isEmpty() && m.envs.isEmpty())
+        assertTrue(DeliberatorPanel.headerText(m), DeliberatorPanel.headerText(m).contains("not found"))
+        // the tool window offers the way out, and refreshing (any number of times) creates nothing
+        val panel = DeliberatorPanel(project).also { Disposer.register(testRootDisposable, it) }
+        bg { svc.refreshNow() }
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        panel.render(svc.model)
+        assertTrue("Open Workspace is visible", panel.openButton.isVisible)
+        assertFalse("a refresh must not materialise the workspace", Files.exists(dir))
+        assertNull("no other op was asked", svc.model.currentSession)
+        // Open Workspace is the one thing that creates it
+        bg { svc.openWorkspace() }
+        assertFalse(svc.model.missing)
+        assertTrue(Files.isDirectory(dir.resolve("environments")))
+        assertTrue(Files.isDirectory(dir.resolve("project")))
+        panel.render(svc.model)
+        assertFalse(panel.openButton.isVisible)
     }
 
     fun testAnInvalidWorkspaceNameByHandIsATypedErrorInTheModel() {

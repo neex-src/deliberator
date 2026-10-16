@@ -66,7 +66,7 @@ class OperationsDialog(private val project: Project, private val svc: WorkspaceS
     init {
         title = "Deliberator Operations (workspace ${svc.ws})"
         init()
-        list.cellRenderer = com.intellij.ui.SimpleListCellRenderer.create("") { (if (it.mutating) "* " else "  ") + it.op }
+        list.cellRenderer = com.intellij.ui.dsl.listCellRenderer.textListCellRenderer { (if (it.mutating) "* " else "  ") + it.op }
         list.addListSelectionListener { if (!it.valueIsAdjusting) list.selectedValue?.let { s -> select(s) } }
         filter.addDocumentListener(object : com.intellij.ui.DocumentAdapter() {
             override fun textChanged(e: javax.swing.event.DocumentEvent) = applyFilter()

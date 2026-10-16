@@ -15,14 +15,13 @@ import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.fileEditor.FileDocumentManager
-import com.intellij.openapi.fileEditor.FileEditorManager
-import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
 import com.neex.deliberator.run.RunSnapshot
 import com.neex.deliberator.run.ScnRunListener
+import com.neex.deliberator.ui.Ui
 import com.neex.deliberator.workspace.WorkspaceService
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
@@ -128,7 +127,7 @@ class LogMatcher(private val project: Project) : Disposable {
     fun open(path: String, line: Int): Editor? {
         val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(Path.of(path)) ?: return null
         LogFiles.register(path)
-        return FileEditorManager.getInstance(project).openTextEditor(OpenFileDescriptor(project, vf, maxOf(0, line - 1), 0), true)
+        return Ui.openEditor(project, vf, line - 1)
     }
 
     /** Forgets the latest run and every match (the light test project outlives a test). */

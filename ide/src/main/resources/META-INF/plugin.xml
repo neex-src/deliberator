@@ -42,6 +42,7 @@
         <lang.psiStructureViewFactory language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnStructureViewFactory"/>
         <completion.contributor language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnCompletionContributor"/>
         <editorFactoryListener implementation="com.neex.deliberator.scn.ScnEditorListener"/>
+        <typedHandler implementation="com.neex.deliberator.scn.ScnAutoPopup"/>
 
         <!-- running from the editor (piece 06) -->
         <projectService serviceImplementation="com.neex.deliberator.run.ScnRunner"/>
@@ -115,6 +116,7 @@
             </action>
         </group>
         <group id="deliberator.toolwindow.actions">
+            <action id="deliberator.workspace.create" icon="AllIcons.General.Add" class="com.neex.deliberator.actions.CreateWorkspaceAction" text="Open Workspace" description="The workspace of this project does not exist yet: workspace.open creates it"/>
             <action id="deliberator.workspace.refresh" icon="AllIcons.Actions.Refresh" class="com.neex.deliberator.actions.RefreshAction" text="Refresh" description="Re-read the workspace from the daemon"/>
             <action id="deliberator.session.start" icon="AllIcons.General.Add" class="com.neex.deliberator.actions.StartSessionAction" text="Start Session..." description="session.start"/>
             <action id="deliberator.session.end" icon="AllIcons.Actions.Cancel" class="com.neex.deliberator.actions.EndSessionAction" text="End Session" description="session.end of the current session"/>

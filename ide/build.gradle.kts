@@ -29,9 +29,17 @@ dependencies {
 
 kotlin {
     jvmToolchain(21)
+    // interface defaults stay in the platform's interfaces: without this the compiler copies ToolWindowFactory's deprecated and experimental
+    // defaults (isApplicable, isDoNotActivateOnStart, getAnchor, getIcon, manage) into our class and the verifier reports them as ours
+    compilerOptions { jvmDefault.set(org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode.NO_COMPATIBILITY) }
 }
 
 intellijPlatform {
+    // the builds `bb ide:verify` checks (recommended(): 262 and 263)
+    pluginConfiguration.ideaVersion {
+        sinceBuild = "262"
+        untilBuild = "263.*"
+    }
     buildSearchableOptions = false
     instrumentCode = false
     pluginVerification {

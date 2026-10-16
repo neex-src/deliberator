@@ -18,12 +18,14 @@ import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.util.Disposer
 import com.intellij.codeInsight.lookup.LookupManager
 import com.intellij.diff.DiffManager
-import com.intellij.ui.SimpleListCellRenderer
+import com.intellij.ui.dsl.listCellRenderer.textListCellRenderer
 import com.neex.deliberator.daemon.DaemonException
 import com.neex.deliberator.scn.ScnFile
 import com.neex.deliberator.scn.ScnFileType
 import com.neex.deliberator.ui.Ui
 import com.neex.deliberator.workspace.WorkspaceService
+
+private val CTRL_ENTER = com.intellij.openapi.actionSystem.CustomShortcutSet(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ENTER, java.awt.event.InputEvent.CTRL_DOWN_MASK))
 
 /** Creates the [RunView] of every `.scn` editor and binds Ctrl+Enter and Esc to it (component level, before the stock bindings). */
 class RunEditorListener : EditorFactoryListener {
@@ -34,7 +36,7 @@ class RunEditorListener : EditorFactoryListener {
         if (vf.fileType != ScnFileType || !vf.isInLocalFileSystem) return
         val view = RunView.attach(editor, project, vf)
         val am = ActionManager.getInstance()
-        am.getAction("deliberator.scenario.runStep")?.registerCustomShortcutSet(CommonShortcuts.CTRL_ENTER, editor.contentComponent, view)
+        am.getAction("deliberator.scenario.runStep")?.registerCustomShortcutSet(CTRL_ENTER, editor.contentComponent, view)
         am.getAction("deliberator.scenario.cancel")?.registerCustomShortcutSet(CommonShortcuts.ESCAPE, editor.contentComponent, view)
     }
 
@@ -126,7 +128,7 @@ object RunHistory {
 
     private fun pick(project: Project, path: String, title: String, rows: List<HistoryRow>, chosen: (HistoryRow) -> Unit) {
         JBPopupFactory.getInstance().createPopupChooserBuilder(rows).setTitle(title)
-            .setRenderer(SimpleListCellRenderer.create("") { it.label })
+            .setRenderer(textListCellRenderer { it.label })
             .setItemChosenCallback(chosen).createPopup().showCenteredInCurrentWindow(project)
     }
 

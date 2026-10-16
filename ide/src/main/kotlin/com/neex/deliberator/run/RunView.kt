@@ -142,6 +142,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
     private var allExpanded = false
     private var shown: RunSnapshot? = null
     private var loading = false
+    @Volatile private var disposed = false
     private val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
 
     /** The buffer differs from the run that is shown (edited, or the file changed since). */
@@ -194,7 +195,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
             val snap = try { runner.latest(path) } catch (_: Exception) { null }
             ApplicationManager.getApplication().invokeLater({
                 loading = false
-                if (snap != null && !Disposer.isDisposed(this) && runner.state(path).snapshot == null && !runner.isRunning(path)) runner.show(path, snap)
+                if (snap != null && !disposed && runner.state(path).snapshot == null && !runner.isRunning(path)) runner.show(path, snap)
             }, com.intellij.openapi.application.ModalityState.nonModal())
         }
     }
@@ -211,7 +212,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
 
     /** Rebuilds inlays, banner and gutter from the runner's state. EDT. */
     fun refresh() {
-        if (Disposer.isDisposed(this) || editor.isDisposed) return
+        if (disposed || editor.isDisposed) return
         val st = runner.state(path)
         val snap = st.snapshot
         val running = st.running
@@ -296,7 +297,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
 
     private fun scheduleGutter() {
         alarm.cancelAllRequests()
-        alarm.addRequest({ if (!Disposer.isDisposed(this) && !editor.isDisposed) refresh() }, 300)
+        alarm.addRequest({ if (!disposed && !editor.isDisposed) refresh() }, 300)
     }
 
     // actions --------------------------------------------------------------------------------------------
@@ -340,6 +341,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
     fun gutterIcons(): Map<Int, StepGutterIcon> = highlighters.mapNotNull { it.gutterIconRenderer as? StepGutterIcon }.associateBy { it.step }
 
     override fun dispose() {
+        disposed = true
         inlays.forEach { Disposer.dispose(it) }
         inlays.clear()
         if (!editor.isDisposed) highlighters.forEach { editor.markupModel.removeHighlighter(it) }

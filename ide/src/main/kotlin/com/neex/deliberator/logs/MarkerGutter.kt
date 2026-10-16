@@ -97,7 +97,7 @@ class MarkerGutter(val editor: Editor, val project: Project, val file: VirtualFi
      * A marked line that was deleted has no valid highlighter left: its marker stays where it was, removed only by hand.
      */
     fun syncMoved(): Int {
-        val moves = com.intellij.openapi.application.runReadAction {
+        val moves = com.intellij.openapi.application.ReadAction.compute<List<Pair<Marker, Int>>, RuntimeException> {
             drawn.filter { it.second.isValid }.mapNotNull { (m, h) ->
                 val now = editor.document.getLineNumber(h.startOffset) + 1
                 if (now != m.line) m to now else null

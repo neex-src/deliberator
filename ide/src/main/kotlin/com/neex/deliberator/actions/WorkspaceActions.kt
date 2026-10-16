@@ -6,10 +6,8 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.project.ex.ProjectManagerEx
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.popup.JBPopupFactory
-import com.intellij.ide.impl.OpenProjectTask
 import com.google.gson.JsonObject
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.ui.dsl.builder.panel
@@ -20,7 +18,6 @@ import com.neex.deliberator.daemon.DaemonService
 import com.neex.deliberator.ui.OperationsDialog
 import com.neex.deliberator.ui.Ui
 import com.neex.deliberator.workspace.WorkspaceService
-import java.nio.file.Files
 import java.nio.file.Path
 import javax.swing.JComponent
 
@@ -126,7 +123,7 @@ class OpenRunAction : WorkspaceAction() {
         val runs = svc.model.runs
         if (runs.isEmpty()) { Ui.notify(project, "Runs", "No runs in the current session.", NotificationType.WARNING); return }
         JBPopupFactory.getInstance().createPopupChooserBuilder(runs).setTitle("Run")
-            .setRenderer(com.intellij.ui.SimpleListCellRenderer.create("") { "${it.runId}  ${it.status ?: ""}  ${it.scenario ?: ""}" })
+            .setRenderer(com.intellij.ui.dsl.listCellRenderer.textListCellRenderer { "${it.runId}  ${it.status ?: ""}  ${it.scenario ?: ""}" })
             .setItemChosenCallback { open(project, it.path) }.createPopup().showCenteredInCurrentWindow(project)
     }
 
@@ -158,7 +155,14 @@ class BindWorkspaceAction : AnAction() {
     }
 }
 
-/** `deliberator.workspace.open`: open (creating) the project directory of a workspace as a project. */
+/** `deliberator.workspace.create` ("Open Workspace" in the tool window): the bound workspace does not exist yet; `workspace.open` creates it. */
+class CreateWorkspaceAction : WorkspaceAction() {
+    override fun enabledFor(svc: WorkspaceService) = svc.ws != null && svc.model.missing
+    override fun perform(project: Project, svc: WorkspaceService) =
+        Ui.background(project, "Deliberator: open workspace ${svc.ws}", { svc.openWorkspace() })
+}
+
+/** `deliberator.workspace.open`: open (creating, through `workspace.open`) the project directory of a workspace as a project. */
 class OpenWorkspaceAction : AnAction() {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
     override fun actionPerformed(e: AnActionEvent) {
@@ -168,7 +172,7 @@ class OpenWorkspaceAction : AnAction() {
             try {
                 val dir = projectDirOf(name)
                 ApplicationManager.getApplication().invokeLater {
-                    val project = ProjectManagerEx.getInstanceEx().openProject(dir, OpenProjectTask.build())
+                    val project = com.intellij.openapi.project.ProjectManager.getInstance().loadAndOpenProject(dir.toString())
                     if (project != null) {
                         WorkspaceService.getInstance(project).bind(name)
                         WorkspaceService.getInstance(project).refresh()
@@ -182,13 +186,14 @@ class OpenWorkspaceAction : AnAction() {
 
     companion object {
         /**
-         * The project directory of workspace [ws], created: `project` inside the directory `workspace.show` answers.
+         * The project directory of workspace [ws], created on purpose: `workspace.open` answers it (`project`).
          * The IDE does not know where workspaces live; the daemon says.
          */
         fun projectDirOf(ws: String): Path {
-            val t = DaemonService.getInstance().client().call("workspace.show", JsonObject().apply { addProperty("ws", ws) })
-            val base = t.resultObject().get("path")?.asString ?: throw DaemonException("workspace.show returned no path", "workspace/no-path")
-            return Files.createDirectories(Path.of(base).resolve("project"))
+            val t = DaemonService.getInstance().client().call("workspace.open", JsonObject().apply { addProperty("ws", ws) })
+            if (!t.ok) throw DaemonException(t.errorMessage ?: "workspace.open failed", t.errorType ?: "daemon/error", t.error?.get("hint")?.takeIf { it.isJsonPrimitive }?.asString)
+            val project = t.resultObject().get("project")?.asString ?: throw DaemonException("workspace.open returned no project", "workspace/no-path")
+            return Path.of(project)
         }
     }
 }
