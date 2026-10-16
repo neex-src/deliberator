@@ -6,7 +6,8 @@
   (`:name` goes into run.edn); `:resolve-target` is the seam to `env/target` (`(f \"service/a\")`
   -> value, throws `{:type :env/unknown-target}`; the daemon passes an adapter that makes the key
   a keyword); `:steps` runs only those step numbers (captures of the others are then missing:
-  seed them with `:vars`).
+  seed them with `:vars`); `:confirm` is a confirmation token for remote mutating calls, handed to kinds
+  in ctx. A step's `:error` rides on its `:step.finished` event.
 
   `(plan ws env path & opts)` is the static half and throws before anything is created or sent:
   parse errors (`:scenario/parse`), undeclared directives and facts, assertion/capture/duration
@@ -272,7 +273,8 @@
   (let [d (ex-data e)]
     (cond-> {:message (or (ex-message e) (str (class e)))}
       (:type d) (assoc :type (:type d))
-      (:hint d) (assoc :hint (:hint d)))))
+      (:hint d) (assoc :hint (:hint d))
+      (:confirm d) (assoc :confirm (:confirm d)))))
 
 (defn- vars-for [st step corr]
   (assoc @(:vars st) "step.correlation" corr))
@@ -297,8 +299,9 @@
     (Files/createDirectories d (make-array FileAttribute 0))
     (try (store/write-edn! (.resolve d "step.edn") rec)
          (catch Throwable e (emit! st {:event :line :step (:n rec) :text (str "cannot write step.edn: " (ex-message e))}))))
-  (emit! st {:event :step.finished :step (:n rec) :status (:status rec) :facts (:facts rec)
-             :elapsed (:elapsed rec)})
+  (emit! st (cond-> {:event :step.finished :step (:n rec) :status (:status rec) :facts (:facts rec)
+                     :elapsed (:elapsed rec)}
+              (:error rec) (assoc :error (:error rec))))
   rec)
 
 ;; ---------------------------------------------------------------- one step
@@ -320,6 +323,7 @@
              :line! (fn [text] (emit! st {:event :line :step (:n step) :text (str text)}))
              :correlation (:run-id st) :step-correlation corr
              :resolve-target (:resolve-target st) :attempt 0
+             :confirm (:confirm (:opts st))
              :cancelled? (fn [] @(:cancelled st))}
         armed (when (and (:concurrent? kmap) (:arm kmap)) ((:arm kmap) ctx rstep))]
     {:rstep rstep :ctx (assoc ctx :armed armed) :corr corr :step-dir step-dir :timeout-ms timeout-ms}))

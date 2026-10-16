@@ -8,8 +8,9 @@
   class, status -- stays the blob's meta) and links the blob into the step directory as
   `request.edn` and `response.<json|xml|txt|bin>`. Failures: `call!` turns an `invoke!` error map
   into a thrown ERROR (message = AWS code and message, `:hint` from the error, bytes of the failed
-  call in the ex-data); a confirmation request (remote mutate) becomes an ERROR too, because a
-  scenario step cannot confirm.
+  call in the ex-data); a confirmation request (remote mutate) becomes an ERROR too, carrying
+  `:confirm {:token :summary :expires}` in its ex-data; `call!` passes the run's `:confirm` token (ctx,
+  from the daemon's `scenario.run` `confirm`) on to `invoke!`, which lets exactly that request through.
 
   Targets: `target-value` takes an `http(s)://` URL, an `arn:` or a bare name (no `/`) as written
   and sends every other word (`queue/inbox`, `table/messages`) through `:resolve-target`; the
@@ -94,8 +95,9 @@
     (if (= :confirm-required (:type r))
       (ex-info (str (:summary r) " needs confirmation")
                {:type :aws/confirm-required
+                :confirm (select-keys r [:token :summary :expires])
                 :hint (str "environment " (c/env-name ctx) " is remote: a mutating call must be confirmed, "
-                           "and a scenario step cannot confirm; run it from the console or use a read operation")})
+                           "and needs a confirmation token: re-run with confirm set to the token of this error (it is bound to the exact request), or use a read operation")})
       (ex-info (cond (and code msg (not (str/includes? msg (str code)))) (str code ": " msg)
                      :else (or msg code (str (:category r))))
                (merge {:type :aws/error :hint (:hint r) :aws (dissoc r :raw)}
@@ -104,7 +106,7 @@
 (defn call!
   "`aws/invoke!` through the step's context; an error map is thrown as a step ERROR."
   [ctx service op request]
-  (let [r (aws/invoke! {:ws (:ws ctx) :session (:session ctx)} (:env ctx) service op request)]
+  (let [r (aws/invoke! (select-keys ctx [:ws :session :confirm]) (:env ctx) service op request)]
     (if (aws/error? r) (throw (failure ctx r)) r)))
 
 (defn elapsed [r] (:deliberator.aws/elapsed-ms (meta r)))
