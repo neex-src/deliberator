@@ -138,9 +138,10 @@
   [token fp now]
   (let [[old _] (swap-vals! tokens
                             (fn [m] (let [v (get m token)]
-                                      (if (and v (= fp (:fp v)) (not (.isAfter ^Instant now (:expires v))))
-                                        (dissoc m token)
-                                        m))))
+                                      (cond (nil? v) m
+                                            (.isAfter ^Instant now (:expires v)) (dissoc m token)
+                                            (= fp (:fp v)) (dissoc m token)
+                                            :else m))))
         v (get old token)]
     (boolean (and v (= fp (:fp v)) (not (.isAfter ^Instant now (:expires v)))))))
 
@@ -207,9 +208,22 @@
         (str "failed talking to " where ", account " account
              "; if credentials are the cause: aws sso login --profile " profile)))))
 
+(defn- throwable [r]
+  (or (:cognitect.aws.client.impl/throwable r) (:cognitect.aws/throwable r)))
+
+(defn- connection-failure? [^Throwable t]
+  (boolean (some #(or (instance? java.net.ConnectException %)
+                      (instance? java.net.UnknownHostException %)
+                      (instance? java.net.SocketException %)
+                      (instance? java.net.http.HttpConnectTimeoutException %)
+                      (instance? java.nio.channels.UnresolvedAddressException %))
+                 (take-while some? (iterate #(.getCause ^Throwable %) t)))))
+
 (defn- ->error [env service op-name r raw]
-  (let [cat (keyword (name (:cognitect.anomalies/category r)))
-        t (:cognitect.aws.client.impl/throwable r)]
+  (let [t (throwable r)
+        cat (if (and t (connection-failure? t))
+              :unavailable
+              (keyword (name (:cognitect.anomalies/category r))))]
     (with-meta
       (cond-> {:type :aws/error :category cat
                :code (or (:cognitect.aws.error/code r) (some-> (:__type r) str))
@@ -276,7 +290,7 @@
                                       :status (:status http)
                                       :content-type (or (get-in http [:headers "content-type"])
                                                         "application/octet-stream")})
-                               (put! ws env (->bytes (pr-edn (dissoc r :cognitect.aws.client.impl/throwable)))
+                               (put! ws env (->bytes (pr-edn (dissoc r :cognitect.aws.client.impl/throwable :cognitect.aws/throwable)))
                                      {:op op-name :service api :role :anomaly :class class
                                       :content-type "application/edn"}))
                     raw {:request (item-ref req-ref) :response (item-ref resp-ref)
