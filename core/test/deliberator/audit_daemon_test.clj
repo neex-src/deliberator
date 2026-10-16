@@ -162,3 +162,18 @@
         (is (and (map? m) (false? (:ok m))) (str "got " (pr-str m)))))
     (with-client [c h]
       (is (true? (:ok (:terminal (tc/request c "hello" {})))) "other connections are unaffected"))))
+
+(deftest ^:known-bug stopping-the-daemon-with-a-run-going-finalises-the-run
+  ;; stop! cancels the runs and then `(deref run 3000 nil)`: Run implements IDeref only, so the 3-arity
+  ;; deref throws ClassCastException, the rest of stop! (server, endpoint, lock) never runs.
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [c h]
+      (ok! c "session.start" {:key "T-1"})
+      (let [path (write-file "long.scn" "### wait long\n# @for 60s\n")
+            _ (tc/send! c "scenario.run" {:path path})
+            started (tc/recv c 5000)
+            run-dir (io/file (str (store/home)) "workspaces" "default" "sessions" "T-1" "runs" (:run-id started))
+            outcome (try ((:stop! h)) :stopped (catch Throwable e (class e)))]
+        (is (= :stopped outcome) (str "stop! threw " outcome))
+        (is (= :cancelled (:status (read-run-edn run-dir))))
+        (is (.isFile (io/file run-dir "result.txt")))))))

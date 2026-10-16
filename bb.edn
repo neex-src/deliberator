@@ -2,8 +2,13 @@
  :tasks
  {core:build {:doc "Build core/target/deliberatord.jar (AOT uberjar)"
               :task (shell {:dir "core"} "clojure -T:build uber")}
-  core:test {:doc "Run the core tests (clojure -M:test in core/)"
+  core:test {:doc "Run the core tests (clojure -M:test in core/). Pass A of the full recipe: with the estate DOWN the runtime tests own host ports 14566/15432; tests that need an already running Floci (DLB_TEST_FLOCI_URL, default :14566) skip. `bb core:test:all` runs both passes."
              :task (shell {:dir "core"} "clojure -M:test")}
+  core:test:all {:doc "Both passes of the core suite: A = bb core:test with the estate down; B = estate up (--ws W, default \"default\"), then the Floci-dependent namespaces and the ESTATE_WS end-to-end test against it; estate down again unless --keep"
+                 :requires ([core-test-all])
+                 :task (apply core-test-all/-main *command-line-args*)}
+  core:test:known-bugs {:doc "Only the audit's tests of known product bugs (^:known-bug), excluded from core:test; see docs/plans/m1-test-report.md"
+                        :task (shell {:dir "core"} "clojure -M:test:known-bugs")}
   check:arch {:doc "Layering rules: core, cli, ide separation, no employer names"
               :requires ([check-arch])
               :task (check-arch/-main)}

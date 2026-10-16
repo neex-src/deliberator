@@ -242,3 +242,19 @@
     (let [e (thrown #(env/load "w" "local"))]
       (is (= :env/invalid (:type e)) (pr-str e))
       (is (some #(str/includes? (str %) "profile") (:problems e)) (pr-str e)))))
+
+;; --- the raw store under contention ----------------------------------------------------------------
+
+(deftest parallel-puts-of-the-same-bytes-leave-one-intact-blob-and-one-sidecar
+  (tu/with-temp-home
+    (let [bs (.getBytes (apply str (repeat 20000 "contended ")) "UTF-8")
+          rs (doall (map deref (doall (for [i (range 32)]
+                                        (future (store/raw-put! "w" bs (tu/meta-for {:op (str "put " i)})))))))
+          sha (:sha (first rs))
+          m (store/raw-meta "w" sha)]
+      (is (= 1 (count (set (map :sha rs)))))
+      (is (<= 1 (count (filter :new? rs))) "at least one writer created it (a race may let several claim it)")
+      (is (java.util.Arrays/equals bs (store/raw-get "w" sha)))
+      (is (= sha (:sha m)))
+      (is (str/starts-with? (:op m) "put ") "one well-formed sidecar, written by one of the writers")
+      (is (= 2 (count (.listFiles (.getParentFile (.toFile (store/raw-path "w" sha)))))) "blob and sidecar, no temp files left"))))
