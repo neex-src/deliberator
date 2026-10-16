@@ -194,7 +194,7 @@ class LogsAndMarkersTest : BasePlatformTestCase() {
 
         bg { daemon.launcher.stopDaemon(daemon.home) }
         val again = bg { markers.refreshNow() }
-        assertEquals("a new daemon reads markers.edn", listOf(m), again)
+        assertEquals("a new daemon still has the marker", listOf(m), again)
     }
 
     fun testAFileWithoutAJavaClassSendsNoLogger() {

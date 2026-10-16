@@ -1,6 +1,6 @@
 /**
  * Source markers: a marker is a source line whose log lines the user wants highlighted. The truth lives in the
- * daemon (`markers.edn`, ops `marker.*`); [MarkerService] only caches the last `marker.list` for drawing, and
+ * daemon (the daemon's marker store, ops `marker.*`); [MarkerService] only caches the last `marker.list` for drawing, and
  * every change goes to the daemon first. The logger of a marker (what a log line names as `logger:line`) is the
  * FQN of the outermost class at that line, derived by a [LoggerResolver] (Java PSI when the Java plugin is there);
  * without one no logger is sent and the daemon compares the file's base name.
