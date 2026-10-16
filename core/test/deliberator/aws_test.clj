@@ -104,6 +104,7 @@
 
 (deftest-floci aws-profile-in-the-process-environment-changes-nothing
   (with-temp-home
+    (env/save! "w" (fu/local-env))
     (let [home (str (store/home))
           code "(require '[deliberator.env :as env] '[cognitect.aws.client.api :as aws]) (let [e (env/load \"w\" \"local\") r (aws/invoke (env/aws-client e :sqs) {:op :ListQueues :request {}})] (prn {:aws-profile (System/getenv \"AWS_PROFILE\") :ok (not (:cognitect.anomalies/category r)) :queue-urls (contains? r :QueueUrls)}))"
           pb (ProcessBuilder. ^java.util.List

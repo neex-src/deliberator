@@ -416,7 +416,7 @@
       (let [e (remote-env)
             _ (env/save! "default" e)
             q (:queue/q (:targets e))]
-        (is (not (aws/error? (aws/invoke! {:ws "default"} env/default-local :sqs :CreateQueue {:QueueName q}))))
+        (is (not (aws/error? (aws/invoke! {:ws "default"} (fu/local-env) :sqs :CreateQueue {:QueueName q}))))
         (let [h (daemon/start! {:idle-minutes 0})]
           (try
             (with-client [c h]
