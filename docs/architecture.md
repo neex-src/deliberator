@@ -279,7 +279,7 @@ operation.
 - **Services.** A run-configuration type delegating to `service.start`, remote debug on the
   container's JDWP port, "Reload Changed Classes" against a JBR with
   `-XX:+AllowEnhancedClassRedefinition` *(research: JBR 21 and 25 ship it; the flag is present in
-  the local JBR 25.0.4)*, HotswapAgent optional, Spring DevTools fallback.
+  the local JBR 25.0.4)*, HotswapAgent in-process with its Spring plugin, container restart as the fallback (decision 43, measured on JBR 21 and 25; DevTools dropped).
 - **Tool window** "Deliberator": sessions, runs, runtime status, environment selector. Every item
   is also an action and a CLI command.
 
