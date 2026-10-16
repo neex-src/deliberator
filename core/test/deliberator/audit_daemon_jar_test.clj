@@ -3,7 +3,7 @@
   the daemon is stopped under it. SIGTERM must finalise the run and remove endpoint, socket and lock
   (`daemon/stop!` derefs a `Run` with a timeout, which `Run` does not implement: ClassCastException);
   SIGKILL cannot finalise anything, so the next daemon on the home should not keep claiming that run
-  is running. Both `^:known-bug`."
+  is running. Both were known bugs (F2, F4), fixed in piece 13."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -46,7 +46,7 @@
 (defn- run-status [h run-id]
   (:status (store/read-edn (io/file h "workspaces" "default" "sessions" "K-1" "runs" run-id "run.edn"))))
 
-(deftest ^:known-bug sigterm-under-a-running-run-finalises-it
+(deftest sigterm-under-a-running-run-finalises-it
   (if-not (.isFile jar)
     (is false "run `bb core:build` before the jar tests")
     (let [h (home "t")
@@ -61,7 +61,7 @@
         (is (not (.exists (io/file h "daemon" "deliberatord.sock"))) "socket removed")
         (finally (tc/close! c) (.destroyForcibly ^Process (:proc d)))))))
 
-(deftest ^:known-bug a-killed-daemons-run-is-not-running-for-ever
+(deftest a-killed-daemons-run-is-not-running-for-ever
   (if-not (.isFile jar)
     (is false "run `bb core:build` before the jar tests")
     (let [h (home "k")

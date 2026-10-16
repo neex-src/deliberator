@@ -292,11 +292,13 @@
         run (apply engine/start! ws e file
                    (mapcat identity
                            (cond-> {:session sess :sink sink
+                                    ;; registered before the run can emit: a cancel that arrives first takes
+                                    :on-created (fn [run]
+                                                  (swap! (:runs d) assoc (:run-id run) run)
+                                                  ((:on-cancel! ctx) (fn [] (engine/cancel! run))))
                                     :resolve-target (fn [k] (env/target e (keyword k)))}
                              (seq steps) (assoc :steps (set steps))
                              confirm (assoc :confirm confirm))))]
-    (swap! (:runs d) assoc (:run-id run) run)
-    ((:on-cancel! ctx) (fn [] (engine/cancel! run)))
     (try
       (let [res (assoc @run :session sess :env env-name)
             cs @confirmations]

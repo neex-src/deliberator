@@ -151,7 +151,10 @@
     (let [lock (acquire-lock! dir)
           log (logger (.resolve dir "daemon.log"))]
       (try
-        (let [{:keys [ssc endpoint]} (listener dir tcp log)
+        (let [orphans (try (binding [store/*home* home] (engine/mark-orphans! home))
+                           (catch Throwable e (log "orphan scan failed" (ex-message e)) []))
+              _ (when (seq orphans) (log "marked interrupted:" (str/join "," (map #(.getFileName ^Path %) orphans))))
+              {:keys [ssc endpoint]} (listener dir tcp log)
               last-activity (atom (System/currentTimeMillis))
               inflight (atom 0)
               runs (atom {})
@@ -164,13 +167,21 @@
                       ([reason]
                        (when (compare-and-set! stopping false true)
                          (log "stopping:" (name reason))
-                         (doseq [r (vals @runs)] (try (engine/cancel! r) (catch Throwable _ nil)))
-                         (doseq [r (vals @runs)] (deref r 3000 nil))
-                         (when-let [s @server] ((:stop! s)))
-                         (try (Files/deleteIfExists (.resolve dir "endpoint")) (catch Exception _ nil))
-                         (try (Files/deleteIfExists (.resolve dir "deliberatord.sock")) (catch Exception _ nil))
-                         (release-lock! lock)
-                         (deliver stopped reason))))
+                         (try
+                           (let [rs (vals @runs)]
+                             (doseq [r rs] (try (engine/cancel! r) (catch Throwable _ nil)))
+                             (doseq [r rs]
+                               (when (= ::timeout (deref (:done r) 3000 ::timeout))
+                                 (log "run did not finish in 3s, marking it interrupted:" (:run-id r))
+                                 (try (engine/interrupt-run! (:run-dir r) "the daemon stopped before the run finished")
+                                      (catch Throwable e (log "could not mark" (:run-id r) (ex-message e)))))))
+                           (catch Throwable e (log "stop: finalising runs failed" (ex-message e)))
+                           (finally
+                             (try (when-let [s @server] ((:stop! s))) (catch Throwable _ nil))
+                             (try (Files/deleteIfExists (.resolve dir "endpoint")) (catch Exception _ nil))
+                             (try (Files/deleteIfExists (.resolve dir "deliberatord.sock")) (catch Exception _ nil))
+                             (release-lock! lock)
+                             (deliver stopped reason))))))
               dispatch (fn [{:keys [id op args]} ctx]
                          (let [t0 (System/nanoTime)
                                done (fn [outcome] (reset! last-activity (System/currentTimeMillis))
