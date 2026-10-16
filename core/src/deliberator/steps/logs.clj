@@ -105,7 +105,7 @@
 
 (defn podman-client [ctx]
   (let [cfg (runtime/read-config (:ws ctx))]
-    (podman/client (get-in cfg [:podman :endpoint] (podman/default-endpoint)))))
+    (runtime/podman-client (:ws ctx) cfg :persist? false)))
 
 (defn container-source
   "Follows the container's logs. When the stream ends or breaks after the first attach (the container

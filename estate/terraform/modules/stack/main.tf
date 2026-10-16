@@ -322,6 +322,7 @@ resource "aws_ecs_task_definition" "service" {
 output "inbox_queue" { value = aws_sqs_queue.inbox.name }
 output "events_queue" { value = aws_sqs_queue.events.name }
 output "table" { value = aws_dynamodb_table.messages.name }
+output "parameter_values" { value = local.parameters }
 output "bus" { value = aws_cloudwatch_event_bus.bus.name }
 output "lambda" { value = aws_lambda_function.logger.function_name }
 # service key (a, b) -> the rendered ECS container definitions (JSON text); `bb estate:deploy` reads this

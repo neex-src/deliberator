@@ -23,3 +23,29 @@ output "task_definitions" {
   value     = module.stack.task_definitions
   sensitive = true
 }
+
+# local2: the same parameters, an api-key of its own
+resource "aws_ssm_parameter" "local2" {
+  provider = aws.local2
+  for_each = module.stack.parameter_values
+  name     = "/estate/${each.key}"
+  type     = "String"
+  value    = each.value
+}
+
+resource "aws_secretsmanager_secret" "local2_api_key" {
+  provider                = aws.local2
+  name                    = "estate/api-key"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "local2_api_key" {
+  provider      = aws.local2
+  secret_id     = aws_secretsmanager_secret.local2_api_key.id
+  secret_string = "local2-${random_password.local2_api_key.result}"
+}
+
+resource "random_password" "local2_api_key" {
+  length  = 24
+  special = false
+}

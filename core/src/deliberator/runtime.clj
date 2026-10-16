@@ -53,7 +53,8 @@
             [deliberator.service.description :as description]
             [deliberator.service.staging :as staging]
             [deliberator.store :as store]
-            [deliberator.topology :as topology])
+            [deliberator.topology :as topology]
+            [deliberator.tunnel :as tunnel])
   (:import (java.net InetSocketAddress Socket URI)
            (java.net.http HttpClient HttpClient$Version HttpRequest HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
@@ -161,6 +162,11 @@
   {:http (or (:http health) "/actuator/health")
    :port (or (:port health) (first (remove #{debug} (keys (into (sorted-map) ports)))))})
 
+(defn- rehash
+  "`d` with `:hash` over everything that would change the container. `:secret-values` is never part of it."
+  [d]
+  (assoc d :hash (subs (store/sha256 (.getBytes ^String (pr-str (sorted-deep (dissoc d :health :service? :secret-values :hash))) StandardCharsets/UTF_8)) 0 16)))
+
 (defn desired
   "One container of the config resolved into what will be created:
   `{:role :name :image :ports {cp hp} :host-ip :env :command :mounts :health :podman-socket
@@ -199,7 +205,7 @@
             exploded (assoc :exploded exploded :dep-stamp (dep-stamp (:dependency exploded)))
             (or jar exploded) (assoc :service? true)
             (seq (:secrets spec)) (assoc :secrets (into (sorted-map) (for [[k v] (:secrets spec)] [(clojure.core/name k) v]))))]
-    (assoc d :hash (subs (store/sha256 (.getBytes ^String (pr-str (sorted-deep (dissoc d :health :service?))) StandardCharsets/UTF_8)) 0 16))))
+    (rehash d)))
 
 (defn- merge-spec
   "`base` (derived from a description) with the runtime half `over` (`runtime.edn :services <name>`):
@@ -240,27 +246,50 @@
 (defn desired-all [ws cfg]
   (mapv (fn [[role spec]] (desired ws cfg role spec)) (sort-by (comp str key) (effective-containers ws cfg))))
 
-(defn- resolve-one [ws local ref]
+(defn logical-ref
+  "A `valueFrom` reference as `{:service :ssm|:secretsmanager :id name-in-any-environment :json-key}`: a secret ARN
+  loses account, region and the random 6-character suffix Secrets Manager appends, an SSM ARN becomes `/path`. Used to
+  look the same secret up in ANOTHER environment (`secrets-from`), where the ARN of the local one means nothing."
+  [ref]
   (let [ref (str ref)
-        ctx {:ws ws}
+        arn (re-matches #"arn:[^:]*:(ssm|secretsmanager):[^:]*:[^:]*:(parameter|secret)[:/](.+)" ref)
+        ssm? (or (and arn (= "ssm" (second arn))) (str/starts-with? ref "/"))]
+    (if ssm?
+      {:service :ssm :id (if arn (str "/" (str/replace (nth arn 3) #"^/" "")) ref)}
+      (let [tail (if arn (nth arn 3) ref)
+            [nm json-key] (let [parts (str/split tail #":" -1)]
+                            (if (and (> (count parts) 1) (seq (second parts)))
+                              [(first parts) (second parts)]
+                              [(first parts) nil]))]
+        {:service :secretsmanager
+         :id (if arn (str/replace nm #"-[A-Za-z0-9]{6}$" "") nm)
+         :json-key json-key}))))
+
+(defn- resolve-one
+  "The value of `ref` in environment `e`. `by-name?` looks the logical name up (another environment); otherwise the
+  reference is used as written. `redact?` keeps the response bodies out of the raw store."
+  [ws e ref {:keys [by-name? redact?]}]
+  (let [ref (str ref)
+        ctx (cond-> {:ws ws} redact? (assoc :redact-secrets true))
         arn (re-matches #"arn:[^:]*:(ssm|secretsmanager):[^:]*:[^:]*:(parameter|secret)[:/](.+)" ref)
         ssm? (or (and arn (= "ssm" (second arn))) (str/starts-with? ref "/"))
         [secret-id json-key] (if (and arn (not ssm?))
-                               (let [parts (str/split (nth arn 3) #":" -1)
-                                     name-part (first parts)]
+                               (let [parts (str/split (nth arn 3) #":" -1)]
                                  (if (and (> (count parts) 1) (seq (second parts)))
                                    [(str/join ":" (take 7 (str/split ref #":" -1))) (second parts)]
                                    [ref nil]))
                                [ref nil])
+        lr (when by-name? (logical-ref ref))
         r (if ssm?
-            (aws/invoke! ctx local :ssm :GetParameter {:Name (if arn (str "/" (nth arn 3)) ref) :WithDecryption true})
-            (aws/invoke! ctx local :secretsmanager :GetSecretValue {:SecretId secret-id}))
+            (aws/invoke! ctx e :ssm :GetParameter {:Name (if by-name? (:id lr) (if arn (str "/" (nth arn 3)) ref)) :WithDecryption true})
+            (aws/invoke! ctx e :secretsmanager :GetSecretValue {:SecretId (if by-name? (:id lr) secret-id)}))
+        json-key (if by-name? (:json-key lr) json-key)
         v (if ssm? (get-in r [:Parameter :Value]) (:SecretString r))]
     (when (or (aws/error? r) (nil? v))
-      (throw (ex-info (str "cannot resolve " ref " against the local environment"
+      (throw (ex-info (str "cannot resolve " ref " against environment " (:name e)
                            (when (aws/error? r) (str ": " (or (:message r) (:category r) (:type r))))
-                           " (bb estate:deploy seeds it)")
-                      {:type :runtime/secret-unresolved :ref ref :hint "bb estate:deploy"})))
+                           (when-not by-name? " (bb estate:deploy seeds it)"))
+                      {:type :runtime/secret-unresolved :ref ref :env (:name e) :hint (if by-name? (str "is it defined in environment " (:name e) "?") "bb estate:deploy")})))
     (if json-key (get (json/read-str v) json-key v) v)))
 
 (defn resolve-secrets
@@ -269,15 +298,30 @@
   [ws secrets]
   (when (seq secrets)
     (let [local (env/load ws "local")]
-      (into {} (for [[k ref] secrets] [k (resolve-one ws local ref)])))))
+      (into {} (for [[k ref] secrets] [k (resolve-one ws local ref {})])))))
+
+(defn secret-refs
+  "env name -> `valueFrom` of the service role `role` (label, e.g. \"service-a\"): the merged `:secrets` of its spec."
+  [ws role]
+  (let [d (some #(when (= role (:role %)) %) (desired-all ws (or (read-config ws) {})))]
+    (into (sorted-map) (:secrets d))))
+
+(defn fetch-secrets
+  "env name -> REAL value of each `refs` entry, read from environment `env-name` by logical name through `aws/invoke!`
+  with the persisted bodies redacted (`GetSecretValue`, `GetParameter WithDecryption true`). The caller holds the
+  result in memory and hands it to `ensure!` (`:secrets-from`); it is written nowhere."
+  [ws env-name refs]
+  (let [e (env/load ws env-name)]
+    (into {} (for [[k ref] refs] [k (resolve-one ws e ref {:by-name? true :redact? true})]))))
 
 (defn- container-spec
   "The libpod creation body for `d`."
   [ws d socket-path]
   {"name" (:name d)
    "image" (:image d)
-   "labels" {"deliberator.workspace" (store/ws-name ws) "deliberator.role" (:role d) "deliberator.spec" (:hash d)}
-   "env" (merge (resolve-secrets ws (:secrets d)) (:env d))
+   "labels" (cond-> {"deliberator.workspace" (store/ws-name ws) "deliberator.role" (:role d) "deliberator.spec" (:hash d)}
+              (:secrets-from d) (assoc "deliberator.secrets-from" (get-in d [:secrets-from :env])))
+   "env" (merge (or (:secret-values d) (resolve-secrets ws (:secrets d))) (:env d))
    "command" (:command d)
    "netns" {"nsmode" "bridge"}
    "Networks" {(:network d) {}}
@@ -356,9 +400,24 @@
 
 (defn- ws-labels [ws] {"deliberator.workspace" (store/ws-name ws)})
 
+(defn podman-endpoint
+  "The endpoint the Podman client speaks for `cfg`: `runtime.edn :podman :endpoint`, an `ssh://` one replaced by the
+  `unix://` end of its tunnel (opened here, `deliberator.tunnel`; failing as `podman/tunnel-failed`)."
+  [ws cfg]
+  (let [endpoint (get-in cfg [:podman :endpoint] (podman/default-endpoint))]
+    (if (= :ssh (:scheme (podman/parse-endpoint endpoint)))
+      (str "unix://" (tunnel/ensure! ws endpoint (get-in cfg [:podman :ssh])))
+      endpoint)))
+
+(defn podman-client
+  "A Podman client for the workspace's `runtime.edn` (the tunnel of an `ssh://` endpoint opened on the way).
+  `:persist? false` leaves the raw store out (probes)."
+  [ws cfg & {:keys [persist?] :or {persist? true}}]
+  (podman/client (podman-endpoint ws cfg) :ws (when persist? (store/ws-name ws))))
+
 (defn- connect-client [ws cfg]
   (let [endpoint (get-in cfg [:podman :endpoint] (podman/default-endpoint))
-        c (podman/client endpoint :ws (store/ws-name ws))]
+        c (podman-client ws cfg)]
     (when-not (podman/available? c)
       (throw (ex-info (str "podman is not answering at " endpoint
                            " (unix: systemctl --user enable --now podman.socket)")
@@ -460,11 +519,20 @@
 
 (defn ensure!
   "Reconciles the runtime of `ws` with its `runtime.edn` and the service descriptions and waits until it is healthy.
-  Idempotent. `:only` (role labels such as \"service-a\") reconciles just those. -> `(status ws)`."
+  Idempotent. `:only` (role labels such as \"service-a\") reconciles just those. `:secrets-from` `{role {:env \"local2\"
+  :values {ENV value}}}` creates that role with those real secret values instead of the local fakes.
+  -> `(status ws)`."
   ([ws] (ensure! ws {}))
-  ([ws {:keys [sink timeout-ms infra-only only] :or {timeout-ms default-timeout-ms}}]
+  ([ws {:keys [sink timeout-ms infra-only only secrets-from] :or {timeout-ms default-timeout-ms}}]
    (let [cfg (load-config! ws sink)
          ds (cond->> (desired-all ws cfg) infra-only (remove :service?) only (filter (comp (set only) :role)))
+         ;; `secrets-from {role {:env :values}}`: real secret values for that role, held in memory only. The hash
+         ;; carries a marker (env + fresh start id), never a value, so such a start always recreates the container.
+         ds (mapv (fn [d] (if-let [{:keys [env values]} (get secrets-from (:role d))]
+                            (-> d (assoc :secrets-from {:env env :start (subs (str (java.util.UUID/randomUUID)) 0 8)})
+                                rehash (assoc :secret-values values))
+                            d))
+                  ds)
          c (connect-client ws cfg)
          socket-path (delay (or (podman/socket-path c)
                                 (throw (ex-info "cannot tell the Podman socket path for this endpoint; give :podman-socket \"/path/to/podman.sock\" in runtime.edn"
@@ -510,9 +578,15 @@
   ([ws {:keys [only]}]
    (let [cfg (read-config ws)
          endpoint (get-in cfg [:podman :endpoint] (podman/default-endpoint))
-         c (podman/client endpoint :ws (store/ws-name ws))]
-     (if-not (podman/available? c)
-       {:ws (store/ws-name ws) :podman {:endpoint endpoint :reachable false :hint "systemctl --user enable --now podman.socket"}
+         ssh? (= :ssh (:scheme (podman/parse-endpoint endpoint)))
+         tunnel-err (when ssh? (try (tunnel/ensure! ws endpoint (get-in cfg [:podman :ssh])) nil (catch clojure.lang.ExceptionInfo e e)))
+         tun (when ssh? (cond-> (tunnel/status ws endpoint) tunnel-err (assoc :error (ex-message tunnel-err))))
+         c (when-not tunnel-err (podman-client ws cfg))]
+     (if-not (and c (podman/available? c))
+       {:ws (store/ws-name ws)
+        :podman (cond-> {:endpoint endpoint :reachable false
+                         :hint (if ssh? (str "ssh tunnel: " (some-> tunnel-err ex-message) " (log " (:log tun) ")") "systemctl --user enable --now podman.socket")}
+                  ssh? (assoc :tunnel tun))
         :containers []}
        (let [ds (when cfg (into {} (map (juxt :role identity)) (desired-all ws cfg)))
              ctrs (cond->> (podman/list-containers c :all true :labels (ws-labels ws))
@@ -532,8 +606,9 @@
                       {:role role :name (:name d) :image (:image d) :state :absent :ports (:ports d)})
              v (podman/info c)]
          {:ws (store/ws-name ws)
-          :podman {:endpoint endpoint :reachable true :version (get-in v [:version :Version])
-                   :rootless (get-in v [:host :security :rootless])}
+          :podman (cond-> {:endpoint endpoint :reachable true :version (get-in v [:version :Version])
+                           :rootless (get-in v [:host :security :rootless])}
+                    ssh? (assoc :tunnel tun))
           :containers (vec (sort-by :role (concat rows absent)))})))))
 
 (defn down!

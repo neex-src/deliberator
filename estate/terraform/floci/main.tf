@@ -57,3 +57,22 @@ provider "aws" {
     cloudwatch     = var.endpoint
   }
 }
+
+# A second "environment" on the same emulator: Floci keeps state per region, so eu-west-1 is a world of its own where the
+# same names hold other values. `bb estate:deploy` points the environment `local2` at it (the stand-in for a remote environment
+# until M4, for `service.start --secrets-from local2`).
+provider "aws" {
+  alias                       = "local2"
+  region                      = "eu-west-1"
+  access_key                  = "test"
+  secret_key                  = "test"
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+  skip_region_validation      = true
+
+  endpoints {
+    ssm            = var.endpoint
+    secretsmanager = var.endpoint
+  }
+}

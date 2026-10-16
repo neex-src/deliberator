@@ -106,7 +106,8 @@
 
 (def ^:private error-keys
   [:hint :known :problems :line :token :summary :step :confirmations :result :expires :target :env
-   :role :key :sha :schema :account :expected :found :log :exit :service :lines :errors])
+   :role :key :sha :schema :account :expected :found :log :exit :service :lines :errors
+   :of :names :sources :output :endpoint :command :ref])
 
 (defn error-map
   "The wire error of a throwable: `{:type :message [:hint ...]}`."
@@ -676,7 +677,7 @@
                     :events ["service.build.line"]
                     :args (ws-schema :name {:type :string :required true :doc "service name"})}
    "service.start" {:fn service-start :class :mutate
-                    :doc "Creates, recreates (spec or jar changed) or starts the service's container and waits until healthy. secrets-from asks for real secret values of an environment: two confirmations, then (until piece 08) service/secrets-not-built; nothing is ever injected here."
+                    :doc "Creates, recreates (spec or jar changed) or starts the service's container and waits until healthy. secrets-from asks for real secret values of an environment: two confirm-required answers (token 1: which environment and which secret names; token 2: the values go into the container's environment only), then the values are fetched (never persisted) and the container is recreated with them. A wrong, reused or expired token is service/confirmation-refused."
                     :events ["runtime.pulling" "runtime.starting" "runtime.ready" "service.started"]
                     :args (ws-schema :name {:type :string :required true :doc "service name"}
                                      :secrets-from {:type :string :doc "environment to take real secret values from (gated)"}

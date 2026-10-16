@@ -80,3 +80,13 @@
   []
   (for [[s ops] table, [o c] ops] [s o c]))
 
+
+(def secret-bearing
+  "`[service op]` pairs that are `:read` but whose response carries secret values. `deliberator.aws` redacts
+  their persisted bodies on a remote environment, and on any environment when the caller asks (`:redact-secrets`)."
+  #{[:secretsmanager "GetSecretValue"] [:ssm "GetParameter"] [:ssm "GetParameters"] [:ssm "GetParametersByPath"]})
+
+(defn secret-bearing?
+  "True when `service`/`op` returns secret values (GetSecretValue, GetParameter(s) with decryption)."
+  [service op]
+  (contains? secret-bearing [(api-name service) (name op)]))

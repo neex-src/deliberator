@@ -9,6 +9,8 @@
             attaches this repository to the workspace and adopts every `estate/services/*/deliberator-service.edn`
             with its rendered task definition (`service.adopt`); the roles are derived from the descriptions.
             `--auto-publish` sets APP_AUTO_PUBLISH=true on service A.
+            Also seeds the second Floci region (eu-west-1) with the same parameters and an `estate/api-key` of its own and writes
+            the environment `local2` for it (`service start a --secrets-from local2`).
   - up:     build when a jar is missing, runtime up (Floci, Postgres), deploy, `service.start` of every service.
   - status: runtime status plus the services' health.
   - down:   removes the workspace's containers and the Floci root's Terraform state (Floci keeps
@@ -122,6 +124,19 @@
   (let [f (str (home) "/workspaces/" ws "/environments/local.edn")]
     (get-in (edn/read-string (slurp f)) [:aws :endpoint])))
 
+(defn- write-local2!
+  "The environment `local2` of the workspace: the same Floci as `local`, region eu-west-1, where terraform seeded
+  the same parameter names and an `estate/api-key` of its own. The stand-in for a remote environment until M4
+  (`dlb service start a --secrets-from local2`)."
+  [ws]
+  (let [dir (str (home) "/workspaces/" ws "/environments")
+        local (edn/read-string (slurp (str dir "/local.edn")))
+        e {:name "local2" :kind :local
+           :description "Second local environment (eu-west-1 of the same Floci): other secret values, stand-in for a remote environment."
+           :aws (assoc (:aws local) :region "eu-west-1")
+           :targets (:targets local)}]
+    (spit (str dir "/local2.edn") (with-out-str (clojure.pprint/pprint e)))))
+
 (defn deploy [args]
   (let [ws (ws-of args)
         auto (if (some #{"--auto-publish"} args) "true" "false")]
@@ -134,6 +149,7 @@
                                           "-var" (str "container_endpoint=http://" (container ws "floci") ":4566")
                                           "-var" (str "service_a_url=http://" (container ws "service-a") ":8081")
                                           "-var" (str "db_url=jdbc:postgresql://" (container ws "postgres") ":5432/deliberator"))))
+    (write-local2! (ws-of args))
     (step "adopt services"
           (fn []
             (let [out (json/parse-string (:out (p/shell {:dir tf-dir :env (tf-env) :out :string}
