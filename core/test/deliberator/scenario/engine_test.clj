@@ -195,6 +195,54 @@
         (is (str/ends-with? (result-txt res) "RUN cancelled steps 4 failed 0\n"))
         (is (.exists (io/file (get-in res [:paths :run]) "steps" "004-fake-never" "step.edn")))))))
 
+(deftest the-until-window-reaches-the-kind
+  (testing "attempt-deadline is the end of the window when that comes first, never later than deadline"
+    (with-run [p "### fake poll\n# @until n >= 100 within 1s\n"]
+      (let [t0 (System/currentTimeMillis)
+            _ (run! p)
+            cs @fake/ctxs]
+        (is (>= (count cs) 2))
+        (doseq [c cs]
+          (is (not (.isAfter (:attempt-deadline c) (:deadline c))))
+          (is (<= (.toEpochMilli (:attempt-deadline c)) (+ t0 1500))
+              "the attempt deadline is the window's end, not the 30 s step timeout")
+          (is (< (.toEpochMilli (:attempt-deadline c)) (- (.toEpochMilli (:deadline c)) 20000)))))))
+  (testing "without @until it is the deadline"
+    (with-run [p "### fake one\n"]
+      (run! p)
+      (let [c (last @fake/ctxs)] (is (= (:deadline c) (:attempt-deadline c)))))))
+
+(deftest a-timed-out-attempt-is-flagged
+  (with-run [p "### fake slow\n# @sleep 5000\n# @timeout 200\n"]
+    (let [res (run! p)
+          c (first @fake/ctxs)]
+      (is (= :error (:status (step-edn res 1))))
+      (is (true? ((:attempt-cancelled? c)))))))
+
+(deftest a-cancelled-step-says-cancelled-and-nothing-else
+  (with-run [p "### tail\n# @for 5000\n"]
+    (let [run (engine/start! "w" env p :session "T-1")]
+      (Thread/sleep 300)
+      (engine/cancel! run)
+      (let [res @run]
+        (is (= {:message "cancelled"} (:error (step-edn res 1))))
+        (is (str/includes? (result-txt res) "### tail · cancelled"))
+        (is (not (str/includes? (result-txt res) "InterruptedException")))
+        (is (not (str/includes? (result-txt res) "ERROR")))))))
+
+(deftest a-run-that-dies-outside-the-coordinator-is-closed
+  (with-run [p "### fake one\n"]
+    (with-redefs [engine/coordinate! (fn [& _] (throw (RuntimeException. "boom")))]
+      (let [sink (engine/collecting-sink)
+            res (engine/run! "w" env p :session "T-1" :sink sink)
+            r (run-edn res)]
+        (is (= :error (:status res)))
+        (is (= :error (:status r)))
+        (is (= "boom" (get-in r [:error :message])))
+        (is (some? (:finished r)))
+        (is (str/includes? (result-txt res) "RUN error"))
+        (is (= :run.finished (:event (last (engine/events sink)))))))))
+
 (deftest static-errors-are-thrown-before-anything-runs
   (with-run [p "### fake a\n"]
     (let [bad (fn [text] (thrown #(run! (scn-file (store/home) text))))]

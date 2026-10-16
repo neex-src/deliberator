@@ -8,7 +8,7 @@
   step sets its own. Facts: `messageId md5 elapsed`; `$` is the SendMessage response.
 
   `receive`: one `ReceiveMessage` per attempt (`@until` repeats it): `# @max n` (default 1, up to 10),
-  `# @wait <duration>` the long-poll window (default: what is left of the attempt's deadline, at most
+  `# @wait <duration>` the long-poll window (default: what is left of the attempt's deadline, which `@until` shortens to its window, at most
   20 s, rounded down to whole seconds). Received messages are deleted afterwards (one
   `DeleteMessageBatch`), unless `# @keep`, which also receives with `VisibilityTimeout 0` so that a
   kept message is a peek and stays visible to the next attempt. A failed delete is a step ERROR (the
@@ -56,10 +56,10 @@
       (assoc res :body-json (sa/parse-json (:response-bytes res))))))
 
 (defn wait-seconds
-  "Long-poll seconds: `@wait` or the default, never beyond what the deadline leaves (one second
+  "Long-poll seconds: `@wait` or the default, never beyond what the attempt deadline (the `@until` window, else the timeout) leaves (one second
   of margin) nor 20."
   [ctx step]
-  (let [room (max 0 (quot (- (kinds/remaining-ms ctx) 1000) 1000))
+  (let [room (max 0 (quot (- (kinds/attempt-remaining-ms ctx) 1000) 1000))
         asked (if-let [w (c/dir step "wait")]
                 (long (Math/ceil (/ (expr/parse-duration w) 1000.0)))
                 20)]
@@ -82,7 +82,9 @@
                        {:facts {"count" (count msgs) "elapsed" (sa/elapsed r)}
                         :body-json (mapv #(body-value (:Body %)) msgs)
                         :lines (count msgs)})]
-    (when (and (seq msgs) (not keep?))
+    ;; an attempt the engine gave up on (timeout, cancel) must not act: nothing is deleted, the messages
+    ;; become visible again after their visibility timeout, the reply is already a raw blob
+    (when (and (seq msgs) (not keep?) (not ((:attempt-cancelled? ctx (constantly false)))))
       (let [d (try (sa/call! ctx :sqs :DeleteMessageBatch
                              {:QueueUrl url
                               :Entries (vec (map-indexed (fn [i m] {:Id (str i) :ReceiptHandle (:ReceiptHandle m)}) msgs))})

@@ -17,8 +17,9 @@
 
 (def trace (atom []))
 (def log (atom []))
+(def ctxs "every ctx a `fake` attempt was run with" (atom []))
 
-(defn reset-state! [] (reset! trace []) (reset! log []) nil)
+(defn reset-state! [] (reset! trace []) (reset! log []) (reset! ctxs []) nil)
 
 (defn- dirs [step name] (keep #(when (= name (:name %)) (:value %)) (:directives step)))
 
@@ -32,6 +33,7 @@
 (defn- run-fake [ctx step]
   (let [n (:n step)]
     (swap! trace conj [:start n])
+    (swap! ctxs conj ctx)
     (doseq [t (dirs step "log")] (swap! log conj t) ((:line! ctx) t))
     (when-let [ms (first (dirs step "sleep"))] (Thread/sleep (Long/parseLong ms)))
     (when-let [m (first (dirs step "fail"))]

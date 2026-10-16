@@ -1,6 +1,6 @@
 (ns deliberator.aws-kinds-test
   "The AWS kinds (sqs, eventbridge, lambda, dynamodb, scheduler) end to end through the engine, against
-  the REAL runtime: a Floci on host port 14566 brought up by the fixture in a throwaway workspace
+  the REAL runtime: a Floci on a free host port brought up by the fixture in a throwaway workspace
   (and removed afterwards); skips loudly when Podman is not reachable. Resources are prefixed
   `dlbtest-`. Pure parts first."
   (:require [clojure.data.json :as json]
@@ -25,7 +25,7 @@
             [deliberator.test-util :as tu]))
 
 (def ^:dynamic *rt* nil)
-(def floci-port 14566)
+(def floci-port (sup/free-port))
 
 (defn- runtime-config [id]
   (-> (runtime/default-config)

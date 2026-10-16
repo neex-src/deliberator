@@ -86,7 +86,7 @@
             (is (= :ok (:status r4)) (head (:text r4)))))))
     (t/do-report {:type :skip :message "the-order-scenario-twice-then-with-service-b-down: set ESTATE_WS=<ws> (after bb estate:up --ws <ws>)"})))
 
-(deftest ^:known-bug a-logs-step-on-a-container-that-stops-keeps-its-window
+(deftest a-logs-step-on-a-container-that-stops-keeps-its-window
   ;; PROGRESS.md "Found along the way" (11), queued as 06b: the step ends ~250 ms after the container
   ;; stops instead of at its @for window, so a restart inside the window is not seen. Verified here.
   (if-let [ws (deliberator.floci-util/estate-ws)]
@@ -104,7 +104,10 @@
           (podman/stop! c b-name)
           @run
           (let [ms (- (System/currentTimeMillis) t0)]
-            (is (>= ms 9000) (str "a 10 s window ended after " ms " ms"))))
+            (is (>= ms 9000) (str "a 10 s window ended after " ms " ms"))
+            (is (< ms 14000) (str "a 10 s window ended after " ms " ms"))
+            (let [txt (slurp (get-in @run [:paths :result]))]
+              (is (re-find #"stopped at" txt) txt))))
         (finally
           (podman/start! c b-name)
           (loop [n 0] (when (and (not (service-b-healthy?)) (< n 100)) (Thread/sleep 300) (recur (inc n)))))))

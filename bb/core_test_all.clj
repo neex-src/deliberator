@@ -7,7 +7,8 @@
 
   Pass B (estate up, `bb estate:up --ws W`): the namespaces that need a running Floci
   (`DLB_TEST_FLOCI_URL`, default http://localhost:14566) plus the end-to-end tests that need the
-  estate (`ESTATE_WS=W`), run against it.
+  estate (`ESTATE_WS=W`), run against it; `steps-test` and `aws-kinds-test` run again here (their own
+  runtime sits on free ports next to the estate).
 
   The estate is removed afterwards unless `--keep`. Both passes must be green. The workspace's
   `runtime.edn` must already carry 14566/15432 when 4566/5432 belong to another project. The home
@@ -31,7 +32,8 @@
           b (try (clj {"ESTATE_WS" ws}
                       "-n" "deliberator.aws-test" "-n" "deliberator.daemon-test"
                       "-n" "deliberator.estate-test" "-n" "deliberator.audit-estate-test"
-                      "-n" "deliberator.audit-runtime-test")
+                      "-n" "deliberator.audit-runtime-test"
+                      "-n" "deliberator.steps-test" "-n" "deliberator.aws-kinds-test")
                  (finally (when-not keep? (estate/down ["--ws" ws]))))]
       (println "== pass A exit" a ", pass B exit" b)
       (System/exit (if (and (zero? a) (zero? b)) 0 1)))))
