@@ -120,7 +120,8 @@ fun Test.configureDeliberatorTests() {
 // `./gradlew knownBugs` (`bb ide:test --known-bugs`) runs the SAME test task (the platform plugin gives only `test` the IDE's runtime,
 // its JVM arguments and sandbox) in the other mode: only the @Category(KnownBug::class) tests, which must FAIL until their bug is fixed
 // (the fix removes the category in the same commit). The default run, `./gradlew test`, excludes them (decision 24 for the IDE).
-val knownBugsRequested = gradle.startParameter.taskNames.any { it == "knownBugs" || it.endsWith(":knownBugs") }
+val knownBugsRequested = project.hasProperty("knownBugs") ||
+    gradle.startParameter.taskNames.any { it == "knownBugs" || it.endsWith(":knownBugs") }
 
 tasks.test {
     configureDeliberatorTests()
