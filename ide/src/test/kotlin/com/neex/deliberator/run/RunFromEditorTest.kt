@@ -59,10 +59,10 @@ class RunFromEditorTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         try {
-            runner.state(scenarioPaths.lastOrNull() ?: "").let { }
             scenarioPaths.forEach { p -> if (runner.isRunning(p)) { runner.cancel(p) } }
             scenarioPaths.forEach { p -> val end = System.currentTimeMillis() + 15_000; while (runner.isRunning(p) && System.currentTimeMillis() < end) Thread.sleep(50) }
             server.stop(0)
+            com.neex.deliberator.scn.ScnRegistry.getInstance().reset()
             DeliberatorSettings.getInstance().state.home = ""
             daemon.close()
         } finally {
