@@ -15,6 +15,10 @@
         <applicationService serviceImplementation="com.neex.deliberator.daemon.DeliberatorSettings"/>
         <applicationConfigurable parentId="tools" instanceId="deliberator" displayName="Deliberator"
                                  id="deliberator.settings" instance="com.neex.deliberator.daemon.DeliberatorConfigurable"/>
+        <projectService serviceImplementation="com.neex.deliberator.workspace.WorkspaceService"/>
+        <toolWindow id="Deliberator" anchor="right" secondary="false" canCloseContents="false"
+                    factoryClass="com.neex.deliberator.ui.DeliberatorToolWindowFactory"/>
+        <notificationGroup id="Deliberator" displayType="BALLOON"/>
     </extensions>
 
     <actions>
@@ -22,6 +26,25 @@
             <add-to-group group-id="MainMenu" anchor="before" relative-to-action="HelpMenu"/>
             <action id="deliberator.daemon.status" class="com.neex.deliberator.actions.DaemonStatusAction"
                     text="Daemon Status" description="Find or start the Deliberator daemon and show its version and endpoint"/>
+            <action id="deliberator.workspace.open" class="com.neex.deliberator.actions.OpenWorkspaceAction"
+                    text="Open Workspace..." description="Open the project directory of a workspace (created through the daemon)"/>
+            <action id="deliberator.workspace.bind" class="com.neex.deliberator.actions.BindWorkspaceAction"
+                    text="Use Workspace for This Project..." description="Bind the current project to a workspace"/>
+            <action id="deliberator.ops.show" icon="AllIcons.Actions.Edit" class="com.neex.deliberator.actions.OperationsAction"
+                    text="Operations..." description="Every daemon operation with a generated form"/>
+        </group>
+        <group id="deliberator.toolwindow.actions">
+            <action id="deliberator.workspace.refresh" icon="AllIcons.Actions.Refresh" class="com.neex.deliberator.actions.RefreshAction" text="Refresh" description="Re-read the workspace from the daemon"/>
+            <action id="deliberator.session.start" icon="AllIcons.General.Add" class="com.neex.deliberator.actions.StartSessionAction" text="Start Session..." description="session.start"/>
+            <action id="deliberator.session.end" icon="AllIcons.Actions.Cancel" class="com.neex.deliberator.actions.EndSessionAction" text="End Session" description="session.end of the current session"/>
+            <separator/>
+            <action id="deliberator.runtime.up" icon="AllIcons.Actions.Execute" class="com.neex.deliberator.actions.RuntimeUpAction" text="Runtime Up" description="runtime.ensure"/>
+            <action id="deliberator.runtime.down" icon="AllIcons.Actions.Suspend" class="com.neex.deliberator.actions.RuntimeDownAction" text="Runtime Down" description="runtime.down"/>
+            <action id="deliberator.runtime.logs" icon="AllIcons.Actions.ShowAsTree" class="com.neex.deliberator.actions.RuntimeLogsAction" text="Runtime Logs..." description="Open the log of a runtime role"/>
+            <separator/>
+            <action id="deliberator.env.select" icon="AllIcons.General.Settings" class="com.neex.deliberator.actions.SelectEnvAction" text="Select Environment..." description="The environment of this project"/>
+            <action id="deliberator.runs.open" icon="AllIcons.Actions.Show" class="com.neex.deliberator.actions.OpenRunAction" text="Open Run Result..." description="result.txt of a recent run"/>
+            <reference ref="deliberator.ops.show"/>
         </group>
     </actions>
 </idea-plugin>
