@@ -555,7 +555,9 @@
                   :doc "Stops the daemon gracefully: runs in flight are cancelled and finalised, endpoint, socket and lock are removed, the process exits. The answer comes first; the stop follows a moment later."}
    "workspace.open" {:fn workspace-open :class :mutate
                      :doc "Creates the workspace when missing (record, default local environment, and the project directory an IDE project binds to) or confirms it; created says which. path: use this existing project directory instead of <workspace dir>/project."
-                     :args (ws-schema :path {:type :string :doc "absolute project directory; default <workspace dir>/project"})}
+                     :args (with-meta (array-map :ws (assoc ws-arg :positional true :doc "workspace name to create or confirm")
+                                                 :path {:type :string :doc "absolute project directory; default <workspace dir>/project"})
+                             {:order [:ws :path]})}
    "session.note" {:fn session-note :class :mutate
                    :doc "Persists a text as sessions/<key>/notes/<name>-<ts>.txt (raw store first, then a hard link); answers the path."
                    :args (ws-schema :name {:type :string :required true :doc "note name (letters, digits, . _ - kept)"}

@@ -72,6 +72,7 @@
                  "DELIBERATOR_JAR" (or (System/getenv "DELIBERATOR_JAR") (str (fs/absolutize "core/target/deliberatord.jar")))
                  "DLB_DAEMON_ARGS" (or (System/getenv "DLB_DAEMON_ARGS") "--idle-minutes 5")}
             session (str "ACCEPT-" (today))
+            _ (p/shell {:extra-env env} dlb "workspace" "open" ws)
             _ (p/shell {:extra-env env} dlb "session" "start" session "--ws" ws)
             results (doall (for [s (scenarios)] (run-scenario dlb env ws s)))
             bad (remove #(zero? (:exit %)) results)]
