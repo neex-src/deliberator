@@ -35,9 +35,9 @@ import javax.tools.ToolProvider
 
 /**
  * Piece 06 against the real daemon on a temp home. Headless part (no container): the tab's rows from `service.list`, the topology switch through
- * the ops, the run configuration (persistence, editor, runners), the reload rendering, the tail merge, the console links, the process handler's
+ * the ops, the run configuration (persistence, editor, runners), the reload rendering, the console links, the process handler's
  * failure path. Container part: a stub service (a 15-line HttpServer jar compiled here, on the plain temurin image, host ports 19181/19185
- * in `runtime.edn :services`, no infrastructure containers) runs through the configuration: start, tail through `logs.fetch ... for`, the debug
+ * in `runtime.edn :services`, no infrastructure containers) runs through the configuration: start, tail through ONE `logs.fetch {follow true}`, the debug
  * state's `RemoteConnection`, reload into the console, Stop. It skips with the reason when the container engine is unreachable or there is no
  * compiler; `runtime.down` in `tearDown` removes the container.
  */
@@ -55,7 +55,6 @@ class ServicesTest : BasePlatformTestCase() {
         svc.loadState(WorkspaceService.State())
         daemon.openWorkspace("w6")
         svc.bind("w6")
-        ServiceProcessHandler.windowSeconds = 2
         ServiceProcessHandler.retryMs = 300
         wsDir = Path.of(bg { svc.call("workspace.show").resultObject().get("path").asString })
     }
@@ -66,7 +65,6 @@ class ServicesTest : BasePlatformTestCase() {
             val rm = RunManager.getInstance(project)
             rm.allSettings.filter { it.type.id == ServiceRunConfigurationType.ID }.forEach { rm.removeConfiguration(it) }
             runCatching { bg { svc.call("runtime.down") } }
-            ServiceProcessHandler.windowSeconds = 30
             ServiceProcessHandler.retryMs = 5000
             DeliberatorSettings.getInstance().state.home = ""
             daemon.close()
@@ -301,63 +299,6 @@ class ServicesTest : BasePlatformTestCase() {
         assertEquals("every line also reached the sink", o.lines, out)
     }
 
-    fun testTheTailMergeDropsOnlyTheOverlap() {
-        assertEquals(listOf("c", "d"), TailMerge.newLines(listOf("a", "b"), listOf("b", "c", "d")))
-        assertEquals(listOf("x", "y"), TailMerge.newLines(listOf("a", "b"), listOf("x", "y")))
-        assertEquals(emptyList<String>(), TailMerge.newLines(listOf("a", "b"), listOf("a", "b")))
-        assertEquals(listOf("z"), TailMerge.newLines(listOf("a", "y", "y"), listOf("y", "y", "z")))
-        assertEquals(listOf("1"), TailMerge.newLines(emptyList(), listOf("1")))
-        assertEquals(emptyList<String>(), TailMerge.newLines(listOf("a"), emptyList()))
-    }
-
-    // a real container ----------------------------------------------------------------------------------------------------
-
-    /** The JVM's own compiler when it has one (the platform's runtime usually does not), else the `javac` on the PATH. */
-    private fun compile(out: Path, src: Path): Boolean {
-        ToolProvider.getSystemJavaCompiler()?.let { return it.run(null, null, null, "--release", "17", "-d", out.toString(), src.toString()) == 0 }
-        return try {
-            ProcessBuilder("javac", "--release", "17", "-d", out.toString(), src.toString()).redirectErrorStream(true).start().let { p ->
-                p.inputStream.readAllBytes(); p.waitFor() == 0
-            }
-        } catch (e: java.io.IOException) { false }
-    }
-
-    /** Compiles the stub and jars it; null when there is no Java compiler. */
-    private fun buildStub(dir: Path): Path? {
-        val src = dir.resolve("Stub.java")
-        Files.createDirectories(dir)
-        Files.writeString(src, """
-            import com.sun.net.httpserver.HttpServer;
-            import java.net.InetSocketAddress;
-            public class Stub {
-                public static void main(String[] a) throws Exception {
-                    HttpServer s = HttpServer.create(new InetSocketAddress(8080), 0);
-                    s.createContext("/", ex -> { byte[] b = "{\"status\":\"UP\"}".getBytes(); ex.getResponseHeaders().add("Content-Type", "application/json");
-                        ex.sendResponseHeaders(200, b.length); ex.getResponseBody().write(b); ex.close(); });
-                    s.start();
-                    System.out.println("stub started");
-                    for (int i = 0; ; i++) { Thread.sleep(1000); System.out.println("stub tick " + i); }
-                }
-            }
-        """.trimIndent())
-        val out = dir.resolve("out")
-        Files.createDirectories(out)
-        if (!compile(out, src)) return null
-        val jar = dir.resolve("stub.jar")
-        val mf = Manifest().apply { mainAttributes[Attributes.Name.MANIFEST_VERSION] = "1.0"; mainAttributes[Attributes.Name.MAIN_CLASS] = "Stub" }
-        JarOutputStream(Files.newOutputStream(jar), mf).use { j ->
-            j.putNextEntry(java.util.jar.JarEntry("Stub.class")); j.write(Files.readAllBytes(out.resolve("Stub.class"))); j.closeEntry()
-            for (extra in Files.list(out).use { it.filter { p -> p.fileName.toString().startsWith("Stub$") }.toList() }) {
-                j.putNextEntry(java.util.jar.JarEntry(extra.fileName.toString())); j.write(Files.readAllBytes(extra)); j.closeEntry()
-            }
-        }
-        Files.writeString(dir.resolve("deliberator-service.edn"), """
-            {:name "stub" :kind :spring-boot :build {:cmd ["true"] :dir "." :artifact "stub.jar" :java 21}
-             :image "docker.io/library/eclipse-temurin:21-jre" :port 8080 :jdwp 5005 :health "/actuator/health"}
-        """.trimIndent())
-        return dir
-    }
-
     fun testRunConfigurationStartsTailsReloadsAndStopsAStubService() {
         val engine = bg { svc.refreshNow() }.engineReachable
         if (engine != true) { println("SKIPPED testRunConfigurationStartsTailsReloadsAndStopsAStubService: the container engine is not reachable (${svc.model.engineHint})"); return }
@@ -433,6 +374,8 @@ class ServicesTest : BasePlatformTestCase() {
         assertTrue("a debug session's Stop is a detach", h.detachIsDefault())
         h.begin()
         wait("tail") { text.contains("stub tick") }
+        val followFiles = Files.list(wsDir.resolve("sessions").resolve("T-6").resolve("logs")).use { st -> st.filter { it.fileName.toString().startsWith("log-service-stub") }.count() }
+        assertEquals("one follow call for the whole session: one file, not one per window", 1L, followFiles)
         h.detachProcess()
         wait("detached") { h.isProcessTerminated }
         assertTrue(text.toString(), text.contains("debugger detached; the service keeps running"))
