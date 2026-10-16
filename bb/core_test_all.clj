@@ -1,0 +1,37 @@
+(ns core-test-all
+  "`bb core:test:all [--ws W] [--keep]`: the two-pass recipe for the whole core suite.
+
+  Pass A (estate down): `clojure -M:test`. The runtime tests (podman, runtime, steps, aws kinds) bring
+  up and remove their own Floci/Postgres on host ports 14566/15432, so nothing may hold those ports;
+  the tests that need an already running Floci skip with a message.
+
+  Pass B (estate up, `bb estate:up --ws W`): the namespaces that need a running Floci
+  (`DLB_TEST_FLOCI_URL`, default http://localhost:14566) plus the end-to-end tests that need the
+  estate (`ESTATE_WS=W`), run against it.
+
+  The estate is removed afterwards unless `--keep`. Both passes must be green. The workspace's
+  `runtime.edn` must already carry 14566/15432 when 4566/5432 belong to another project. The home
+  is `$DELIBERATOR_HOME`."
+  (:require [babashka.process :as p]
+            [estate]))
+
+(defn- arg [args k] (second (drop-while #(not= k %) args)))
+
+(defn- clj [env & more]
+  (:exit (apply p/shell {:dir "core" :continue true :extra-env env} "clojure" "-M:test" more)))
+
+(defn -main [& args]
+  (let [ws (or (arg args "--ws") "default")
+        keep? (some #{"--keep"} args)]
+    (println "== pass A: estate down, clojure -M:test")
+    (estate/down ["--ws" ws])
+    (let [a (clj {})
+          _ (println "== pass B: estate up, Floci-dependent namespaces")
+          _ (estate/up ["--ws" ws])
+          b (try (clj {"ESTATE_WS" ws}
+                      "-n" "deliberator.aws-test" "-n" "deliberator.daemon-test"
+                      "-n" "deliberator.estate-test" "-n" "deliberator.audit-estate-test"
+                      "-n" "deliberator.audit-runtime-test")
+                 (finally (when-not keep? (estate/down ["--ws" ws]))))]
+      (println "== pass A exit" a ", pass B exit" b)
+      (System/exit (if (and (zero? a) (zero? b)) 0 1)))))

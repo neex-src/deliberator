@@ -1,13 +1,25 @@
 (ns deliberator.floci-util
-  "Gate for tests that need the local Floci on :4566. `deftest-floci` runs its body only when
+  "Gate for tests that need a local Floci. The URL is `DLB_TEST_FLOCI_URL`, default
+  `http://localhost:14566` (the estate's port; 4566 belongs to whatever else runs on the machine and
+  the suite never touches it unless told to). `deftest-floci` runs its body only when
   `GET /_floci/health` answers; otherwise it prints a SKIP line and reports a `:skip`, it never
-  passes silently."
-  (:require [clojure.test :as t])
+  passes silently. `local-env` is the default local environment record pointed at that URL."
+  (:require [clojure.string :as str]
+            [clojure.test :as t]
+            [deliberator.env :as env])
   (:import (java.net URI)
            (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)
            (java.time Duration)))
 
-(def url "http://localhost:4566")
+(def url (or (System/getenv "DLB_TEST_FLOCI_URL") "http://localhost:14566"))
+
+(def hostport (str/replace url #"^https?://" ""))
+
+(defn local-env
+  "The default local environment record with its endpoint at the test Floci."
+  ([] (local-env nil))
+  ([over] (merge-with (fn [a b] (if (map? a) (merge a b) b))
+                      (assoc-in env/default-local [:aws :endpoint] url) over)))
 
 (defn floci-up? []
   (try
@@ -28,4 +40,4 @@
   `(t/deftest ~name
      (if (floci-up?)
        (do ~@body)
-       (t/do-report {:type :skip :message (str '~name ": runtime down: bb runtime:up")}))))
+       (t/do-report {:type :skip :message (str '~name ": runtime down: bb estate:up (Floci at " url ")")}))))

@@ -1,12 +1,12 @@
 (ns deliberator.aws-test
-  "Layer 2: `aws/invoke!` against the Floci on :4566. Resources are prefixed `dlbtest-`."
+  "Layer 2: `aws/invoke!` against the test Floci (`floci-util/url`, default :14566). Resources are prefixed `dlbtest-`."
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [deliberator.aws :as aws]
             [deliberator.env :as env]
-            [deliberator.floci-util :refer [deftest-floci]]
+            [deliberator.floci-util :as fu :refer [deftest-floci]]
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.test-util :refer [fixed-clock temp-home with-temp-home]])
@@ -17,12 +17,12 @@
 
 (def ctx {:ws "w"})
 
-(def local (env/validate env/default-local))
+(def local (env/validate (fu/local-env)))
 
 (def remote-base
   {:name "dlbdev" :kind :remote
    :aws {:profile "dlbtest" :region "eu-central-1" :account "111111111111"
-         :endpoint "http://localhost:4566"}
+         :endpoint fu/url}
    :targets {:service/a "https://a.example.test"}})
 
 (defn remote [& {:as over}] (env/validate (merge remote-base over)))
@@ -86,7 +86,7 @@
       (is (= :aws/error (:type r)))
       (is (= "QueueDoesNotExist" (:code r)))
       (is (keyword? (:category r)))
-      (is (re-find #"localhost:4566" (:hint r)))
+      (is (re-find (re-pattern (java.util.regex.Pattern/quote fu/hostport)) (:hint r)))
       (is (re-find #"000000000000" (:hint r)))
       (is (= 400 (-> r :raw :status)))
       (is (str/includes? (blob (-> r :raw :response :sha)) "QueueDoesNotExist")
@@ -256,7 +256,7 @@
       (binding [env/*credentials-file* (io/file dir "no-such-credentials")
                 env/*aws-cli* (str cli)]
         (let [r (aws/check ctx (remote :aws {:profile "dlbtest-sso" :region "eu-central-1"
-                                             :account "000000000000" :endpoint "http://localhost:4566"}))]
+                                             :account "000000000000" :endpoint fu/url}))]
           (is (:ok? r) (pr-str r))
           (is (= "configure export-credentials --profile dlbtest-sso --format process"
                  (str/trim (slurp args)))))))))

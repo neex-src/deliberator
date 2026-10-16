@@ -20,8 +20,10 @@
  {:test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
-         :main-opts ["-m" "cognitect.test-runner"]
+         :main-opts ["-m" "cognitect.test-runner" "-e" ":known-bug"]
          :exec-fn cognitect.test-runner.api/test}
+  ;; `clojure -M:test:known-bugs`: only the audit's tests of known product bugs
+  :known-bugs {:main-opts ["-m" "cognitect.test-runner" "-i" ":known-bug"]}
   :dev {:extra-paths ["test"]
         :extra-deps {nrepl/nrepl {:mvn/version "1.5.1"}}}
   :build {:deps {io.github.clojure/tools.build
