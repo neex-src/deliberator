@@ -2,6 +2,7 @@
   "Shared by the podman and runtime tests: the endpoint under test and the loud skip when the real
   Podman is not reachable (nothing here ever fakes a pass)."
   (:require [clojure.test :as t]
+            [deliberator.floci-util :as fu]
             [deliberator.podman :as podman])
   (:import (java.net ServerSocket)
            (java.util UUID)))
@@ -14,11 +15,11 @@
 (defn up? [] (podman/available? (podman/client (endpoint))))
 
 (defmacro when-podman
-  "Runs body when Podman answers; otherwise prints a SKIPPED line naming the current test."
+  "Runs body when Podman answers; otherwise reports a :skip naming the current test."
   [& body]
   `(if (up?)
      (do ~@body)
-     (println (str "SKIPPED " (some-> t/*testing-vars* first meta :name) ": runtime down: bb runtime:up"))))
+     (fu/skip! (fu/current-test) "runtime down: bb runtime:up")))
 
 (def alpine-image "docker.io/library/alpine:3.20")
 

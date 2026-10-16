@@ -38,7 +38,7 @@
        (catch Exception _ false)))
 
 (deftest the-order-scenario-twice-then-with-service-b-down
-  (if-let [ws (System/getenv "ESTATE_WS")]
+  (if-let [ws (deliberator.floci-util/estate-ws)]
     (let [e (env/load ws "local")
           cfg (runtime/read-config ws)
           c (podman/client (get-in cfg [:podman :endpoint]) :ws ws)
@@ -89,7 +89,7 @@
 (deftest ^:known-bug a-logs-step-on-a-container-that-stops-keeps-its-window
   ;; PROGRESS.md "Found along the way" (11), queued as 06b: the step ends ~250 ms after the container
   ;; stops instead of at its @for window, so a restart inside the window is not seen. Verified here.
-  (if-let [ws (System/getenv "ESTATE_WS")]
+  (if-let [ws (deliberator.floci-util/estate-ws)]
     (let [e (env/load ws "local")
           cfg (runtime/read-config ws)
           c (podman/client (get-in cfg [:podman :endpoint]) :ws ws)

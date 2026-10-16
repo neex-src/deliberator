@@ -61,7 +61,7 @@
       (is (= 2 (count steps)))
       (is (= "###   \n####x\n###kind\n" (body-of (first steps)))))))
 
-(deftest ^:known-bug a-stray-quote-in-a-non-json-body-must-not-swallow-later-steps
+(deftest a-stray-quote-in-a-non-json-body-must-not-swallow-later-steps
   ;; find-heads tracks JSON strings in every body. A `{` followed by a `"` opens a "string" that only
   ;; an odd number of later quotes closes; every ### line in between is silently body. No error, steps lost.
   (testing "SQL with a brace and a double quote inside a single-quoted literal, then a lone quote later"
@@ -259,7 +259,7 @@
       (is (str/starts-with? (:op m) "put ") "one well-formed sidecar, written by one of the writers")
       (is (= 2 (count (.listFiles (.getParentFile (.toFile (store/raw-path "w" sha)))))) "blob and sidecar, no temp files left"))))
 
-(deftest ^:known-bug a-long-scenario-file-name-still-gets-a-run-directory
+(deftest a-long-scenario-file-name-still-gets-a-run-directory
   ;; run-dir! builds `<yyyymmdd-hhmmss>-<file stem>`; a stem of ~245 characters (legal for the file) makes the
   ;; directory name exceed 255 bytes: the run dies with the JDK's FileSystemException instead of a short name.
   (fake/reset-state!)
@@ -268,3 +268,50 @@
           res (try (run-text! fname "### fake a\n") (catch Throwable e e))]
       (is (map? res) (str "threw " (some-> res class) " " (some-> res ex-message (subs 0 80))))
       (when (map? res) (is (= :ok (:status res)))))))
+
+(deftest on-created-sees-the-run-before-the-first-event
+  ;; F3: a registry fed from :on-created holds the run by the time `run.started` is emitted
+  (fake/reset-state!)
+  (tu/with-temp-home
+    (session/start! "w" "T-1")
+    (let [f (io/file (str (store/home)) "scn" "oc.scn")
+          seen (atom nil)
+          sink (engine/collecting-sink)
+          _ (io/make-parents f)
+          _ (spit f "### fake a\n")
+          run (engine/start! "w" local (str f) :session "T-1" :sink sink
+                             :on-created (fn [r] (reset! seen {:run r :events (count (engine/events sink))})))]
+      @run
+      (is (= (:run-id run) (:run-id (:run @seen))))
+      (is (zero? (:events @seen)) "nothing had been emitted when the creator got the run")
+      (is (= "run.started" (name (:event (first (engine/events sink)))))))))
+
+(deftest mark-orphans-closes-dead-runs-and-leaves-live-ones
+  (tu/with-temp-home
+    (session/start! "w" "T-1")
+    (let [mk (fn [id owner]
+               (let [d (session/run-dir! "w" "T-1" id)]
+                 (store/write-edn! (.resolve d "run.edn")
+                                   (cond-> {:run-id id :status :running :session "T-1" :started (store/now)}
+                                     owner (assoc :owner owner)))
+                 d))
+          me (let [h (java.lang.ProcessHandle/current)]
+               {:pid (.pid h) :process-start (str (.orElse (.startInstant (.info h)) nil))})
+          live (mk "live" me)
+          dead (mk "dead" {:pid 2147483646 :process-start "2020-01-01T00:00:00Z"})
+          reused (mk "reused" (assoc me :process-start "2020-01-01T00:00:00Z"))
+          none (mk "noowner" nil)
+          done (let [d (mk "done" me)] (store/write-edn! (.resolve d "run.edn") {:run-id "done" :status :ok}) d)
+          marked (set (map str (engine/mark-orphans!)))]
+      (is (= #{(str dead) (str reused) (str none)} marked))
+      (is (= :running (:status (store/read-edn (.resolve live "run.edn")))))
+      (is (= :ok (:status (store/read-edn (.resolve done "run.edn")))))
+      (let [r (store/read-edn (.resolve dead "run.edn"))]
+        (is (= :interrupted (:status r)))
+        (is (some? (:finished r)))
+        (is (re-find #"RUN interrupted" (slurp (.toFile (.resolve dead "result.txt")))))))))
+
+(deftest a-long-session-key-is-an-invalid-name
+  (let [e (thrown #(store/safe-name (apply str (repeat 300 "k"))))]
+    (is (= :store/invalid-name (:type e)))
+    (is (< (count (:message e)) 200) "the message does not repeat the whole name")))

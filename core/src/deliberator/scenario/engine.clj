@@ -2,7 +2,8 @@
   "Runs a scenario: one function from (workspace, environment, scenario file, session) to a run
   directory. `(start! ws env scenario-path & opts) -> Run` (non-blocking), `(run! ...)` = start and
   wait; options `{:session key (default: the current one) :sink :steps #{n..} :resolve-target f :vars {}
-  :builtins {}}`. `ws` is as in `store`; `env` is the environment record, only threaded to kinds
+  :builtins {} :on-created (fn [run])}` (`:on-created` gets the Run before the first event can be
+  emitted, so a registry can hold it by the time a client learns its id). `ws` is as in `store`; `env` is the environment record, only threaded to kinds
   (`:name` goes into run.edn); `:resolve-target` is the seam to `env/target` (`(f \"service/a\")`
   -> value, throws `{:type :env/unknown-target}`; the daemon passes an adapter that makes the key
   a keyword); `:steps` runs only those step numbers (captures of the others are then missing:
@@ -16,7 +17,9 @@
   directory with `session/run-dir!`.
 
   Run directory: `run.edn` (scenario path and sha256, `:env`, `:session`, vars snapshot, `:volatile`
-  var names, `:thread-model`, `:status`, `:started`/`:finished`, `:summary`, and per step the
+  var names, `:thread-model`, `:owner` (`{:pid :process-start}` of the JVM running it), `:status`
+  (`:running`, then `:ok :failed :cancelled :error`, or `:interrupted` when `mark-orphans!` or a daemon
+  stop closed a run nobody finished), `:started`/`:finished`, `:summary`, and per step the
   summary `{:n :kind :verb :target :name :label :status :elapsed :facts :fact-types :checks :captures
   :output :error ..}`), `scenario.scn` (hard link into the raw store), `steps/NNN-<kind>-<name>/`
   with `step.edn` (the full record incl. every attempt's request/response sha), `request.<ext>`,
@@ -547,6 +550,55 @@
 
 (defn cancel! "Cancels the run (idempotent)." [^Run run] ((:cancel-fn run)) nil)
 
+(defn- owner []
+  (let [h (java.lang.ProcessHandle/current)]
+    {:pid (.pid h) :process-start (some-> (.startInstant (.info h)) (.orElse nil) str)}))
+
+(defn- owner-alive?
+  "True when the process in `owner` ({:pid :process-start}) is running now (same pid AND same start)."
+  [{:keys [pid process-start]}]
+  (boolean
+   (when pid
+     (let [h (.orElse (java.lang.ProcessHandle/of (long pid)) nil)]
+       (and h (.isAlive ^java.lang.ProcessHandle h)
+            (or (nil? process-start)
+                (= process-start (some-> (.startInstant (.info ^java.lang.ProcessHandle h)) (.orElse nil) str))))))))
+
+(defn interrupt-run!
+  "Closes the run in `run-dir` that nobody is running: `run.edn` becomes `:status :interrupted` (with
+  `:finished` and `:interrupted-reason`) and `result.txt` is rendered from what is on disk. Returns the
+  run id."
+  [run-dir reason]
+  (let [dir (if (instance? Path run-dir) run-dir (.toPath (java.io.File. (str run-dir))))
+        f (.resolve ^Path dir "run.edn")
+        r (assoc (store/read-edn f) :status :interrupted :finished (store/now) :interrupted-reason reason)]
+    (store/write-edn! f r)
+    (try (render/result! dir)
+         (catch Throwable _
+           (store/write-bytes-atomic! (.resolve ^Path dir "result.txt")
+                                      (.getBytes (str "RUN interrupted: " reason "\n") StandardCharsets/UTF_8))))
+    (:run-id r)))
+
+(defn mark-orphans!
+  "One pass over `<home>/workspaces/*/sessions/*/runs/*/run.edn` (default home: the store's): every run
+  claiming `:running` whose owner process is not alive (same pid and process start; a run without an
+  owner counts as dead) becomes `:interrupted`. A run whose owner is alive, this JVM included, is never
+  touched. Returns the run dirs marked."
+  ([] (mark-orphans! (store/home)))
+  ([home]
+   (let [dirs (fn [^Path p] (if (Files/isDirectory p (make-array java.nio.file.LinkOption 0))
+                              (with-open [st (Files/list p)] (vec (iterator-seq (.iterator st))))
+                              []))]
+     (vec
+      (for [w (dirs (.resolve ^Path home "workspaces"))
+            sdir (dirs (.resolve ^Path w "sessions"))
+            r (dirs (.resolve ^Path sdir "runs"))
+            :let [f (.resolve ^Path r "run.edn")
+                  run (try (store/read-edn f) (catch Throwable _ nil))]
+            :when (and (= :running (:status run)) (not (owner-alive? (:owner run))))]
+        (do (interrupt-run! r "the process running it ended without finishing it")
+            r))))))
+
 (defn start!
   [ws env scenario-path & {:keys [session sink resolve-target] :as opts}]
   (let [plan' (plan ws env scenario-path opts)
@@ -564,7 +616,7 @@
         result-path (.resolve run-dir "result.txt")]
     (Files/createDirectories (:steps-dir st) (make-array FileAttribute 0))
     (store/write-edn! (.resolve run-dir "run.edn")
-                      {:run-id run-id :status :running :session sess :started (store/now)
+                      {:run-id run-id :status :running :session sess :started (store/now) :owner (owner)
                        :scenario {:path (str (:path plan')) :sha256 (:sha plan')}})
     (let [work (bound-fn*
                 (fn []
@@ -585,11 +637,14 @@
                       (deliver done {:status :error :steps 0 :failed 0 :run-id run-id
                                      :error (err-map e)
                                      :paths {:run (str run-dir) :result (str result-path)}})))))
-          th (.newThread ^ThreadFactory factory ^Runnable work)]
+          th (.newThread ^ThreadFactory factory ^Runnable work)
+          run (->Run run-id run-dir
+                     (fn [] (reset! cancelled true) (.shutdownNow scope))
+                     done)]
+      ;; the creator sees the Run before anything can be emitted (a cancel for a run that is starting takes)
+      (when-let [f (:on-created opts)] (f run))
       (.start ^Thread th)
-      (->Run run-id run-dir
-             (fn [] (reset! cancelled true) (.shutdownNow scope))
-             done))))
+      run)))
 
 (defn run!
   "Starts the run and waits for it; returns `{:status :steps :failed :run-id :paths}`."

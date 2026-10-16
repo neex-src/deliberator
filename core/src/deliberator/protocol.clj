@@ -37,8 +37,7 @@
            (java.io BufferedInputStream ByteArrayOutputStream IOException InputStream)
            (java.nio.channels ClosedChannelException ServerSocketChannel SocketChannel)
            (java.nio.charset StandardCharsets)
-           (java.util.concurrent ConcurrentHashMap ThreadFactory)
-           (java.util.concurrent.locks ReentrantLock)))
+           (java.util.concurrent ConcurrentHashMap LinkedBlockingQueue ThreadFactory)))
 
 (def max-line-bytes "Longest request line accepted (4 MB)." (* 4 1024 1024))
 
@@ -94,13 +93,34 @@
   [id type message]
   {:id id :ok false :error {:type type :message message}})
 
+(def max-nesting "Deepest JSON nesting accepted in a request line." 1000)
+
+(defn- too-deep?
+  "True when `line` nests arrays/objects deeper than `max-nesting` (strings skipped)."
+  [^String line]
+  (let [n (.length line)]
+    (loop [i 0 depth 0 in-str false]
+      (if (>= i n)
+        false
+        (let [c (.charAt line i)]
+          (cond
+            in-str (cond (= c \\) (recur (+ i 2) depth true)
+                         (= c \") (recur (inc i) depth false)
+                         :else (recur (inc i) depth true))
+            (= c \") (recur (inc i) depth true)
+            (or (= c \{) (= c \[)) (if (>= depth max-nesting) true (recur (inc i) (inc depth) false))
+            (or (= c \}) (= c \])) (recur (inc i) (max 0 (dec depth)) false)
+            :else (recur (inc i) depth false)))))))
+
 (defn decode
   "Decodes one request line. -> `{:request {:id :op :args (keyword keys) :cancel-on-close bool}}`
   or `{:error <terminal error map>}`."
   [^String line]
   (let [bad (fn [id msg] {:error (error-line id "bad-request" msg)})]
     (try
-      (let [m (json/read-str line)]
+      (let [m (if (too-deep? line)
+                (throw (ex-info (str "nested deeper than " max-nesting) {}))
+                (json/read-str line))]
         (if-not (map? m)
           (bad nil "a request must be a JSON object {\"id\",\"op\",\"args\"}")
           (let [id (get m "id") op (get m "op") args (get m "args")
@@ -112,6 +132,8 @@
               :else {:request {:id id :op op
                                :args (into {} (map (fn [[k v]] [(keyword k) v])) args)
                                :cancel-on-close (true? (get m "cancel-on-close"))}}))))
+      (catch StackOverflowError _
+        (bad nil "not valid JSON: nested too deeply"))
       (catch Exception e
         (bad nil (str "not valid JSON: " (ex-message e)))))))
 
@@ -170,16 +192,29 @@
   "Serves one client until it disconnects (see the namespace docstring). Blocks."
   [^SocketChannel ch {:keys [dispatch error-fn log]}]
   (let [in (BufferedInputStream. (channel-in ch) 8192)
-        wlock (ReentrantLock.)
         alive (atom true)
         inflight (atom #{})
+        q (LinkedBlockingQueue.)
+        writer-done (promise)
+        ;; One writer thread per connection: producers (possibly interrupted step threads) only enqueue,
+        ;; so an interrupt flag can never reach the channel write (ClosedByInterruptException closes it).
+        _ (spawn! (fn []
+                    (try
+                      (loop []
+                        (let [bs (.take q)]
+                          (when (and (not (= ::close bs)) @alive)
+                            (when (try (write-fully! ch bs) true
+                                       (catch Throwable e
+                                         (reset! alive false)
+                                         (when log (log "write failed, connection dropped" (ex-message e)))
+                                         false))
+                              (recur)))))
+                      (catch Throwable e (reset! alive false) (when log (log "writer died" (ex-message e))))
+                      (finally (reset! alive false) (.clear q) (deliver writer-done true)))))
         write! (fn [m]
                  (when @alive
-                   (let [bs (.getBytes (str (encode m) "\n") StandardCharsets/UTF_8)]
-                     (.lock wlock)
-                     (try (write-fully! ch bs) true
-                          (catch IOException _ (reset! alive false) false)
-                          (finally (.unlock wlock))))))
+                   (.offer q (.getBytes (str (encode m) "\n") StandardCharsets/UTF_8))
+                   true))
         run-request!
         (fn [{:keys [id op] :as request}]
           (let [st {:cancelled (atom false) :fns (atom []) :cancel-on-close (:cancel-on-close request)}
@@ -211,6 +246,8 @@
       (finally
         (doseq [st @inflight] (when (:cancel-on-close st) (cancel! st)))
         (loop [] (when (and (seq @inflight) @alive) (Thread/sleep 25) (recur)))
+        (.offer q ::close)
+        (deref writer-done 10000 nil)
         (reset! alive false)
         (try (.close ch) (catch IOException _ nil))))))
 

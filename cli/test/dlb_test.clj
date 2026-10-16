@@ -185,13 +185,18 @@
     (is (false? (:ok m)))
     (is (= "scenario/not-found" (get-in m [:error :type])))))
 
+(defmethod clojure.test/report :skip [m] (println "SKIP" (:message m)))
+
 (deftest plain-scenario-when-the-runtime-is-up
-  (let [st (json-line (:out (dlb *home* "runtime" "status" "--json")))
-        cs (get-in st [:result :containers])
-        up? (and (seq cs) (some #(= "floci" (str (:role %))) cs) (every? #(= "running" (str (:state %))) cs))]
-    (if-not up?
-      (println "SKIPPED (loudly): plain.scn needs the local runtime (bb runtime:up); not running, so not run")
-      (do (dlb *home* "session" "start" "PLAIN")
-          (let [r (dlb *home* "run" (str root "/core/test/fixtures/plain.scn"))]
-            (is (#{0 1} (:exit r)) (str (:out r) (:err r)))
-            (is (re-find #"▶ 001" (:out r))))))))
+  ;; The throwaway test home has no runtime and no Postgres target, so this can only run against a
+  ;; real estate: ESTATE_WS=<ws> and DELIBERATOR_HOME=<its home> (bb estate:up --ws <ws>).
+  (let [ws (System/getenv "ESTATE_WS")
+        home (System/getenv "DELIBERATOR_HOME")]
+    (if (or (str/blank? ws) (str/blank? home))
+      (clojure.test/do-report {:type :skip :message "plain-scenario-when-the-runtime-is-up: set ESTATE_WS=<ws> and DELIBERATOR_HOME=<its home> after bb estate:up"})
+      (try
+        (dlb home "session" "start" "PLAIN" "--ws" ws)
+        (let [r (dlb home "run" (str root "/core/test/fixtures/plain.scn") "--ws" ws)]
+          (is (#{0 1} (:exit r)) (str (:out r) (:err r)))
+          (is (re-find #"▶ 001" (:out r))))
+        (finally (stop-daemon! home))))))

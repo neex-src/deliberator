@@ -66,7 +66,9 @@
 (defn- blank? [{:keys [text]}] (str/blank? text))
 
 (defn- scan-json
-  "Advances the JSON scanner `{:depth :in-str}` over one line of body text."
+  "Advances the JSON scanner `{:depth :in-str}` over one line of body text. A JSON value opens only
+  at a `{`/`[` that starts its line, so a brace inside a SQL literal or prose never starts string
+  tracking."
   [{:keys [depth in-str] :as st} ^String text]
   (let [n (count text)]
     (loop [i 0 depth depth in-str in-str]
@@ -77,7 +79,9 @@
             in-str (cond (= c \\) (recur (+ i 2) depth true)
                          (= c \") (recur (inc i) depth false)
                          :else (recur (inc i) depth true))
-            (zero? depth) (if (or (= c \{) (= c \[)) (recur (inc i) 1 false) (recur (inc i) 0 false))
+            (zero? depth) (if (and (or (= c \{) (= c \[)) (str/blank? (subs text 0 i)))
+                           (recur (inc i) 1 false)
+                           (recur (inc i) 0 false))
             (= c \") (recur (inc i) depth true)
             (or (= c \{) (= c \[)) (recur (inc i) (inc depth) false)
             (or (= c \}) (= c \])) (recur (inc i) (dec depth) false)

@@ -21,8 +21,8 @@
 ;; --- cancel mid-logs ------------------------------------------------------------------------------
 
 (deftest a-cancelled-run-is-closed-everywhere
-  ;; The state is read from a SECOND connection and from disk: the requesting connection can be lost by
-  ;; the interrupt (see the known-bug test at the end), which is not what this test is about.
+  ;; The state is read from a SECOND connection and from disk: the requesting connection used to be lost by
+  ;; the interrupt (F1, fixed); the state is still read from disk and a second connection.
   (with-daemon [h {:idle-minutes 0}]
     (with-client [a h]
       (with-client [b h]
@@ -31,11 +31,8 @@
               id (tc/send! a "scenario.run" {:path path :env "files"})
               started (tc/recv a)
               _ (is (= "step.started" (:event (tc/recv a))))
-              ;; the daemon registers a run AFTER the engine has started emitting (finding: a cancel that
-              ;; arrives first gets cancelled=false and is lost, seen under CPU load), so retry
-              cancelled (loop [n 0]
-                          (let [c (:cancelled (:result (ok! b "scenario.cancel" {:run-id (:run-id started)})))]
-                            (if (or c (>= n 50)) c (do (Thread/sleep 100) (recur (inc n))))))
+              ;; the run is registered before it can emit (F3): the cancel takes at once, no retry
+              cancelled (:cancelled (:result (ok! b "scenario.cancel" {:run-id (:run-id started)})))
               _ (is (true? cancelled))
               shown (loop [n 0]
                       (let [r (:result (ok! b "runs.show" {:run (:run-id started)}))]
@@ -158,7 +155,7 @@
         (tc/send! c "hello" {})
         (is (true? (:ok (tc/recv c 3000))) (str what ": the connection still serves"))))))
 
-(deftest ^:known-bug a-pathologically-nested-line-gets-a-terminal-error
+(deftest a-pathologically-nested-line-gets-a-terminal-error
   ;; 300 000 `[` is under the 4 MB cap; the JSON reader overflows the stack, the handler dies and the
   ;; connection is closed with no terminal line. The daemon survives (checked), the client sees EOF.
   (with-daemon [h {:idle-minutes 0}]
@@ -169,7 +166,7 @@
     (with-client [c h]
       (is (true? (:ok (:terminal (tc/request c "hello" {})))) "other connections are unaffected"))))
 
-(deftest ^:known-bug stopping-the-daemon-with-a-run-going-finalises-the-run
+(deftest stopping-the-daemon-with-a-run-going-finalises-the-run
   ;; stop! cancels the runs and then `(deref run 3000 nil)`: Run implements IDeref only, so the 3-arity
   ;; deref throws ClassCastException, the rest of stop! (server, endpoint, lock) never runs.
   (with-daemon [h {:idle-minutes 0}]
@@ -199,7 +196,7 @@
             (is (= "env/invalid" (:type e)) (str op ": " (pr-str e)))
             (is (some #(str/includes? (str %) "profile") (:problems e)) (str op ": " (pr-str e)))))))))
 
-(deftest ^:known-bug an-overlong-name-is-a-typed-invalid-name-not-an-internal-error
+(deftest an-overlong-name-is-a-typed-invalid-name-not-an-internal-error
   ;; "A b", ".hidden", "-x" and "../x" are refused as store/invalid-name; 300 characters pass the check
   ;; and die in the filesystem (ENAMETOOLONG) as type "internal" with the full path in the message.
   (with-daemon [h {:idle-minutes 0}]
@@ -207,7 +204,7 @@
       (let [e (:error (:terminal (tc/request c "session.start" {:key (apply str (repeat 300 "k"))})))]
         (is (= "store/invalid-name" (:type e)) (pr-str (select-keys e [:type])))))))
 
-(deftest ^:known-bug an-interrupted-emitting-thread-must-not-close-the-clients-connection
+(deftest an-interrupted-emitting-thread-must-not-close-the-clients-connection
   ;; `scenario.cancel` / a timeout interrupts the engine's threads (`shutdownNow`); a step thread whose
   ;; interrupt flag is still set when it emits an event writes to the SocketChannel, which NIO answers by
   ;; CLOSING the channel (ClosedByInterruptException). The requesting client then sees EOF instead of
