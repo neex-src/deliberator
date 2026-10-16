@@ -11,6 +11,8 @@
     <depends optional="true" config-file="deliberator-java.xml">com.intellij.java</depends>
     <depends optional="true" config-file="deliberator-gradle.xml">com.intellij.gradle</depends>
     <depends optional="true" config-file="deliberator-maven.xml">org.jetbrains.idea.maven</depends>
+    <depends optional="true" config-file="deliberator-properties.xml">com.intellij.properties</depends>
+    <depends optional="true" config-file="deliberator-yaml.xml">org.jetbrains.plugins.yaml</depends>
 
     <extensionPoints>
         <extensionPoint name="repositoryKind" interface="com.neex.deliberator.repo.RepositoryKind" dynamic="true"/>
@@ -54,6 +56,13 @@
         <projectService serviceImplementation="com.neex.deliberator.logs.LogService"/>
         <editorFactoryListener implementation="com.neex.deliberator.logs.LogsEditorListener"/>
         <editorNotificationProvider implementation="com.neex.deliberator.logs.TruncatedLogBanner"/>
+
+        <!-- the config chain (m3 piece 07); the references live in deliberator-properties.xml and deliberator-yaml.xml -->
+        <projectService serviceImplementation="com.neex.deliberator.config.ConfigChains"/>
+        <projectService serviceImplementation="com.neex.deliberator.config.ConfigViews"/>
+        <editorNotificationProvider implementation="com.neex.deliberator.config.ConfigViewBanner"/>
+        <localInspection shortName="DeliberatorConfigChain" displayName="Broken configuration chain" groupName="Deliberator"
+                         enabledByDefault="true" level="WARNING" implementationClass="com.neex.deliberator.config.ConfigChainInspection"/>
     </extensions>
 
     <applicationListeners>
@@ -115,6 +124,14 @@
                     text="Add Deliberator Marker" description="Mark this source line: log lines of its class and line are highlighted in fetched logs">
                 <add-to-group group-id="EditorGutterPopupMenu" anchor="first"/>
             </action>
+        </group>
+        <group id="deliberator.config" text="Deliberator Config Chain" popup="true">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <add-to-group group-id="deliberator.menu" anchor="last"/>
+            <action id="deliberator.config.chain" class="com.neex.deliberator.config.ConfigChainAction"
+                    text="Show Config Chain" description="The whole config chain of this file's service in the selected environment, as text (config.chain)"/>
+            <action id="deliberator.config.refresh" class="com.neex.deliberator.config.ConfigRefreshAction"
+                    text="Refresh Config Snapshot" description="config.refresh: fetch the parameters and secret metadata of the selected environment into the cached snapshot"/>
         </group>
         <group id="deliberator.toolwindow.actions">
             <action id="deliberator.workspace.create" icon="AllIcons.General.Add" class="com.neex.deliberator.actions.CreateWorkspaceAction" text="Open Workspace" description="The workspace of this project does not exist yet: workspace.open creates it"/>
