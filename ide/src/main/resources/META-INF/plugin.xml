@@ -14,6 +14,7 @@
 
     <extensionPoints>
         <extensionPoint name="repositoryKind" interface="com.neex.deliberator.repo.RepositoryKind" dynamic="true"/>
+        <extensionPoint name="loggerResolver" interface="com.neex.deliberator.logs.LoggerResolver" dynamic="true"/>
     </extensionPoints>
 
     <extensions defaultExtensionNs="com.intellij">
@@ -45,7 +46,17 @@
         <!-- running from the editor (piece 06) -->
         <projectService serviceImplementation="com.neex.deliberator.run.ScnRunner"/>
         <editorFactoryListener implementation="com.neex.deliberator.run.RunEditorListener"/>
+
+        <!-- logs and markers (piece 07) -->
+        <projectService serviceImplementation="com.neex.deliberator.logs.MarkerService"/>
+        <projectService serviceImplementation="com.neex.deliberator.logs.LogMatcher"/>
+        <projectService serviceImplementation="com.neex.deliberator.logs.LogService"/>
+        <editorFactoryListener implementation="com.neex.deliberator.logs.LogsEditorListener"/>
     </extensions>
+
+    <applicationListeners>
+        <listener class="com.neex.deliberator.logs.MarkerSaveSync" topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
+    </applicationListeners>
 
     <extensions defaultExtensionNs="com.neex.deliberator">
         <repositoryKind implementation="com.neex.deliberator.repo.PlainKind"/>
@@ -86,6 +97,22 @@
                     text="Expand/Collapse Inline Results" description="Show or hide the full text of every inline step result"/>
             <action id="deliberator.scenario.runs" class="com.neex.deliberator.run.RunHistoryAction"
                     text="Runs of This Scenario..." description="History of this scenario: open result.txt, show inline, diff two runs"/>
+        </group>
+        <group id="deliberator.logs" text="Deliberator Logs and Markers" popup="true">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <add-to-group group-id="deliberator.menu" anchor="last"/>
+            <action id="deliberator.logs.fetch" class="com.neex.deliberator.logs.FetchLogsAction"
+                    text="Fetch Logs..." description="logs.fetch of a target of the selected environment; opens the file the daemon wrote"/>
+            <action id="deliberator.logs.filter" class="com.neex.deliberator.logs.FilterByCorrelationAction"
+                    text="Filter Log by Correlation" description="Fold the entries without the correlation id (selection, else the latest run's id, else asks)"/>
+            <action id="deliberator.logs.unfilter" class="com.neex.deliberator.logs.ClearCorrelationFilterAction"
+                    text="Clear Correlation Filter" description="Unfold the entries the filter folded"/>
+            <action id="deliberator.logs.match" class="com.neex.deliberator.logs.MatchMarkersAction"
+                    text="Match Markers in Open Logs" description="logs.match on every open log file and highlight the matching lines"/>
+            <action id="deliberator.marker.toggle" class="com.neex.deliberator.logs.ToggleMarkerAction"
+                    text="Add Deliberator Marker" description="Mark this source line: log lines of its class and line are highlighted in fetched logs">
+                <add-to-group group-id="EditorGutterPopupMenu" anchor="first"/>
+            </action>
         </group>
         <group id="deliberator.toolwindow.actions">
             <action id="deliberator.workspace.refresh" icon="AllIcons.Actions.Refresh" class="com.neex.deliberator.actions.RefreshAction" text="Refresh" description="Re-read the workspace from the daemon"/>
