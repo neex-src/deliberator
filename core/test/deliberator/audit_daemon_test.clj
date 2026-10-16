@@ -132,6 +132,8 @@
         (is (true? (:equal self)))
         (is (str/blank? (:diff self)))
         (is (= (:a self) (:b self)))
+        (is (= (:a-text self) (:b-text self)) "the normalised texts ride on the answer")
+        (is (str/includes? (:a-text self) "RUN failed steps 1 failed 1"))
         (let [e (:error (:terminal (tc/request c "runs.diff" {:a run :b "no-such-run"})))]
           (is (= "runs/not-found" (:type e))))
         (testing "an absolute path outside the session is accepted as a run reference only when it is a run"

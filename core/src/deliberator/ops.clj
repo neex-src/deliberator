@@ -471,7 +471,8 @@
         da (resolve-run ws session a)
         db (resolve-run ws session b)
         text (render/diff da db)]
-    {:equal (str/blank? text) :diff text :a (str da) :b (str db)}))
+    {:equal (str/blank? text) :diff text :a (str da) :b (str db)
+     :a-text (render/render-text da :normalise? true) :b-text (render/render-text db :normalise? true)}))
 
 ;; handlers: raw store -------------------------------------------------------------------------
 
@@ -625,7 +626,7 @@
                   :args (ws-schema :run {:type :string :required true :doc "run id, sessions/<key>/runs/<id> or an absolute directory"}
                                    :session {:type :string :doc "session to look the run id up in"})}
    "runs.diff" {:fn runs-diff :class :read
-                :doc "Unified diff of two runs' result texts with ids, timestamps and elapsed normalised; empty when they agree."
+                :doc "Unified diff of two runs' result texts with ids, timestamps and elapsed normalised; empty when they agree. Also returns the two normalised texts (a-text, b-text) the diff was made from, for a side-by-side viewer."
                 :args (ws-schema :a {:type :string :required true :doc "first run"}
                                  :b {:type :string :required true :doc "second run"}
                                  :session {:type :string :doc "session to look run ids up in"})}
