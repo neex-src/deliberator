@@ -1,5 +1,9 @@
 <idea-plugin>
     <!-- Loaded only when the Java plugin is present. -->
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Debug of a "Deliberator Service" configuration: service.start, then the platform attaches to its JDWP port (m3 piece 06) -->
+        <programRunner implementation="com.neex.deliberator.services.ServiceDebugRunner" order="first"/>
+    </extensions>
     <extensions defaultExtensionNs="com.neex.deliberator">
         <loggerResolver implementation="com.neex.deliberator.logs.JavaLoggerResolver"/>
     </extensions>

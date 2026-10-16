@@ -14,7 +14,28 @@ data class SessionRow(val key: String, val title: String?, val started: String?,
     val isEnded: Boolean get() = !ended.isNullOrBlank()
 }
 
-data class RuntimeRow(val role: String, val state: String, val health: String?, val detail: String?, val ports: String)
+data class RuntimeRow(val role: String, val state: String, val health: String?, val detail: String?, val ports: String,
+                      /** container port -> host port, as the daemon mapped them (empty when the container has none). */
+                      val portMap: Map<String, String> = emptyMap())
+
+/**
+ * One service of `service.list` joined with its `service.status` row and the host ports of its container.
+ * [port] and [jdwp] are the description's container ports, [hostPort] and [hostJdwp] where the daemon published them (null while no container exists).
+ */
+data class ServiceRow(
+    val name: String,
+    val kind: String?,
+    val mode: String,
+    val url: String?,
+    val status: String,
+    val port: Int?,
+    val jdwp: Int?,
+    val hostPort: String?,
+    val hostJdwp: String?,
+    val reloadCount: Int?,
+    val drift: Boolean,
+    val detail: String?,
+)
 
 data class EnvRow(val name: String, val kind: String?, val error: String?)
 
@@ -32,6 +53,8 @@ data class WorkspaceModel(
     val envs: List<EnvRow> = emptyList(),
     val selectedEnv: String = DEFAULT_ENV,
     val runs: List<RunRow> = emptyList(),
+    /** The workspace's services in [selectedEnv] (`service.list` + `service.status` + the container ports of `runtime.status`). */
+    val services: List<ServiceRow> = emptyList(),
     /** The first failure of the last refresh (parts that failed keep their previous value). */
     val error: String? = null,
     val fetchedAt: Instant? = null,
@@ -60,9 +83,25 @@ data class WorkspaceModel(
                 val ports = c.getAsJsonObject("ports")?.entrySet()?.joinToString(", ") { (k, v) ->
                     if (v.isJsonNull) k else "$k:${v.asString}"
                 } ?: ""
-                RuntimeRow(c.str("role") ?: c.str("name") ?: "?", c.str("state") ?: "?", c.str("health"), c.str("detail"), ports)
+                val map = c.getAsJsonObject("ports")?.entrySet()?.filter { !it.value.isJsonNull }?.associate { (k, v) -> k to v.asString } ?: emptyMap()
+                RuntimeRow(c.str("role") ?: c.str("name") ?: "?", c.str("state") ?: "?", c.str("health"), c.str("detail"), ports, map)
             }
             return Triple(engine?.get("reachable")?.takeIf { it.isJsonPrimitive }?.asBoolean, engine?.str("hint"), rows)
+        }
+
+        /** `service.list` rows joined by name with `service.status` rows; host ports from the runtime row `service-<name>`. */
+        fun parseServices(list: JsonElement?, status: JsonElement?, containers: List<RuntimeRow>): List<ServiceRow> {
+            val st = status.objects().associateBy { it.str("name") }
+            return list.objects().map { d ->
+                val name = d.str("name") ?: "?"
+                val s = st[name]
+                val rt = containers.firstOrNull { it.role == "service-$name" || it.role == "service/$name" }
+                val port = d.int("port")
+                val jdwp = d.int("jdwp")
+                ServiceRow(name, d.str("kind"), d.str("mode") ?: "local", d.str("url"), s?.str("status") ?: d.str("status") ?: "?", port, jdwp,
+                    port?.let { rt?.portMap?.get(it.toString()) }, jdwp?.let { rt?.portMap?.get(it.toString()) },
+                    s?.int("reload-count"), s?.get("drift")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false, s?.str("detail"))
+            }
         }
 
         fun parseEnvs(o: JsonObject): List<EnvRow> =

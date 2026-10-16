@@ -35,9 +35,13 @@ import javax.swing.table.DefaultTableModel
 class DeliberatorToolWindowFactory : ToolWindowFactory, DumbAware {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val panel = DeliberatorPanel(project)
-        val content = ContentFactory.getInstance().createContent(panel, "", false)
+        val content = ContentFactory.getInstance().createContent(panel, "Workspace", false)
         content.setDisposer(panel)
         toolWindow.contentManager.addContent(content)
+        val services = com.neex.deliberator.services.ServicesPanel(project)
+        val servicesContent = ContentFactory.getInstance().createContent(services, "Services", false)
+        servicesContent.setDisposer(services)
+        toolWindow.contentManager.addContent(servicesContent)
     }
 }
 
