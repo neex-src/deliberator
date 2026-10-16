@@ -133,7 +133,7 @@
     (loop [] (or (f) (when (< (System/currentTimeMillis) end) (Thread/sleep 300) (recur))))))
 
 (deftest estate-end-to-end
-  (if-let [ws (System/getenv "ESTATE_WS")]
+  (if-let [ws (fu/estate-ws)]
     (let [e (env/load ws "local")
           a (env/target e :service/a)
           corr (str "corr-" (UUID/randomUUID))
@@ -172,4 +172,4 @@
                                       (when (>= (count ls) n) ls)))]
             (is (>= (count lines) n) (str role " lines with " corr))
             (is (every? #(re-find #"\[corr-[0-9a-f-]+\]" (:text %)) lines))))))
-    (println "SKIPPED estate-end-to-end: set ESTATE_WS=<ws> (after bb estate:up --ws <ws>) and DELIBERATOR_HOME")))
+    (fu/skip! "estate-end-to-end" "set ESTATE_WS=<ws> (after bb estate:up --ws <ws>) and DELIBERATOR_HOME")))

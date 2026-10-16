@@ -11,6 +11,7 @@
             [deliberator.aws :as aws]
             [deliberator.env :as env]
             [deliberator.podman :as podman]
+            [deliberator.floci-util :as fu]
             [deliberator.podman-test-support :as sup]
             [deliberator.runtime :as runtime]
             [deliberator.scenario.engine :as engine]
@@ -55,7 +56,7 @@
       (with-redefs [store/*home* h]
         (binding [store/*home* h]
       (if-not (sup/up?)
-        (do (println "SKIPPED runtime tests of deliberator.steps-test: runtime down: bb runtime:up")
+        (do (fu/skip! "runtime tests of deliberator.steps-test" "runtime down: bb runtime:up")
             (f))
         (let [id (sup/rand-id)
               ws (str "steps-" id)
@@ -80,7 +81,7 @@
 
 (defmacro when-runtime [& body]
   `(if *rt* (do ~@body)
-       (println (str "SKIPPED " (some-> clojure.test/*testing-vars* first meta :name) ": runtime down: bb runtime:up"))))
+       (fu/skip! (fu/current-test) "runtime down: bb runtime:up")))
 
 (defn- write-scn! [text]
   (let [f (io/file (str (store/home)) "scn" (str (random-uuid) ".scn"))]

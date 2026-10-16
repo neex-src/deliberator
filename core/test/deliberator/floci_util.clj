@@ -36,6 +36,18 @@
   (swap! skipped inc)
   (println "SKIP" (:message m)))
 
+(defn skip!
+  "Reports a `:skip` (counted and printed, never a silent pass); `what` names the test or fixture."
+  [what reason]
+  (t/do-report {:type :skip :message (str what ": " reason)}))
+
+(defn current-test [] (or (some-> t/*testing-vars* first meta :name) "test"))
+
+(defn estate-ws
+  "`ESTATE_WS` when set and not blank, else nil."
+  []
+  (let [v (System/getenv "ESTATE_WS")] (when-not (str/blank? v) v)))
+
 (defmacro deftest-floci [name & body]
   `(t/deftest ~name
      (if (floci-up?)
