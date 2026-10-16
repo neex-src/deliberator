@@ -19,6 +19,20 @@
         <toolWindow id="Deliberator" anchor="right" secondary="false" canCloseContents="false"
                     factoryClass="com.neex.deliberator.ui.DeliberatorToolWindowFactory"/>
         <notificationGroup id="Deliberator" displayType="BALLOON"/>
+
+        <!-- the .scn language (piece 05) -->
+        <fileType name="Deliberator Scenario" language="Deliberator.Scn" extensions="scn"
+                  implementationClass="com.neex.deliberator.scn.ScnFileType" fieldName="INSTANCE"/>
+        <applicationService serviceImplementation="com.neex.deliberator.scn.ScnRegistry"/>
+        <lang.parserDefinition language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnParserDefinition"/>
+        <lang.syntaxHighlighterFactory language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnSyntaxHighlighterFactory"/>
+        <colorSettingsPage implementation="com.neex.deliberator.scn.ScnColorSettingsPage"/>
+        <annotator language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnHeadAnnotator"/>
+        <externalAnnotator language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnExternalAnnotator"/>
+        <lang.foldingBuilder language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnFoldingBuilder"/>
+        <lang.psiStructureViewFactory language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnStructureViewFactory"/>
+        <completion.contributor language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnCompletionContributor"/>
+        <editorFactoryListener implementation="com.neex.deliberator.scn.ScnEditorListener"/>
     </extensions>
 
     <actions>

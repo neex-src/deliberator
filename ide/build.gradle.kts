@@ -68,3 +68,9 @@ tasks.test {
     systemProperty("deliberator.jar", daemonJar.asFile.absolutePath)
     systemProperty("deliberator.test.homes", layout.buildDirectory.dir("th").get().asFile.absolutePath)
 }
+
+// The .scn test data is the fixtures of the core and the estate scenario themselves, not a second copy (piece 05).
+tasks.processTestResources {
+    from(repoRoot.dir("core/test/fixtures")) { include("*.scn"); into("scn") }
+    from(repoRoot.dir("estate/scenarios")) { include("*.scn"); rename { "estate-$it" }; into("scn") }
+}
