@@ -1,0 +1,32 @@
+# Payload 04-malformed.json (invalid JSON): stored with status MALFORMED, publish refused with 422,
+# no ack and no Postgres row.
+# @env local
+# @var corr = {{correlation}}
+# @var msg = pay-{{uuid}}
+
+### sqs send queue/inbox send
+# @attr id={{msg}}
+# @attr correlation={{corr}}
+# @body ../../payloads/04-malformed.json
+
+### dynamodb get table/messages stored
+# @until $.status.S == MALFORMED within 20s
+# @assert $.bytes.N == 62
+# @assert $.correlation.S == {{corr}}
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### http publish
+# @assert status == 422
+POST {{service/a}}/publish/{{msg}}
+X-Correlation-Id: {{corr}}
+
+### wait settle
+# @for 2s
+
+### dynamodb get table/messages still-malformed
+# @assert $.status.S == MALFORMED
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### sql db/main no-ack-row
+# @assert rows == 0
+select * from acks where message_id = '{{msg}}' /* {{corr}} */
