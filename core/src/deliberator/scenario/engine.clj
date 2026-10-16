@@ -132,11 +132,13 @@
            (throw e)))))
 
 (defn- validate-step! [kmap step]
-  (doseq [{:keys [name line]} (:directives step)
-          :let [spec (first (filter #(= name (:name %)) (kinds/directive-specs kmap)))]]
-    (when (and (not (:repeatable? spec))
-               (> (count (filter #(= name (:name %)) (:directives step))) 1))
-      (invalid line (str "@" name " given twice")))
+  (reduce (fn [seen {:keys [name line]}]
+            (let [spec (first (filter #(= name (:name %)) (kinds/directive-specs kmap)))]
+              (when (and (not (:repeatable? spec)) (contains? seen name))
+                (invalid line (str "@" name " given twice")))
+              (conj seen name)))
+          #{} (:directives step))
+  (doseq [{:keys [name line]} (:directives step)]
     (when (and (= name "body") (nil? (:body-file step)))
       (invalid line "@body needs a file")))
   (doseq [{:keys [name value line]} (:directives step)]

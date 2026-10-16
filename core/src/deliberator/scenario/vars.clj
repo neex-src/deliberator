@@ -37,11 +37,10 @@
   [text vars & {:keys [resolve line]}]
   (str/replace (str text) placeholder
                (fn [[_ n]]
-                 (str/re-quote-replacement
-                  (cond
-                    (contains? vars n) (get vars n)
-                    (and resolve (str/includes? n "/")) (str (resolve n))
-                    :else (throw (unknown n vars line)))))))
+                 (cond
+                   (contains? vars n) (get vars n)
+                   (and resolve (str/includes? n "/")) (str (resolve n))
+                   :else (throw (unknown n vars line))))))
 
 (defn substitute-bytes
   [^bytes bs vars & {:keys [resolve line]}]

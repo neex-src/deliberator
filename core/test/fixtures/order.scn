@@ -3,7 +3,7 @@
 # @var topic = orders
 
 ### tail
-# @for 150
+# @for 400
 
 ### fake create-order
 # @set status=201

@@ -1,0 +1,33 @@
+### tail · ok · 12 ms
+created ord-11111111-2222-3333-4444-555555555555 on orders (20261016-101502-order-002)
+
+### fake create-order · ok · 12 ms
+{ "orderId": "ord-11111111-2222-3333-4444-555555555555", "items": [ { "sku": "a-1", "qty": 2 } ], "at": "2026-10-16T10:15:03Z" }
+✓ status == 201
+✓ took < 2s
+✓ capture oid = $.orderId
+✓ capture sid = id
+captured: oid=ord-11111111-2222-3333-4444-555555555555, sid=ord-11111111-2222-3333-4444-555555555555
+
+### fake ok check-it · ok · 12 ms
+{ "orderId": "ord-11111111-2222-3333-4444-555555555555", "items": [ { "sku": "a-1", "qty": 2 } ] }
+✓ $.items[0].qty == 2
+✓ $.orderId == ord-11111111-2222-3333-4444-555555555555
+✓ msg != nothing
+✓ until n >= 2 (attempt 2)
+
+### fake wrong · failed · 12 ms
+rows: 3
+✗ status == 500 (was <absent>)
+✗ $.missing == 1 (was <absent>)
+
+### fake boom · error · 12 ms
+ERROR: connection refused
+hint: the fake kind was told to fail
+
+### fake after-the-error · ok · 12 ms
+tail of the run
+✓ len > 0
+
+FAILED 2/11
+RUN failed steps 6 failed 2

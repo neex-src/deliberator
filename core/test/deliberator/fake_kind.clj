@@ -29,8 +29,6 @@
     "at" (Instant/parse v)
     v))
 
-(defn- body-str [step] (some-> (:body step) (String. "UTF-8")))
-
 (defn- run-fake [ctx step]
   (let [n (:n step)]
     (swap! trace conj [:start n])
@@ -42,15 +40,15 @@
                          :request-bytes (.getBytes "req" "UTF-8") :request-ext "http"
                          :response-bytes (.getBytes "partial" "UTF-8")})))
     (swap! trace conj [:end n])
-    (let [b (body-str step)
-          resp (if (str/blank? b) "ok\n" b)
+    (let [bs (or (:body step) (.getBytes "ok\n" "UTF-8"))
+          resp (String. ^bytes bs "ISO-8859-1")
           json? (re-find #"^\s*[\[{]" resp)
           facts (into {"n" (:attempt ctx) "len" (count resp)}
                       (for [kv (dirs step "set") :let [[k v] (str/split kv #"=" 2)]] [k (coerce k v)]))]
       (cond-> {:facts facts
-               :request-bytes (.getBytes (str (:verb step) " " (:target step)) "UTF-8")
+               :request-bytes (.getBytes (str (:verb step) " " (:target step) " #" (:attempt ctx)) "UTF-8")
                :request-ext "http"
-               :response-bytes (.getBytes ^String resp "UTF-8")
+               :response-bytes bs
                :response-ext (if json? "json" "txt")
                :lines (count (str/split-lines resp))}
         (first (dirs step "display")) (assoc :display (first (dirs step "display")))))))
