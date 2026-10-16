@@ -125,6 +125,15 @@ class LogsAndMarkersTest : BasePlatformTestCase() {
 
     // ---------------------------------------------------------------------------------------------
 
+    fun testActionsAndTheJavaResolverAreRegistered() {
+        val am = com.intellij.openapi.actionSystem.ActionManager.getInstance()
+        for (id in listOf("deliberator.logs.fetch", "deliberator.logs.filter", "deliberator.logs.unfilter", "deliberator.logs.match", "deliberator.marker.toggle"))
+            assertNotNull(id, am.getAction(id))
+        val gutter = am.getAction("EditorGutterPopupMenu") as com.intellij.openapi.actionSystem.ActionGroup
+        assertTrue("the toggle is in the gutter menu", gutter.getChildren(null).any { it === am.getAction("deliberator.marker.toggle") })
+        assertTrue(LoggerResolver.EP.extensionList.any { it is JavaLoggerResolver })
+    }
+
     fun testFetchOpensTheFileTheDaemonWroteWithItsContents() {
         val (vf, path) = fetched()
         assertEquals(logText, String(vf.contentsToByteArray()))
