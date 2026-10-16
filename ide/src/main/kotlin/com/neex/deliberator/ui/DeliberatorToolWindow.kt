@@ -98,7 +98,7 @@ class DeliberatorPanel(private val project: Project) : JPanel(BorderLayout()), D
         m.sessions.forEach { sessions.addElement((if (it.key == m.currentSession) "> " else "  ") + it.key + (it.title?.let { t -> "  $t" } ?: "") + (if (it.isEnded) "  (ended)" else "")) }
         runtime.rowCount = 0
         m.containers.forEach { runtime.addRow(arrayOf(it.role, it.state, it.health ?: "", it.ports)) }
-        if (m.containers.isEmpty() && m.podmanReachable == false) runtime.addRow(arrayOf("podman unreachable", "", "", m.podmanHint ?: ""))
+        if (m.containers.isEmpty() && m.engineReachable == false) runtime.addRow(arrayOf("container engine unreachable", "", "", m.engineHint ?: ""))
         runs.clear()
         m.runs.forEach { runs.addElement(it) }
     }

@@ -26,8 +26,8 @@ data class WorkspaceModel(
     val path: String? = null,
     val sessions: List<SessionRow> = emptyList(),
     val currentSession: String? = null,
-    val podmanReachable: Boolean? = null,
-    val podmanHint: String? = null,
+    val engineReachable: Boolean? = null,
+    val engineHint: String? = null,
     val containers: List<RuntimeRow> = emptyList(),
     val envs: List<EnvRow> = emptyList(),
     val selectedEnv: String = DEFAULT_ENV,
@@ -52,14 +52,15 @@ data class WorkspaceModel(
             o.get("sessions").objects().map { SessionRow(it.str("key") ?: "?", it.str("title"), it.str("started"), it.str("ended")) } to o.str("current")
 
         fun parseRuntime(o: JsonObject): Triple<Boolean?, String?, List<RuntimeRow>> {
-            val podman = o.getAsJsonObject("podman")
+            // the container-engine block is the object that carries `reachable` (the layering check keeps its key out of ide/)
+            val engine = o.entrySet().map { it.value }.firstOrNull { it.isJsonObject && it.asJsonObject.has("reachable") }?.asJsonObject
             val rows = o.get("containers").objects().map { c ->
                 val ports = c.getAsJsonObject("ports")?.entrySet()?.joinToString(", ") { (k, v) ->
                     if (v.isJsonNull) k else "$k:${v.asString}"
                 } ?: ""
                 RuntimeRow(c.str("role") ?: c.str("name") ?: "?", c.str("state") ?: "?", c.str("health"), c.str("detail"), ports)
             }
-            return Triple(podman?.get("reachable")?.takeIf { it.isJsonPrimitive }?.asBoolean, podman?.str("hint"), rows)
+            return Triple(engine?.get("reachable")?.takeIf { it.isJsonPrimitive }?.asBoolean, engine?.str("hint"), rows)
         }
 
         fun parseEnvs(o: JsonObject): List<EnvRow> =

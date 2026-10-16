@@ -109,7 +109,7 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
         fun <T> part(f: () -> T): T? = try { f() } catch (e: DaemonException) { if (error == null) error = describe(e); null }
         part { obj("workspace.show") }?.let { m = m.copy(path = it.get("path")?.asString) }
         part { WorkspaceModel.parseSessions(obj("session.list")) }?.let { (s, c) -> m = m.copy(sessions = s, currentSession = c) }
-        part { WorkspaceModel.parseRuntime(obj("runtime.status")) }?.let { (r, h, c) -> m = m.copy(podmanReachable = r, podmanHint = h, containers = c) }
+        part { WorkspaceModel.parseRuntime(obj("runtime.status")) }?.let { (r, h, c) -> m = m.copy(engineReachable = r, engineHint = h, containers = c) }
         part { WorkspaceModel.parseEnvs(obj("env.list")) }?.let { m = m.copy(envs = it) }
         m = if (m.currentSession != null) {
             part { WorkspaceModel.parseRuns(obj("runs.list", JsonObject().apply { addProperty("limit", 20) })) }?.let { m.copy(runs = it) } ?: m
