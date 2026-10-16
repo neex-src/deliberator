@@ -193,3 +193,11 @@
           (let [e (:error (:terminal (tc/request c op args)))]
             (is (= "env/invalid" (:type e)) (str op ": " (pr-str e)))
             (is (some #(str/includes? (str %) "profile") (:problems e)) (str op ": " (pr-str e)))))))))
+
+(deftest ^:known-bug an-overlong-name-is-a-typed-invalid-name-not-an-internal-error
+  ;; "A b", ".hidden", "-x" and "../x" are refused as store/invalid-name; 300 characters pass the check
+  ;; and die in the filesystem (ENAMETOOLONG) as type "internal" with the full path in the message.
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [c h]
+      (let [e (:error (:terminal (tc/request c "session.start" {:key (apply str (repeat 300 "k"))})))]
+        (is (= "store/invalid-name" (:type e)) (pr-str (select-keys e [:type])))))))

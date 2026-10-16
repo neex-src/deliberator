@@ -258,3 +258,13 @@
       (is (= sha (:sha m)))
       (is (str/starts-with? (:op m) "put ") "one well-formed sidecar, written by one of the writers")
       (is (= 2 (count (.listFiles (.getParentFile (.toFile (store/raw-path "w" sha)))))) "blob and sidecar, no temp files left"))))
+
+(deftest ^:known-bug a-long-scenario-file-name-still-gets-a-run-directory
+  ;; run-dir! builds `<yyyymmdd-hhmmss>-<file stem>`; a stem of ~245 characters (legal for the file) makes the
+  ;; directory name exceed 255 bytes: the run dies with the JDK's FileSystemException instead of a short name.
+  (fake/reset-state!)
+  (tu/with-temp-home
+    (let [fname (str (apply str (repeat 240 "a")) ".scn")
+          res (try (run-text! fname "### fake a\n") (catch Throwable e e))]
+      (is (map? res) (str "threw " (some-> res class) " " (some-> res ex-message (subs 0 80))))
+      (when (map? res) (is (= :ok (:status res)))))))
