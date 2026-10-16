@@ -25,6 +25,8 @@
   (if-let [ws (fu/estate-ws)]
     (let [sess (str "FOLLOW-" (System/currentTimeMillis))
           _ (call "session.start" {:ws ws :key sess})
+          order! #(call "scenario.run" {:ws ws :session sess :path (.getCanonicalPath (io/file "../estate/scenarios/order.scn"))})
+          _ (order!)   ; warm-up: the first order after `estate:up` runs cold code and may not finish in the scenario's windows
           logs-dir (io/file (str (session/dir ws sess)) "logs")
           events (atom [])
           cancelled (atom false)
@@ -33,7 +35,7 @@
       (try
         (Thread/sleep 1500)
         (let [t0 (System/currentTimeMillis)
-              run (future (call "scenario.run" {:ws ws :session sess :path (.getCanonicalPath (io/file "../estate/scenarios/order.scn"))}))]
+              run (future (order!))]
           (testing "the ACK line of A is an event within seconds, while the follow is open"
             (is (wait-until #(some (fn [e] (str/includes? (str (:text e)) "ACK received")) @events) 15000))
             (is (not (realized? fut)) "still following"))

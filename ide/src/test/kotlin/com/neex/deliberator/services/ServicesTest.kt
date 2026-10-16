@@ -299,6 +299,54 @@ class ServicesTest : BasePlatformTestCase() {
         assertEquals("every line also reached the sink", o.lines, out)
     }
 
+    // a real container ----------------------------------------------------------------------------------------------------
+
+    /** The JVM's own compiler when it has one (the platform's runtime usually does not), else the `javac` on the PATH. */
+    private fun compile(out: Path, src: Path): Boolean {
+        ToolProvider.getSystemJavaCompiler()?.let { return it.run(null, null, null, "--release", "17", "-d", out.toString(), src.toString()) == 0 }
+        return try {
+            ProcessBuilder("javac", "--release", "17", "-d", out.toString(), src.toString()).redirectErrorStream(true).start().let { p ->
+                p.inputStream.readAllBytes(); p.waitFor() == 0
+            }
+        } catch (e: java.io.IOException) { false }
+    }
+
+    /** Compiles the stub and jars it; null when there is no Java compiler. */
+    private fun buildStub(dir: Path): Path? {
+        val src = dir.resolve("Stub.java")
+        Files.createDirectories(dir)
+        Files.writeString(src, """
+            import com.sun.net.httpserver.HttpServer;
+            import java.net.InetSocketAddress;
+            public class Stub {
+                public static void main(String[] a) throws Exception {
+                    HttpServer s = HttpServer.create(new InetSocketAddress(8080), 0);
+                    s.createContext("/", ex -> { byte[] b = "{\"status\":\"UP\"}".getBytes(); ex.getResponseHeaders().add("Content-Type", "application/json");
+                        ex.sendResponseHeaders(200, b.length); ex.getResponseBody().write(b); ex.close(); });
+                    s.start();
+                    System.out.println("stub started");
+                    for (int i = 0; ; i++) { Thread.sleep(1000); System.out.println("stub tick " + i); }
+                }
+            }
+        """.trimIndent())
+        val out = dir.resolve("out")
+        Files.createDirectories(out)
+        if (!compile(out, src)) return null
+        val jar = dir.resolve("stub.jar")
+        val mf = Manifest().apply { mainAttributes[Attributes.Name.MANIFEST_VERSION] = "1.0"; mainAttributes[Attributes.Name.MAIN_CLASS] = "Stub" }
+        JarOutputStream(Files.newOutputStream(jar), mf).use { j ->
+            j.putNextEntry(java.util.jar.JarEntry("Stub.class")); j.write(Files.readAllBytes(out.resolve("Stub.class"))); j.closeEntry()
+            for (extra in Files.list(out).use { it.filter { p -> p.fileName.toString().startsWith("Stub$") }.toList() }) {
+                j.putNextEntry(java.util.jar.JarEntry(extra.fileName.toString())); j.write(Files.readAllBytes(extra)); j.closeEntry()
+            }
+        }
+        Files.writeString(dir.resolve("deliberator-service.edn"), """
+            {:name "stub" :kind :spring-boot :build {:cmd ["true"] :dir "." :artifact "stub.jar" :java 21}
+             :image "docker.io/library/eclipse-temurin:21-jre" :port 8080 :jdwp 5005 :health "/actuator/health"}
+        """.trimIndent())
+        return dir
+    }
+
     fun testRunConfigurationStartsTailsReloadsAndStopsAStubService() {
         val engine = bg { svc.refreshNow() }.engineReachable
         if (engine != true) { println("SKIPPED testRunConfigurationStartsTailsReloadsAndStopsAStubService: the container engine is not reachable (${svc.model.engineHint})"); return }
