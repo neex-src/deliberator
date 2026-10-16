@@ -92,6 +92,13 @@
   [ws {:keys [work answer filtered? raw-meta answer-meta sidecar]}]
   (let [raw (store/raw-adopt! ws work raw-meta)
         ans (if filtered? (store/raw-adopt! ws answer answer-meta) raw)]
+    (when-not (:new? ans)   ; the same bytes were in the store already: the session file becomes a link to that blob, as for any fetch
+      (let [af (.toPath (io/file answer)) tmp (.resolveSibling af (str "." (.getFileName af) ".relink"))]
+        (try (Files/deleteIfExists tmp)
+             (Files/createLink tmp (:path ans))
+             (Files/move tmp af (into-array java.nio.file.CopyOption [java.nio.file.StandardCopyOption/REPLACE_EXISTING
+                                                                       java.nio.file.StandardCopyOption/ATOMIC_MOVE]))
+             (catch java.io.IOException _ (Files/deleteIfExists tmp)))))
     (when filtered? (Files/deleteIfExists (.toPath (io/file work))))
     (Files/deleteIfExists (.toPath (io/file sidecar)))
     {:raw raw :answer ans}))

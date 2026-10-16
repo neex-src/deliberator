@@ -417,6 +417,22 @@
       (is (= #{:path :lines :bytes :sha :target :source} (set (keys r))) "the result shape did not change")
       (is (= (dissoc quiet :path) (dissoc r :path))))))
 
+(deftest a-follow-with-bytes-already-in-the-store-links-to-them
+  (tu/with-temp-home
+    (session/start! "default" "S1")
+    (let [src (write! (store/home) "live.log" "same\n")
+          _ (file-env! "default" src)
+          once (call "logs.fetch" {:target "log/app"})
+          cancelled (atom false)
+          events (atom [])
+          res (future (ops/call! "logs.fetch" {:emit! #(swap! events conj %) :cancelled? #(deref cancelled)} {:target "log/app" :follow true}))
+          _ (wait-until #(seq @events) 3000)
+          _ (reset! cancelled true)
+          r (deref res 5000 nil)]
+      (is (= (:sha once) (:sha r)))
+      (is (java.nio.file.Files/isSameFile (.toPath (io/file (:path r))) (store/raw-path "default" (:sha r))))
+      (is (not= (:path once) (:path r))))))
+
 (deftest an-unfinished-follow-is-adopted-when-its-owner-is-gone
   (tu/with-temp-home
     (session/start! "default" "S1")
