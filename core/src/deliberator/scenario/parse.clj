@@ -1,7 +1,232 @@
 (ns deliberator.scenario.parse
-  "Scenario text to data. Contract: `(parse text & {:keys [path]}) -> {:header {:env :vars [...]
-  :directives [...]} :steps [{:n :kind :verb :target :name :directives [{:name :value :line}] :body
-  :line}]}`; errors `{:type :scenario/parse :line :message}`. Header: `# @env`, `# @var`; step
-  header `### <kind> [<verb>] [<target>] [<name>]`; `# @body <path>` is relative to the scenario
-  file; bodies are the exact bytes between the directives and the next `###` or EOF, final newline
-  kept.")
+  "Scenario text to data. `(parse text-or-bytes & {:keys [path kinds]}) -> {:header {:env :vars
+  [{:name :value :line}]} :steps [{:n :kind :verb :target :name :directives [{:name :value :line}]
+  :body :body-file :body-range :line}]}`; errors are thrown as `{:type :scenario/parse :line :message}`
+  (message prefixed `line N: `).
+
+  Structure is read from the file's bytes (UTF-8 for names and values), bodies are returned as the
+  original bytes, so a payload round-trips exactly.
+
+  Header (before the first step): blank lines, plain `#` comments, `# @env <name>` (once) and
+  `# @var <name> = <value>`; anything else is an error. A step starts at a line beginning at column
+  0 with `### ` and a kind word: `### <kind> [<verb>] [<target>] [<name>]` (a `###` line that is
+  indented, quoted or has no kind word is body). The words after the kind are split with the
+  help of the kind map when `:kinds` (a map kind-name -> kind map, normally
+  `kinds/registry`) is given: a first word in the kind's `:verbs` is the verb; a lone word is the
+  target when the kind says `:target :required`, or (`:optional`, default) when it looks like one
+  (contains `/` or `://`, or starts with `{{`), else the name; two words are target and name. With
+  `:kinds` an unknown kind, a missing verb or an undeclared directive is an error with the line;
+  without it nothing is checked against kinds. `# @name x` overrides the name.
+
+  Directives are the lines `# @name value` right after the step line (blank lines between them are
+  skipped). The BODY runs from after the last directive line (right after the step line when there
+  is none) to the next `###` step line or EOF, with trailing blank lines removed but the newline of
+  the last non-blank line kept: `{...}\\n\\n###` yields `{...}\\n`, `{...}` at EOF without a newline
+  yields `{...}`. A separator blank line is layout, not payload (the PoC lost final newlines the
+  other way round). Who needs other bytes, trailing blank lines included, uses `# @body <file>`:
+  the file's bytes, read relative to `:path`'s directory (absolute paths allowed), always
+  byte-exact; without `:path` only `:body-file` is recorded. A file body together with a non-blank
+  inline body is an error, and so is an engine-owned directive line (`assert capture until timeout
+  body name`) found inside the body (it would otherwise be silently sent). `:body` is a byte array
+  or nil; `:body-range` the `[from to)` byte offsets of the inline body in the source."
+  (:require [clojure.string :as str]
+            [deliberator.scenario.kinds :as kinds])
+  (:import (java.nio.charset StandardCharsets)
+           (java.nio.file Files Path Paths)))
+
+(defn- perr [line msg]
+  (throw (ex-info (str "line " line ": " msg)
+                  {:type :scenario/parse :line line :message msg})))
+
+(defn- ->bytes ^bytes [x]
+  (if (string? x) (.getBytes ^String x StandardCharsets/UTF_8) x))
+
+(defn- u8 [^String latin1]
+  (String. (.getBytes latin1 StandardCharsets/ISO_8859_1) StandardCharsets/UTF_8))
+
+(defn- split-lines
+  "Vector of {:no :start :next :text} over the latin-1 view; :text without the \\n and a trailing \\r."
+  [^String s]
+  (let [n (count s)]
+    (loop [start 0 no 1 out (transient [])]
+      (if (>= start n)
+        (persistent! out)
+        (let [nl (.indexOf s "\n" (int start))
+              end (if (neg? nl) n nl)
+              nxt (if (neg? nl) n (inc nl))
+              text (let [t (subs s start end)] (if (str/ends-with? t "\r") (subs t 0 (dec (count t))) t))]
+          (recur nxt (inc no) (conj! out {:no no :start start :next nxt :text text})))))))
+
+(def ^:private step-re #"### +([A-Za-z][A-Za-z0-9_-]*)(?:\s+(.*?))?\s*")
+(def ^:private directive-re #"#\s*@([A-Za-z][A-Za-z0-9._-]*)(?:\s+(.*?))?\s*")
+(def ^:private engine-names (set (map :name kinds/engine-directives)))
+(def ^:private engine-body-re
+  (re-pattern (str "#\\s*@(" (str/join "|" (sort engine-names)) ")(\\s.*)?\\s*")))
+
+(defn- blank? [{:keys [text]}] (str/blank? text))
+
+(defn- scan-json
+  "Advances the JSON scanner `{:depth :in-str}` over one line of body text."
+  [{:keys [depth in-str] :as st} ^String text]
+  (let [n (count text)]
+    (loop [i 0 depth depth in-str in-str]
+      (if (>= i n)
+        {:depth depth :in-str in-str}
+        (let [c (.charAt text i)]
+          (cond
+            in-str (cond (= c \\) (recur (+ i 2) depth true)
+                         (= c \") (recur (inc i) depth false)
+                         :else (recur (inc i) depth true))
+            (zero? depth) (if (or (= c \{) (= c \[)) (recur (inc i) 1 false) (recur (inc i) 0 false))
+            (= c \") (recur (inc i) depth true)
+            (or (= c \{) (= c \[)) (recur (inc i) (inc depth) false)
+            (or (= c \}) (= c \])) (recur (inc i) (dec depth) false)
+            :else (recur (inc i) depth false)))))))
+
+(defn- find-heads
+  "Indexes of the step header lines. A `### kind` line inside a JSON string of the body (a string
+  opened and not yet closed, within a `{`/`[` value) is body. If such a string is never closed
+  before the end of the file the rule is dropped from that line on (a stray quote must not swallow
+  the rest of the file)."
+  [lines]
+  (let [n (count lines)]
+    (loop [i 0 st {:depth 0 :in-str false} skipped nil out []]
+      (if (>= i n)
+        (if (and (:in-str st) skipped)
+          (recur (inc skipped) {:depth 0 :in-str false} nil (conj out skipped))
+          out)
+        (let [{:keys [text]} (nth lines i)
+              head? (re-matches step-re text)]
+          (cond
+            (and head? (:in-str st)) (recur (inc i) st (or skipped i) out)
+            head? (recur (inc i) {:depth 0 :in-str false} nil (conj out i))
+            (str/starts-with? text "#") (recur (inc i) st skipped out)
+            :else (let [st' (scan-json st text)]
+                    (recur (inc i) st' (if (:in-str st') skipped nil) out))))))))
+
+(defn- directive [{:keys [text no]}]
+  (when-let [[_ n v] (re-matches directive-re text)]
+    {:name n :value (u8 (or v "")) :line no}))
+
+(defn- parse-header [lines]
+  (reduce
+   (fn [h {:keys [text no] :as l}]
+     (cond
+       (blank? l) h
+       (str/starts-with? text "#")
+       (if-let [{:keys [name value]} (directive l)]
+         (case name
+           "env" (do (when (:env h) (perr no "duplicate @env"))
+                     (when (str/blank? value) (perr no "@env needs a name"))
+                     (assoc h :env value))
+           "var" (if-let [[_ n v] (re-matches #"([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)" value)]
+                   (update h :vars conj {:name n :value v :line no})
+                   (perr no "@var needs `name = value`"))
+           (perr no (str "unknown header directive @" name " (header has @env and @var)")))
+         h)
+       (str/starts-with? text "//") h
+       :else (perr no (str "unexpected text before the first ### step: " (pr-str text)))))
+   {:env nil :vars []}
+   lines))
+
+(defn- target-like? [w]
+  (or (str/includes? w "/") (str/starts-with? w "{{")))
+
+(defn- split-words [no kind words kmap]
+  (let [verbs (if kmap (:verbs kmap #{nil}) #{nil})
+        real (disj verbs nil)
+        [verb words] (if (and (seq words)
+                              (if kmap
+                                (contains? real (first words))
+                                (and (>= (count words) 2) (not (target-like? (first words)))
+                                     (target-like? (second words)))))
+                       [(first words) (rest words)]
+                       (do (when (and kmap (not (contains? verbs nil)))
+                             (perr no (str kind " needs a verb: " (str/join " | " (sort real)))))
+                           [nil words]))
+        mode (if kmap (:target kmap :optional) :optional)
+        n (count words)]
+    (when (> n 2) (perr no (str "too many words in the step line after " kind " (verb target name)")))
+    (let [[target name]
+          (case n
+            0 [nil nil]
+            1 (if (and (not= mode :none) (or (= mode :required) (target-like? (first words))))
+                [(first words) nil]
+                [nil (first words)])
+            2 [(first words) (second words)])]
+      (when (and kmap (= mode :required) (nil? target))
+        (perr no (str kind (when verb (str " " verb)) " needs a target")))
+      {:verb verb :target target :name name})))
+
+(defn- parse-step [^bytes bs ^String s n lines hi end-start ^Path path kinds]
+  (let [{h-text :text no :no} (nth lines hi)
+        [_ kind rest-words] (re-matches step-re h-text)
+        words (if (str/blank? rest-words) [] (vec (str/split (str/trim rest-words) #"\s+")))
+        kmap (when kinds
+               (or (get kinds kind)
+                   (perr no (str "unknown step kind " (pr-str kind) "; known: "
+                                 (str/join ", " (sort (keys kinds)))))))
+        {:keys [verb target name]} (split-words no kind (map u8 words) kmap)
+        ;; directives
+        [dirs last-i]
+        (loop [i (inc hi) dirs [] last-i hi]
+          (if-let [l (and (< i end-start) (nth lines i))]
+            (cond
+              (blank? l) (recur (inc i) dirs last-i)
+              (directive l) (recur (inc i) (conj dirs (directive l)) i)
+              :else [dirs last-i])
+            [dirs last-i]))
+        allowed (when kmap (set (map :name (kinds/directive-specs kmap))))
+        _ (when allowed
+            (doseq [{dn :name dl :line} dirs]
+              (when-not (contains? allowed dn)
+                (perr dl (str "unknown directive @" dn " for " kind "; known: "
+                              (str/join ", " (map #(str "@" %) (sort allowed))))))))
+        body-from-i (inc last-i)
+        body-start (if (< body-from-i (count lines)) (:start (nth lines body-from-i)) (count s))
+        body-start (min body-start (if (< end-start (count lines)) (:start (nth lines end-start)) (count s)))
+        region-end (if (< end-start (count lines)) (:start (nth lines end-start)) (count s))
+        ;; strip trailing blank lines
+        end-i (loop [j (dec end-start)]
+                (if (and (>= j body-from-i) (blank? (nth lines j))) (recur (dec j)) j))
+        body-end (if (< end-i body-from-i) body-start (:next (nth lines end-i)))
+        body-end (min body-end region-end)
+        inline? (> body-end body-start)
+        _ (doseq [j (range body-from-i (inc (max end-i (dec body-from-i))))
+                  :let [l (nth lines j)]
+                  :when (re-matches engine-body-re (:text l))]
+            (perr (:no l) (str "directive after the body: " (pr-str (:text l))
+                               " (directives go right after the ### line)")))
+        body-file (some #(when (= "body" (:name %)) (:value %)) dirs)
+        body-dir (some #(when (= "body" (:name %)) %) dirs)
+        _ (when (and body-dir (str/blank? body-file)) (perr (:line body-dir) "@body needs a file"))
+        _ (when (and body-file inline?) (perr (:line body-dir) "@body together with an inline body"))
+        body (cond
+               inline? (java.util.Arrays/copyOfRange bs (int body-start) (int body-end))
+               (and body-file path)
+               (let [p (.resolve (or (.getParent (.toAbsolutePath path)) (Paths/get "." (make-array String 0)))
+                                 ^String body-file)]
+                 (if (Files/isRegularFile p (make-array java.nio.file.LinkOption 0))
+                   (Files/readAllBytes p)
+                   (perr (:line body-dir) (str "@body file not found: " body-file))))
+               :else nil)
+        name (or (some #(when (= "name" (:name %)) (:value %)) dirs) name)]
+    (cond-> {:n n :kind kind :verb verb :target target :name name :directives dirs :line no
+             :body body}
+      body-file (assoc :body-file body-file)
+      inline? (assoc :body-range [body-start body-end]))))
+
+(defn parse
+  [text & {:keys [path kinds]}]
+  (let [bs (->bytes text)
+        s (String. bs StandardCharsets/ISO_8859_1)
+        lines (split-lines s)
+        path (when path (if (instance? Path path) path (Paths/get (str path) (make-array String 0))))
+        heads (find-heads lines)
+        first-head (or (first heads) (count lines))
+        header (parse-header (subvec lines 0 first-head))
+        ends (conj (vec (rest heads)) (count lines))]
+    {:header header
+     :steps (vec (map-indexed
+                  (fn [k [hi end]] (parse-step bs s (inc k) lines hi end path kinds))
+                  (map vector heads ends)))}))

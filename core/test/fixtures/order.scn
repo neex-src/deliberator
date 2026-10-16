@@ -1,0 +1,38 @@
+# @env local
+# @var orderId = ord-{{uuid}}
+# @var topic = orders
+
+### tail
+# @for 150
+
+### fake create-order
+# @set status=201
+# @set id={{orderId}}
+# @set at=2026-10-16T10:15:03Z
+# @set took=84
+# @log created {{orderId}} on {{topic}} ({{step.correlation}})
+# @assert status == 201
+# @assert took < 2s
+# @capture oid = $.orderId
+# @capture sid = id
+{ "orderId": "{{orderId}}", "items": [ { "sku": "a-1", "qty": 2 } ], "at": "2026-10-16T10:15:03Z" }
+
+### fake ok check-it
+# @until n >= 2 within 3s
+# @assert $.items[0].qty == 2
+# @assert $.orderId == {{oid}}
+# @assert msg != nothing
+{ "orderId": "{{oid}}", "items": [ { "sku": "a-1", "qty": 2 } ] }
+
+### fake wrong
+# @assert status == 500
+# @assert $.missing == 1
+# @display rows: 3
+{ "ok": true }
+
+### fake boom
+# @fail connection refused
+
+### fake after-the-error
+# @assert len > 0
+tail of the run

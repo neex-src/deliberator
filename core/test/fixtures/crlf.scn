@@ -1,0 +1,6 @@
+### fake a
+# @set x=1
+{"k": "é"}
+
+### fake b
+last no newline
