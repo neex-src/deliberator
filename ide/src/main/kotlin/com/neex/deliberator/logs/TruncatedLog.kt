@@ -16,7 +16,7 @@ import javax.swing.JComponent
 
 /**
  * A log the platform loaded only in part (it caps what an editor holds; a plugin cannot raise that cap): [loadedLines] of
- * [totalLines] lines are in the document, the rest is on disk at [path]. (Decision 42.)
+ * [totalLines] lines are in the document, the rest is on disk at [path]. (Decision 44.)
  */
 data class LogTruncation(val path: String, val loadedLines: Int, val totalLines: Int, val fileBytes: Long) {
     /** The banner text; [beyond] are the marker hits the editor cannot show, when `logs.match` found any. */
