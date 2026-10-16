@@ -10,3 +10,4 @@ logger, one Terraform module for Floci and real AWS. Java 21, Spring Boot 3.3.
 - `APP_AUTO_PUBLISH` (default false): service A publishes to the bus as soon as it stores an inbox message; `bb estate:up --auto-publish` turns it on. Off, `POST /publish/{id}` does it.
 - JDWP: A on 5005, B on 5006. Rebuild a service with `bb estate:build && bb estate:up`.
 - `terraform/aws` is validated only, never applied.
+- `bb acceptance [--ws W] [--down]` runs `estate/scenarios/order.scn` and `estate/scenarios/payloads/*.scn` against it.

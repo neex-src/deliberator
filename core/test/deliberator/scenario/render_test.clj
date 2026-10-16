@@ -81,14 +81,15 @@
                                "# @assert id == nothing\n# @assert took > 100\n# @assert at < 2000-01-01T00:00:00Z\n"
                                out))
                   (engine/run! "w" env (str f) :session "T-1"))))
-         a (mk "2026-10-16T10:15:02Z" "req-aaaa-1" "line req-aaaa-1 at 2026-10-16T10:15:02.123Z 3f2b8e1a-0000-4000-8000-000000000001\n")
-         b (mk "2026-10-17T11:16:03Z" "req-bbbb-2" "line req-bbbb-2 at 2026-10-17T11:16:03.456Z 7c1d9a2b-0000-4000-8000-000000000002\n")
+         a (mk "2026-10-16T10:15:02Z" "req-aaaa-1" "line req-aaaa-1 at 2026-10-16T10:15:02.123Z 3f2b8e1a-0000-4000-8000-000000000001 {\"MD5OfMessageAttributes\":\"72e86fdd5ea5a2ed84557b26bde7def6\"}\n")
+         b (mk "2026-10-17T11:16:03Z" "req-bbbb-2" "line req-bbbb-2 at 2026-10-17T11:16:03.456Z 7c1d9a2b-0000-4000-8000-000000000002 {\"MD5OfMessageAttributes\":\"16e9df01f1cfb77bd86df980bcb7200f\"}\n")
          ta (render/render-text (get-in a [:paths :run]) :normalise? true)]
      (is (= "" (render/diff (get-in a [:paths :run]) (get-in b [:paths :run]))))
      (is (str/includes? ta "line <id>"))
      (is (not (str/includes? ta "req-aaaa")))
      (is (str/includes? ta "<instant>") "instant-typed fact and iso text")
      (is (str/includes? ta "<uuid>"))
+     (is (str/includes? ta "\"MD5OfMessageAttributes\":\"<md5>\"") "SQS attribute hash follows the ids in it")
      (is (str/includes? ta "✗ id == nothing (was <id>)"))
      (is (str/includes? ta "✗ took > 100 (was <duration>)"))
      (is (str/includes? ta "✗ at < <instant> (was <instant>)"))

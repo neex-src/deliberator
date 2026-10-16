@@ -1,0 +1,60 @@
+# One order through the whole estate: inbox queue -> service A (DynamoDB) -> publish -> bus ->
+# service B (ack in A, row in Postgres) and the Lambda logger. One id and one correlation id run
+# through every step; the three log steps are armed before step 1 and filtered by that correlation.
+# @env local
+# @var corr = {{correlation}}
+# @var msg = ord-{{uuid}}
+
+### sqs send queue/inbox send-order
+# @attr id={{msg}}
+# @attr correlation={{corr}}
+# @body ../payloads/01-simple-order.json
+# @assert messageId matches /^[0-9a-f-]{36}$/
+
+### dynamodb get table/messages stored
+# @until $.status.S == RECEIVED within 20s
+# @assert $.id.S == {{msg}}
+# @assert $.correlation.S == {{corr}}
+# @assert $.bytes.N > 0
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### http publish
+# @assert status == 200
+# @assert $.id == {{msg}}
+# @assert $.correlation == {{corr}}
+# @capture eventId = $.eventId
+POST {{service/a}}/publish/{{msg}}
+X-Correlation-Id: {{corr}}
+
+### dynamodb get table/messages acked
+# @until $.status.S == ACKED within 30s
+# @assert $.ackedAt.S matches /^20/
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### sql db/main ack-row
+# @until rows == 1 within 20s
+# @assert col.message_id == {{msg}}
+# @assert col.correlation == {{corr}}
+# @assert col.a_status == 200
+select message_id, correlation, a_status from acks where message_id = '{{msg}}' /* {{corr}} */
+
+### http read-back
+# @assert status == 200
+# @assert $.status == ACKED
+# @assert $.correlation == {{corr}}
+GET {{service/a}}/messages/{{msg}}
+
+### logs log/service-a service-a-log
+# @filter {{corr}}
+# @for 3s
+# @assert lines >= 2
+
+### logs log/service-b service-b-log
+# @filter {{corr}}
+# @for 3s
+# @assert lines >= 1
+
+### logs log/logger lambda-log
+# @filter {{corr}}
+# @for 8s
+# @assert lines >= 1

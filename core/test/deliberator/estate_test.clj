@@ -87,7 +87,10 @@
       (is (= #{:floci :postgres :service/a} (set (keys (:containers cfg)))))
       (is (= cfg (store/read-edn (runtime/config-path "w"))))
       (is (= "http://localhost:14566" (get-in e [:aws :endpoint])))
-      (is (= "jdbc:postgresql://localhost:15432/deliberator" (get-in e [:targets :db/main])))
+      (is (= "jdbc:postgresql://localhost:15432/deliberator?user=deliberator&password=deliberator" (get-in e [:targets :db/main])))
+      (testing "a second sync does not append the credentials again"
+        (runtime/sync-local-env! "w" cfg)
+        (is (= (get-in e [:targets :db/main]) (get-in (env/load "w" "local") [:targets :db/main]))))
       (is (= "http://localhost:8081" (get-in e [:targets :service/a]))))))
 
 (deftest-floci resolve-secrets-by-arn-and-name

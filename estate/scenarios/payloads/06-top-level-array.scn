@@ -1,0 +1,31 @@
+# Payload 06-top-level-array.json through the chain: queue -> A -> publish -> bus -> B -> ack and Postgres row.
+# @env local
+# @var corr = {{correlation}}
+# @var msg = pay-{{uuid}}
+
+### sqs send queue/inbox send
+# @attr id={{msg}}
+# @attr correlation={{corr}}
+# @body ../../payloads/06-top-level-array.json
+# @assert messageId matches /^[0-9a-f-]{36}$/
+
+### dynamodb get table/messages stored
+# @until $.status.S == RECEIVED within 20s
+# @assert $.bytes.N == 26
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### http publish
+# @assert status == 200
+# @assert $.correlation == {{corr}}
+POST {{service/a}}/publish/{{msg}}
+X-Correlation-Id: {{corr}}
+
+### dynamodb get table/messages acked
+# @until $.status.S == ACKED within 30s
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### sql db/main ack-row
+# @until rows == 1 within 20s
+# @assert col.correlation == {{corr}}
+# @assert col.a_status == 200
+select correlation, a_status from acks where message_id = '{{msg}}' /* {{corr}} */
