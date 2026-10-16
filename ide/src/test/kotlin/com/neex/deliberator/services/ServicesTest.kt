@@ -119,6 +119,21 @@ class ServicesTest : BasePlatformTestCase() {
         assertNotNull(ProgramRunner.getRunner(DefaultRunExecutor.EXECUTOR_ID, cfg))
     }
 
+    fun testALoggingBreakpointIsTheNonSuspendingLineBreakpointOfThePlatform() {
+        val f = myFixture.configureByText("A.java", "class A {\n    void m() {\n        int x = 1;\n    }\n}\n")
+        assertNotNull(ActionManager.getInstance().getAction("deliberator.marker.logpoint"))
+        val bp = Logpoints.add(project, f.virtualFile, 2, "\"hit \" + 1")
+        try {
+            assertEquals(com.intellij.xdebugger.breakpoints.SuspendPolicy.NONE, bp.suspendPolicy)
+            assertTrue(bp.isLogMessage)
+            assertEquals("\"hit \" + 1", bp.logExpressionObject?.expression)
+            assertEquals(2, bp.line)
+            assertTrue(com.intellij.xdebugger.XDebuggerManager.getInstance(project).breakpointManager.allBreakpoints.contains(bp))
+        } finally {
+            com.intellij.openapi.application.runWriteAction { com.intellij.xdebugger.XDebuggerManager.getInstance(project).breakpointManager.removeBreakpoint(bp) }
+        }
+    }
+
     // the tab -------------------------------------------------------------------------------------------------------
 
     fun testTheTabRendersServiceListWithModeStatusAndPorts() {
