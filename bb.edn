@@ -31,9 +31,9 @@
   acceptance {:doc "M1 acceptance: estate up if needed, session ACCEPT-<date>, run every scenario in estate/scenarios; args: --ws W [--down]"
               :requires ([acceptance])
               :task (apply acceptance/-main *command-line-args*)}
-  cli:test {:doc "Layer-4 tests of dlb against a real daemon (builds the jar if missing)"
+  cli:test {:doc "Layer-4 tests of dlb against a real daemon (builds the jar if missing); --known-bugs runs only the audit's :known-bug tests"
             :requires ([cli-test])
-            :task (cli-test/-main)}
+            :task (apply cli-test/-main *command-line-args*)}
   cli:install {:doc "Symlink cli/dlb into ~/.local/bin"
                :requires ([cli-install])
                :task (cli-install/-main)}}}
