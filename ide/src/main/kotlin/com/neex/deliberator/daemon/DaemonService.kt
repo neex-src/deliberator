@@ -42,7 +42,7 @@ class DaemonService {
         if (prev != null && prev.home == home) {
             // still the same daemon? one hello, no restart logic needed when it answers compatibly
             val h = try { prev.client.hello(l.jarVersion()) } catch (_: DaemonException) { null }
-            if (h != null && h.compatible != false) return prev.also { last = DaemonConnection(it.client, h, home, false, false) }
+            if (h != null && h.compatible != false) return DaemonConnection(prev.client, h, home, false, false).also { last = it }
         }
         return l.connectCompatible(home).also {
             last = it

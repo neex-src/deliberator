@@ -97,9 +97,10 @@ class DaemonLauncher(
         while (true) {
             connectExisting(home)?.let { return Triple(it.first, it.second, true) }
             if (System.currentTimeMillis() > deadline) {
+                val out = home.resolve("daemon").resolve("daemon.out")
+                val tail = runCatching { Files.readAllLines(out).takeLast(5).joinToString("\n") }.getOrDefault("")
                 throw DaemonException(
-                    "the daemon did not come up in time", "daemon/unreachable",
-                    "see ${home.resolve("daemon").resolve("daemon.out")}",
+                    "the daemon did not come up in time" + if (tail.isNotEmpty()) ":\n$tail" else "", "daemon/unreachable", "see $out",
                 )
             }
             Thread.sleep(50)

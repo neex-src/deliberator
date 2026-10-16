@@ -66,5 +66,5 @@ tasks.test {
     dependsOn(buildDaemonJar)
     systemProperty("idea.suppressed.plugins.id", "com.intellij.modules.ultimate")
     systemProperty("deliberator.jar", daemonJar.asFile.absolutePath)
-    systemProperty("deliberator.test.homes", layout.buildDirectory.dir("test-homes").get().asFile.absolutePath)
+    systemProperty("deliberator.test.homes", layout.buildDirectory.dir("th").get().asFile.absolutePath)
 }
