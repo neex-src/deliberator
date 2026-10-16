@@ -68,7 +68,40 @@
   "The runtime's container name of `role` in `ws` (store/container-name: `deliberator-<ws>-<role>`)."
   [ws role] (str "deliberator-" ws "-" role))
 
+(defn- sha512 [f]
+  (let [md (java.security.MessageDigest/getInstance "SHA-512")]
+    (with-open [in (java.io.FileInputStream. (str f))]
+      (let [buf (byte-array 65536)]
+        (loop [] (let [n (.read in buf)] (when (pos? n) (.update md buf 0 n) (recur))))))
+    (apply str (map #(format "%02x" %) (.digest md)))))
+
+(def image-dir (str repo "/estate/images/jbr21"))
+(def image-ctx (str repo "/.scratch/images/jbr21/ctx"))
+
+(defn image
+  "Builds the hotswap service image of image.edn (JBR + HotswapAgent) unless `podman image exists`; `force` rebuilds.
+  The archives are downloaded into .scratch/images/jbr21/ctx and verified there before the build."
+  [force]
+  (let [{:keys [image jbr hsa]} (edn/read-string (slurp (str image-dir "/image.edn")))]
+    (if (and (not force) (zero? (:exit (p/shell {:continue true :out :string :err :string} "podman" "image" "exists" image))))
+      (println "image" image "present")
+      (do
+        (fs/create-dirs image-ctx)
+        (doseq [{:keys [file url] want :sha512} [jbr hsa] :let [f (str image-ctx "/" file)]]
+          (when-not (and (fs/exists? f) (= want (sha512 f)))
+            (println "downloading" url)
+            (p/shell "curl" "-fsSL" "-o" f url)
+            (when-not (= want (sha512 f))
+              (fs/delete f)
+              (throw (ex-info (str "checksum mismatch for " url) {})))))
+        (step (str "podman build " image)
+              #(p/shell "podman" "build" "-t" image "-f" (str image-dir "/Containerfile")
+                        "--build-arg" (str "JBR_FILE=" (:file jbr)) "--build-arg" (str "JBR_SHA512=" (:sha512 jbr))
+                        "--build-arg" (str "HSA_FILE=" (:file hsa)) "--build-arg" (str "HSA_SHA512=" (:sha512 hsa))
+                        image-ctx))))))
+
 (defn build []
+  (image false)
   (let [jdk (java21)]
     (println "maven with" jdk)
     (p/shell {:dir (str repo "/estate/services") :extra-env {"JAVA_HOME" jdk}} "mvn" "-q" "-DskipTests" "package")))

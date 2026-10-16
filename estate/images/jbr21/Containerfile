@@ -1,0 +1,20 @@
+# Service image of the estate: JetBrains Runtime (jbrsdk, -XX:+AllowEnhancedClassRedefinition) + HotswapAgent
+# (decision 43). Built by `bb estate:build` from the build context .scratch/images/jbr21/ctx, which holds the two
+# archives named by image.edn (downloaded and checksum-verified on the host).
+FROM docker.io/library/debian:stable-slim AS fetch
+ARG JBR_FILE
+ARG JBR_SHA512
+ARG HSA_FILE
+ARG HSA_SHA512
+COPY ${JBR_FILE} /jbr.tgz
+COPY ${HSA_FILE} /hsa.jar
+RUN echo "$JBR_SHA512  /jbr.tgz" | sha512sum -c - && echo "$HSA_SHA512  /hsa.jar" | sha512sum -c - \
+ && mkdir /opt/jbr && tar xzf /jbr.tgz -C /opt/jbr --strip-components=1 \
+ && mkdir -p /opt/hotswap/conf && cp /hsa.jar /opt/hotswap/hotswap-agent.jar \
+ && printf 'autoHotswap=true\n' > /opt/hotswap/conf/hotswap-agent.properties
+
+FROM docker.io/library/debian:stable-slim
+COPY --from=fetch /opt/jbr /opt/jbr
+COPY --from=fetch /opt/hotswap /opt/hotswap
+ENV JAVA_HOME=/opt/jbr PATH=/opt/jbr/bin:$PATH
+WORKDIR /app

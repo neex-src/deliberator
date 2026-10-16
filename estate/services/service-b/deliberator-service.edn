@@ -5,7 +5,9 @@
          :dir ".."
          :artifact "target/service-b-0.1.0.jar"
          :java 21}
- :image "docker.io/library/eclipse-temurin:21-jre"
+ ;; no :image = the hotswap image (estate/images/jbr21); :image "docker.io/library/eclipse-temurin:21-jre" runs the plain JRE (JDWP reload, body changes only)
+ :main "estate.b.ServiceB"
+ :reload {:modules ["common"]}
  :port 8082
  :jdwp 5006
  :health "/actuator/health"

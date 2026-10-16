@@ -22,7 +22,10 @@
   runtime:down {:doc "Remove this workspace's runtime containers (through the daemon; --no-daemon for a one-shot JVM)"
                 :requires ([daemon-client])
                 :task (apply daemon-client/-main "down" *command-line-args*)}
-  estate:build {:doc "Build the estate services (Maven, JDK 21)"
+  estate:image {:doc "Rebuild the hotswap service image (JBR 21 + HotswapAgent, estate/images/jbr21); estate:build builds it only when missing"
+                :requires ([estate])
+                :task (estate/image true)}
+  estate:build {:doc "Build the hotswap service image when missing, then the estate services (Maven, JDK 21)"
                 :requires ([estate])
                 :task (estate/build)}
   estate:deploy {:doc "terraform apply on Floci + write the service roles into runtime.edn; args: --ws W [--auto-publish] [--no-daemon]"

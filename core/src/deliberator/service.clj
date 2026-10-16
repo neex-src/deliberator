@@ -21,6 +21,7 @@
             [deliberator.repo :as repo]
             [deliberator.runtime :as runtime]
             [deliberator.service.description :as description]
+            [deliberator.service.staging :as staging]
             [deliberator.store :as store]
             [deliberator.topology :as topology])
   (:import (java.io File)
@@ -109,6 +110,12 @@
   "The mode of service `name` in the `local` environment (the one the runtime serves)."
   [ws name] (env/service-mode (topology/local-env ws) name))
 
+(defn- reload-state
+  "The reload state of the service when it belongs to the container in `row` (a recreated container starts at 0)."
+  [ws desc row]
+  (let [st (staging/read-state ws (:name desc))]
+    (when (and st row (= (:container st) (:id row))) st)))
+
 (defn- status-row [ws desc rows]
   (let [row (when (map? rows) (get rows (role-label (:name desc))))
         mode (topo-mode ws (:name desc))
@@ -126,7 +133,8 @@
       (and (:detail row) (= :local mode)) (assoc :detail (:detail row))
       (:name row) (assoc :container (:name row))
       (:since row) (assoc :since (str (:since row)))
-      (and (some? (:drift? row)) (= :local mode)) (assoc :drift (boolean (:drift? row))))))
+      (and (some? (:drift? row)) (= :local mode)) (assoc :drift (boolean (:drift? row)))
+      (:count (reload-state ws desc row)) (assoc :reload-count (:count (reload-state ws desc row))))))
 
 (defn status
   "`[{:name :status [:health :detail :container :since :drift]}]` for `name` or every service."
@@ -160,7 +168,7 @@
 
 ;; build ----------------------------------------------------------------------------------------
 
-(defn- jdk [major]
+(defn jdk [major]
   (or (System/getenv "ESTATE_JAVA_HOME")
       (when (.isDirectory (io/file "/usr/lib/jvm"))
         (->> (.listFiles (io/file "/usr/lib/jvm")) (map str) sort
@@ -175,7 +183,9 @@
   -> `{:artifact :bytes :took-ms :log :sha}`; a non-zero exit is `service/build-failed` (data `:log :exit`)."
   [ws name {:keys [sink]}]
   (let [d (require-description ws name)
-        b (:build d)
+        b (cond-> (:build d)
+            (and (= :hotswap (description/image-kind d)) (= "mvn" (first (get-in d [:build :cmd]))))
+            (update :cmd into (:deps-args (description/reload-config d))))   ; target/dependency for the exploded classpath
         _ (when-not (seq (:cmd b)) (fail :service/no-build (str "service " name " has no :build :cmd")))
         mod (description/module-dir ws d)
         dir (.getCanonicalFile (io/file mod (or (:dir b) ".")))

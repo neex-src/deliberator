@@ -40,6 +40,7 @@
     service.start name* secrets-from confirm ws    -> {name status container port jdwp}   [runtime.* service.started]
     service.stop name* ws                          -> {name status container}   [service.stopped]
     service.restart name* secrets-from confirm ws  -> as start   [service.stopped runtime.* service.started]
+    service.reload name* budget-ms ws              -> {name mechanism changed redefined took-ms log reload-count [fallback]}   [service.reload.step]
     config.chain name* env ws                      -> {service env module snapshot files entries extra broken unresolved hint}   (offline)
     config.refresh env path ws                     -> {env fetched-at parameters secrets path copy raw errors}
     runtime.ensure ws infra-only timeout-ms        -> status   [runtime.pulling runtime.starting runtime.ready]
@@ -85,6 +86,7 @@
             [deliberator.scenario.parse :as parse]
             [deliberator.scenario.render :as render]
             [deliberator.service :as service]
+            [deliberator.service.reload :as reload]
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.topology :as topology]
@@ -104,7 +106,7 @@
 
 (def ^:private error-keys
   [:hint :known :problems :line :token :summary :step :confirmations :result :expires :target :env
-   :role :key :sha :schema :account :expected :found :log :exit :service])
+   :role :key :sha :schema :account :expected :found :log :exit :service :lines :errors])
 
 (defn error-map
   "The wire error of a throwable: `{:type :message [:hint ...]}`."
@@ -330,6 +332,8 @@
 (defn- service-start [ctx {:keys [name secrets-from confirm] :as args}]
   (service/start! (ws-of args) name {:sink (:emit! ctx) :secrets-from secrets-from :confirm confirm}))
 (defn- service-stop [ctx {:keys [name] :as args}] (service/stop! (ws-of args) name {:sink (:emit! ctx)}))
+(defn- service-reload [ctx {:keys [name budget-ms] :as args}]
+  (reload/reload! (ws-of args) name (cond-> {:sink (:emit! ctx)} budget-ms (assoc :budget-ms budget-ms))))
 (defn- service-restart [ctx {:keys [name secrets-from confirm] :as args}]
   (service/restart! (ws-of args) name {:sink (:emit! ctx) :secrets-from secrets-from :confirm confirm}))
 
@@ -681,6 +685,11 @@
                    :doc "Stops the service's container and keeps it; start reuses it."
                    :events ["service.stopped"]
                    :args (ws-schema :name {:type :string :required true :doc "service name"})}
+   "service.reload" {:fn service-reload :class :mutate
+                     :doc "Compiles the service's module (the description's :reload :cmd, derived from its Maven build), brings the changed classes into the RUNNING container and answers what happened: the HotswapAgent image copies only the changed files into the staging dir and waits for the agent's reload line, then health UP and a quiet log (15 s budget); the plain-JRE image pushes them over JDWP (body changes only). A change the JVM cannot take, the budget, an agent error or a changed resource ends in a restart, said in fallback. A compile error is service/compile-failed with the compiler's lines. The container id does not change on an in-place reload."
+                     :events ["service.reload.step"]
+                     :args (ws-schema :name {:type :string :required true :doc "service name"}
+                                      :budget-ms {:type :int :doc "how long to wait for the agent after the copy (default 15000)"})}
    "service.restart" {:fn service-restart :class :mutate
                       :doc "Stop, then start (a rebuilt jar recreates the container)."
                       :events ["service.stopped" "runtime.pulling" "runtime.starting" "runtime.ready" "service.started"]
