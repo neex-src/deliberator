@@ -1,6 +1,10 @@
 #!/usr/bin/env bb
-;; dlb: the Deliberator command line. argv -> one request to deliberatord -> print the summary.
-;; Skeleton: the daemon does not exist yet (piece 08), so there is nothing to talk to.
-(binding [*out* *err*]
-  (println "deliberatord not running"))
-(System/exit 2)
+;; dlb: the Deliberator command line. argv -> one request to deliberatord -> printed summary.
+;; All code is in cli/src/dlb/*.clj, found next to this script's real location (symlinks resolved).
+(require '[babashka.fs :as fs] '[babashka.classpath :as cp])
+(let [dir (str (fs/parent (fs/real-path *file*)))]
+  (cp/add-classpath (str dir "/src"))
+  (require 'dlb.main)
+  (let [code ((resolve 'dlb.main/-main) dir *command-line-args*)]
+    (flush)
+    (System/exit code)))

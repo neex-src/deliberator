@@ -1,0 +1,6 @@
+# one wait whose assert cannot hold: the run completes with a failed check
+# @env local
+
+### wait never
+# @for 100ms
+# @assert elapsed >= 5000
