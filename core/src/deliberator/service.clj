@@ -21,7 +21,8 @@
             [deliberator.repo :as repo]
             [deliberator.runtime :as runtime]
             [deliberator.service.description :as description]
-            [deliberator.store :as store])
+            [deliberator.store :as store]
+            [deliberator.topology :as topology])
   (:import (java.io File)
            (java.nio.file Files LinkOption)
            (java.security SecureRandom)
@@ -104,15 +105,28 @@
       (into {} (map (juxt :role identity)) (:containers s))
       :unreachable)))
 
+(defn- topo-mode
+  "The mode of service `name` in the `local` environment (the one the runtime serves)."
+  [ws name] (env/service-mode (topology/local-env ws) name))
+
 (defn- status-row [ws desc rows]
-  (let [row (when (map? rows) (get rows (role-label (:name desc))))]
+  (let [row (when (map? rows) (get rows (role-label (:name desc))))
+        mode (topo-mode ws (:name desc))
+        st (if (and (not= :local mode) (= :running (:state row)) (nil? (:health row))) "running" (status-of row))
+        ;; not desired by the topology: "off"/"external" once its container is down, still the real status
+        ;; (and drift) while the next reconcile has not stopped it
+        st (if (and (not= :local mode) (not= rows :unreachable) (not= "running" st) (not= "unhealthy" st) (not= "starting" st))
+             (clojure.core/name mode) st)]
     (cond-> {:name (:name desc)
-             :status (if (= rows :unreachable) "unreachable" (status-of row))}
+             :status (if (= rows :unreachable) "unreachable" st)}
+      (not= :local mode) (assoc :topology (clojure.core/name mode)
+                                :detail (str "served " (if (= :off mode) "by nobody" "elsewhere") " by the topology of environment local")
+                                :drift (boolean (and row (contains? #{"running" "unhealthy" "starting"} st))))
       (:health row) (assoc :health (clojure.core/name (:health row)))
-      (:detail row) (assoc :detail (:detail row))
+      (and (:detail row) (= :local mode)) (assoc :detail (:detail row))
       (:name row) (assoc :container (:name row))
       (:since row) (assoc :since (str (:since row)))
-      (some? (:drift? row)) (assoc :drift (boolean (:drift? row))))))
+      (and (some? (:drift? row)) (= :local mode)) (assoc :drift (boolean (:drift? row))))))
 
 (defn status
   "`[{:name :status [:health :detail :container :since :drift]}]` for `name` or every service."
@@ -122,14 +136,20 @@
     (mapv #(status-row ws % rows) descs)))
 
 (defn list
-  "`[{:name :kind :repo :module :port :jdwp :image :mode :status}]`; `:mode` is always \"local\" until topology (piece 03)."
-  [ws]
-  (let [descs (description/list ws)
-        rows (rt-rows ws nil)]
-    (mapv (fn [d] (merge (select-keys d [:name :kind :repo :module :port :jdwp])
-                         {:image (or (:image d) description/default-image) :mode "local"
-                          :status (:status (status-row ws d rows))}))
-          descs)))
+  "`[{:name :kind :repo :module :port :jdwp :image :mode [:url] :status}]`; `:mode` is the service's mode in
+  environment `env-name` (default local): local, external (with its `:url`) or off. `:status` is the runtime's."
+  ([ws] (list ws "local"))
+  ([ws env-name]
+   (let [descs (description/list ws)
+         rows (rt-rows ws nil)
+         e (if (= "local" env-name) (topology/local-env ws) (env/load ws env-name))]
+     (mapv (fn [d] (let [ent (env/service-entry e (:name d))]
+                     (cond-> (merge (select-keys d [:name :kind :repo :module :port :jdwp])
+                                    {:image (or (:image d) description/default-image)
+                                     :mode (clojure.core/name (env/service-mode e (:name d)))
+                                     :status (:status (status-row ws d rows))})
+                       (= :external (:mode ent)) (assoc :url (:url ent)))))
+           descs))))
 
 (defn show
   "The description, its `:taskdef` entries, and `:status` / `:container` (the status row)."
@@ -243,6 +263,11 @@
   -> `{:name :status :container :port :jdwp}` (host ports)."
   [ws name {:keys [sink secrets-from confirm timeout-ms]}]
   (let [d (require-description ws name)]
+    (when-not (= :local (topo-mode ws name))
+      (fail :topology/service-not-local
+            (str "service " name " is " (clojure.core/name (topo-mode ws name)) " in the topology of environment local: its container is not desired")
+            :service name :env "local"
+            :hint (str "dlb topology set local " name " local")))
     (when secrets-from (secrets-gate! ws name secrets-from confirm))
     (when-not (description/runnable? d)
       (fail :service/not-runnable (str "service " name " is a " (clojure.core/name (:kind d)) ": it runs as a function in the environment, not as a container")

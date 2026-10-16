@@ -14,6 +14,7 @@
       captured: id=ord-1, n=2     (only when something was captured)
 
       FAILED 2/5                  (failed checks / checks; only when a check failed)
+      TOPOLOGY a=local b=external http://h:1   (only when the run recorded one: `run.edn :topology`)
       RUN <ok|failed|cancelled|error> steps <n> failed <m>   (m = steps with status failed or error)
 
   Statuses of a step: ok, failed (a check failed), error (the step threw), skipped (not run: a
@@ -115,6 +116,9 @@
         failed-checks (count (remove :ok checks))
         failed-steps (count (filter (comp #{:failed :error} :status) steps))
         tail (concat
+              (when-let [t (:services (:topology run))]
+                [(str "TOPOLOGY " (str/join " " (for [[n m] t]
+                                                 (str n "=" (name (:mode m)) (when (:url m) (str " " (:url m)))))))])
               (when (pos? failed-checks) [(str "FAILED " failed-checks "/" (count checks))])
               (when (:error run) [(str "ERROR: " (:message (:error run)))])
               [(str "RUN " (name (:status run)) " steps " (count steps) " failed " failed-steps)])]

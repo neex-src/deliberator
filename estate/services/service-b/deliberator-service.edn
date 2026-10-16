@@ -9,4 +9,5 @@
  :port 8082
  :jdwp 5006
  :health "/actuator/health"
+ :depends {"SERVICE_A_URL" "a"}
  :taskdef {:module "estate/terraform/modules/stack" :container "service-b" :key "b"}}

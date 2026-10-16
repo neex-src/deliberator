@@ -34,7 +34,11 @@ public class Api {
     String corr = header != null && !header.isBlank() ? header
         : stored != null && stored.s() != null ? stored.s() : Correlation.current();
     try (var scope = Correlation.open(corr)) {
-      return Map.of("id", id, "eventId", publisher.publish(id, corr), "correlation", corr);
+      var out = new java.util.LinkedHashMap<String, Object>();   // Map.of orders keys per JVM: two instances would answer differently
+      out.put("id", id);
+      out.put("eventId", publisher.publish(id, corr));
+      out.put("correlation", corr);
+      return out;
     }
   }
 
@@ -51,7 +55,10 @@ public class Api {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "no message " + id);
     }
     log.info("ACK received id={}", id);
-    return Map.of("id", id, "status", "ACKED");
+    var out = new java.util.LinkedHashMap<String, String>();
+    out.put("id", id);
+    out.put("status", "ACKED");
+    return out;
   }
 
   @GetMapping("/messages/{id}")

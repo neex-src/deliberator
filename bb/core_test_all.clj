@@ -34,7 +34,7 @@
           _ (estate/up ["--ws" ws])
           b (try (clj {"ESTATE_WS" ws}
                       "-n" "deliberator.aws-test" "-n" "deliberator.daemon-test"
-                      "-n" "deliberator.estate-test" "-n" "deliberator.audit-estate-test"
+                      "-n" "deliberator.estate-test" "-n" "deliberator.topology-estate-test" "-n" "deliberator.audit-estate-test"
                       "-n" "deliberator.audit-runtime-test"
                       "-n" "deliberator.steps-test" "-n" "deliberator.aws-kinds-test"
                       "-n" "deliberator.ide-ops-test")
