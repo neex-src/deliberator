@@ -44,13 +44,17 @@
 
 ;; compile ---------------------------------------------------------------------------------------
 
-(def ^:private boilerplate #"^(-> \[Help|Re-run Maven|To see the full|For more information|\[Help|Failed to execute goal|$)")
+(def ^:private boilerplate #"^(-> \[Help|Re-run Maven|To see the full|For more information|\[Help|Failed to execute goal|COMPILATION ERROR|After correcting|\s+mvn |$)")
 
 (defn compile-errors
   "Maven's output lines -> `{:lines [str] :errors [{:file :line :col :message}]}`: the compiler's `[ERROR]` lines
   (`path.java:[l,c] message` and the `symbol:`/`location:` lines after them), de-duplicated, boilerplate dropped."
   [lines]
   (let [errs (->> lines (keep #(second (re-matches #"\[ERROR\]\s?(.*)" %))) (remove #(re-find boilerplate %)) distinct vec)
+        errs (let [located (filterv #(re-find #"\.java:\[\d+,\d+\]" %) errs)]   ; the compiler's own lines (+ their symbol/location lines)
+               (if (seq located)
+                 (vec (filter #(or (re-find #"\.java:\[\d+,\d+\]" %) (re-find #"^\s+(symbol|location|required|found|reason)" %)) errs))
+                 errs))
         parsed (vec (for [l errs :let [m (re-matches #"(.*\.java):\[(\d+),(\d+)\]\s*(.*)" l)] :when m]
                       {:file (nth m 1) :line (parse-long (nth m 2)) :col (parse-long (nth m 3)) :message (nth m 4)}))]
     {:lines (if (seq errs) errs (vec (take-last 15 lines))) :errors parsed}))
@@ -190,7 +194,10 @@
         (when-not (zero? exit)
           (let [{:keys [lines errors]} (compile-errors lines)]
             (persist-raw!)
-            (fail :service/compile-failed (str "compile of " name " failed: " (or (first lines) "see the log"))
+            (fail :service/compile-failed (str "compile of " name " failed: "
+                                               (if (seq errors)
+                                                 (str/join "; " (for [e (take 3 errors)] (str (.getName (io/file (:file e))) ":" (:line e) " " (:message e))))
+                                                 (or (first lines) "see the log")))
                   :lines lines :errors errors :log (str logf) :exit exit :hint "fix the compiler errors above and reload again")))
         (let [target (io/file mod "target/classes")
               result
@@ -248,9 +255,8 @@
                         (seq (:skipped r)) {:changed changed :redefined [] :mechanism "jdwp"
                                             :fallback (str "class not loaded yet (" (str/join ", " (take 3 (:skipped r))) "): a later load would read the old jar")}
                         :else (do (step! {:step "redefined" :detail (str "redefined " (count (:redefined r)) " class(es) over JDWP")})
-                                  (staging/write-state! ws name (merge (staging/read-state ws name)
-                                                                       {:container (:id row) :jar-stamp stamp :redefined-shas (merge overlay (select-keys now classes))}))
                                   {:changed changed :mechanism "jdwp"
+                                   :state-extra {:jar-stamp stamp :redefined-shas (merge overlay (select-keys now classes))}
                                    :redefined (mapv sig->class (:redefined r))}))))))
               fallback (:fallback result)]
           (when fallback
@@ -261,7 +267,7 @@
                 out (cond-> {:name name :mechanism (:mechanism result) :changed (:changed result) :redefined (vec (:redefined result))
                              :took-ms (ms) :log (str logf)}
                       fallback (assoc :fallback fallback))
-                _ (finish-state! ws name row2 (boolean (and (not fallback) (seq (:changed result)))) out nil)
+                _ (finish-state! ws name row2 (boolean (and (not fallback) (seq (:changed result)))) out (:state-extra result))
                 st (staging/read-state ws name)]
             (logln (pr-str out))
             (persist-raw!)

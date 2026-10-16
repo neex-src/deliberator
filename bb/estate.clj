@@ -1,7 +1,8 @@
 (ns estate
   "The estate on the local runtime: `bb estate:build|deploy|up|status|down [--ws W]`.
 
-  - build:  Maven (Java 21 JDK from /usr/lib/jvm or $ESTATE_JAVA_HOME) -> estate/services/*/target/*.jar
+  - build:  the hotswap service image when missing (estate/images/jbr21, `bb estate:image` rebuilds it), Maven (Java 21 JDK from
+            /usr/lib/jvm or $ESTATE_JAVA_HOME) -> estate/services/*/target/*.jar and target/dependency (the exploded classpath)
   - deploy: Floci must be up. Points the workspace's `local` environment at the runtime's host ports,
             `terraform apply` of estate/terraform/floci (scrubbed environment, fake credentials, plugin
             cache under .scratch/), then writes the rendered ECS task definitions into the workspace's
@@ -35,6 +36,7 @@
           [(:name d) (assoc d :dir (str (fs/parent f)))])))
 
 (defn- jar [{:keys [dir build]}] (str dir "/" (:artifact build)))
+(defn- built? [{:keys [dir] :as s}] (and (fs/exists? (jar s)) (fs/exists? (str dir "/target/dependency"))))
 
 (defn- arg [args k] (second (drop-while #(not= k %) args)))
 (defn- ws-of [args] (or (arg args "--ws") "default"))
@@ -104,7 +106,7 @@
   (image false)
   (let [jdk (java21)]
     (println "maven with" jdk)
-    (p/shell {:dir (str repo "/estate/services") :extra-env {"JAVA_HOME" jdk}} "mvn" "-q" "-DskipTests" "package")))
+    (p/shell {:dir (str repo "/estate/services") :extra-env {"JAVA_HOME" jdk}} "mvn" "-q" "-DskipTests" "package" "dependency:copy-dependencies" "-DincludeScope=runtime")))
 
 (defn- tf-env []
   (-> (into {} (remove (fn [[k _]] (str/starts-with? k "AWS_")) (System/getenv)))
@@ -157,7 +159,8 @@
 
 (defn up [args]
   (let [ws (ws-of args) t0 (System/nanoTime)]
-    (when-not (every? #(fs/exists? (jar %)) (vals (services)))
+    (image false)
+    (when-not (every? built? (vals (services)))
       (step "build" build))
     (set-postgres-init! args ws)
     (step "runtime (floci, postgres)" #(runtime args "up" "--infra" "--ws" ws))
