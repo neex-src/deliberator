@@ -16,9 +16,7 @@ import com.neex.deliberator.logs.LogService
 import com.neex.deliberator.logs.MarkerService
 import com.neex.deliberator.logs.ToggleMarkerAction
 import com.neex.deliberator.scn.ScnRegistry
-import com.neex.deliberator.testing.KnownBug
 import com.neex.deliberator.testing.TempDaemon
-import org.junit.experimental.categories.Category
 import com.neex.deliberator.ui.DeliberatorPanel
 import com.neex.deliberator.workspace.WorkspaceService
 import java.nio.file.Files
@@ -203,21 +201,58 @@ class AuditEditorTest : BasePlatformTestCase() {
         FileDocumentManager.getInstance().saveAllDocuments()
     }
 
-    /** F-big: the platform loads a file above its content limit truncated; the plugin neither says so nor keeps the highlights it cannot show. */
-    @Category(KnownBug::class)
-    fun testAFetchedHugeLogIsShownWholeOrTheTruncationIsReported() {
-        svc.bind("w1")
-        val src = daemon.home.resolve("huge2.log")
+    private fun hugeLog(name: String, tail: String): Path {
+        val src = daemon.home.resolve(name)
         val line = "2026-10-16T10:00:00.123+02:00 INFO  APP [run1-001] com.example.demo.Inbox:6 - " + "x".repeat(60) + "\n"
         val n = ((50L * 1024 * 1024) / line.length).toInt() + 1
-        Files.newBufferedWriter(src).use { w -> repeat(n) { w.write(line) } }
+        Files.newBufferedWriter(src).use { w -> repeat(n) { w.write(line) }; w.write(tail) }
+        return src
+    }
+
+    /** F3: the platform loads only the head of a very large file; the editor either holds all of it or its banner says what is missing. */
+    fun testAFetchedHugeLogIsShownWholeOrTheTruncationIsReported() {
+        svc.bind("w1")
+        val src = hugeLog("huge2.log", "")
         bg { svc.call("session.start", JsonObject().apply { addProperty("key", "BIG-2") }) }
         val r = bg(300) { LogService.getInstance(project).fetchNow(FetchRequest(src.toString())) }
+        val total = r.get("lines").asInt
         val ed = LogMatcher.getInstance(project).open(r.get("path").asString, 1)
         assertNotNull(ed)
-        val vf0 = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getFile(ed!!.document)!!
-        println("EXPERIMENT: len=${vf0.length} textLength=${ed.document.textLength} lines=${ed.document.lineCount} LARGE=${com.intellij.openapi.util.io.FileUtilRt.LARGE_FOR_CONTENT_LOADING} tooLarge=${com.intellij.openapi.util.io.FileUtilRt.isTooLarge(vf0.length)} fileType=${vf0.fileType.name}")
-        assertTrue("the editor shows ${ed!!.document.lineCount} of ${r.get("lines")} lines and the plugin does not say so", ed.document.lineCount >= r.get("lines").asInt)
+        if (ed!!.document.lineCount >= total) return // shown whole
+        val vf = FileDocumentManager.getInstance().getFile(ed.document)!!
+        val banner = bannerOf(vf, ed)
+        assertNotNull("the editor shows ${ed.document.lineCount} of $total lines and the plugin must say so", banner)
+        assertTrue(banner!!, banner.contains("of $total"))
+        assertTrue(banner, banner.contains(vf.path))
+    }
+
+    /** F3: marker hits below the loaded part are counted and located (not dropped), and "jump to last match" says where the line is. */
+    fun testHitsBeyondTheLoadedPartOfAHugeLogAreReportedAndTheJumpSaysSo() {
+        svc.bind("w1")
+        val src = hugeLog("huge3.log", "2026-10-16T10:00:01.000+02:00 INFO  APP [run1-001] com.example.demo.Outbox:9 - the last line\n")
+        bg { svc.call("session.start", JsonObject().apply { addProperty("key", "BIG-3") }) }
+        val java = daemon.home.resolve("Outbox.java").also { Files.writeString(it, "package com.example.demo;\npublic class Outbox {\n}\n") }
+        val marker = bg { MarkerService.getInstance(project).addNow(java.toString(), 9, "com.example.demo.Outbox").single() }
+        val r = bg(300) { LogService.getInstance(project).fetchNow(FetchRequest(src.toString())) }
+        val total = r.get("lines").asInt
+        val matcher = LogMatcher.getInstance(project)
+        val ed = matcher.open(r.get("path").asString, 1)!!
+        if (ed.document.lineCount >= total) return // the platform holds it whole: nothing is beyond
+        matcher.annotate(ed)
+        // the latest request wins (opening the log and the marker events ask as well): wait for the match itself
+        PlatformTestUtil.waitWithEventsDispatching("logs.match answered", { matcher.lastMatch(marker.id) != null }, 300)
+        val beyond = matcher.beyond(r.get("path").asString)
+        assertNotNull("the hit on the last line is below the ${ed.document.lineCount} loaded lines", beyond)
+        assertEquals(1, beyond!!.count)
+        assertEquals(total, beyond.firstLine)
+        assertTrue(bannerOf(FileDocumentManager.getInstance().getFile(ed.document)!!, ed)!!.contains("1 marker hit lies beyond the loaded part, the first at line $total"))
+        assertEquals("the matched line is the last one, not the end of the head", total, matcher.lastMatch(marker.id)?.second)
+    }
+
+    private fun bannerOf(vf: com.intellij.openapi.vfs.VirtualFile, ed: com.intellij.openapi.editor.Editor): String? {
+        val fe = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).getEditors(vf).first()
+        val f = bg { com.neex.deliberator.logs.TruncatedLogBanner().collectNotificationData(project, vf) } ?: return null
+        return (f.apply(fe) as com.intellij.ui.EditorNotificationPanel).text
     }
 }
 

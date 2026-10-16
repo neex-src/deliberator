@@ -23,7 +23,7 @@ data class LogTruncation(val path: String, val loadedLines: Int, val totalLines:
     fun message(beyond: BeyondHits? = null): String {
         val head = "Truncated: the editor shows lines 1-$loadedLines of $totalLines (the IDE does not load the rest of a ${fileBytes / (1024 * 1024)} MB file); the whole log is on disk at $path."
         return if (beyond == null) head
-        else head + " ${beyond.count} marker hit${if (beyond.count == 1) "" else "s"} lie beyond the loaded part, the first at line ${beyond.firstLine}."
+        else head + " ${beyond.count} marker hit${if (beyond.count == 1) " lies" else "s lie"} beyond the loaded part, the first at line ${beyond.firstLine}."
     }
 }
 
@@ -56,10 +56,13 @@ object LogTruncations {
 
     /** Null when [doc] holds the whole of [file]. A file that is not bigger than its document is never counted (cheap exit for ordinary logs). */
     fun of(file: VirtualFile, doc: Document): LogTruncation? {
-        if (file.length - doc.textLength <= 1024) return null
+        // the document's numbers under the read lock; the count of the file on disk outside it (it streams the whole file once)
+        val (chars, loaded) = com.intellij.openapi.application.ReadAction.compute<Pair<Int, Int>, RuntimeException> {
+            val cs = doc.charsSequence
+            doc.textLength to (doc.lineCount - (if (cs.isNotEmpty() && cs[cs.length - 1] == '\n') 1 else 0))
+        }
+        if (file.length - chars <= 1024) return null
         val total = try { totalLines(file) } catch (_: Exception) { return null }
-        val chars = doc.charsSequence
-        val loaded = doc.lineCount - (if (chars.isNotEmpty() && chars[chars.length - 1] == '\n') 1 else 0)
         return if (total > loaded) LogTruncation(file.path, loaded, total, file.length) else null
     }
 }
