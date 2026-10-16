@@ -220,6 +220,12 @@
             (aws/invoke! ctx le :secretsmanager :CreateSecret {:Name ln :SecretString secret})
             (let [r (aws/invoke! ctx le :secretsmanager :GetSecretValue {:SecretId ln})]
               (is (str/includes? (blob (-> (aws/raw-refs r) :response :sha)) secret)))
+            (testing ":redact-secrets (secrets-from) redacts a LOCAL environment's response too; the caller still has the value"
+              (let [r (aws/invoke! (assoc ctx :redact-secrets true) le :secretsmanager :GetSecretValue {:SecretId ln})
+                    b (blob (-> (aws/raw-refs r) :response :sha))]
+                (is (= secret (:SecretString r)))
+                (is (not (str/includes? b secret)))
+                (is (str/includes? b "<redacted>"))))
             (aws/invoke! ctx le :secretsmanager :DeleteSecret {:SecretId ln :ForceDeleteWithoutRecovery true})))
         (confirmed! ctx e :secretsmanager :DeleteSecret {:SecretId n :ForceDeleteWithoutRecovery true})))))
 
