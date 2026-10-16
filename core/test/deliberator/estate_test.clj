@@ -8,7 +8,7 @@
   (the test then drives the whole chain with the targets of W's `local` environment; without
   `ESTATE_WS` it prints a SKIP line). The URL question is part of it: Floci hands back
   `http://localhost:<port>/…` queue URLs that a container cannot dial, and the services, which
-  talk to `http://deliberator-floci:4566`, still work."
+  talk to `http://deliberator-default-floci:4566`, still work."
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -27,7 +27,7 @@
 (def container-def
   {"name" "service-a" "image" "x"
    "portMappings" [{"containerPort" 8081}]
-   "environment" [{"name" "AWS_ENDPOINT_URL" "value" "http://deliberator-floci:4566"}
+   "environment" [{"name" "AWS_ENDPOINT_URL" "value" "http://deliberator-default-floci:4566"}
                   {"name" "AWS_REGION" "value" "eu-central-1"}]
    "secrets" [{"name" "TABLE_NAME" "valueFrom" "arn:aws:ssm:eu-central-1:000000000000:parameter/estate/common/table-name"}
               {"name" "API_KEY" "valueFrom" "arn:aws:secretsmanager:eu-central-1:000000000000:secret:estate/api-key-AbCdEf"}]})
@@ -36,7 +36,7 @@
   (let [s (runtime/taskdef->service container-def {:jar "a.jar" :debug 5005 :java-opts ["-Xmx256m"]})]
     (is (= {8081 8081 5005 5005} (:ports s)))
     (is (= 5005 (:debug s)))
-    (is (= "http://deliberator-floci:4566" (get-in s [:env "AWS_ENDPOINT_URL"])))
+    (is (= "http://deliberator-default-floci:4566" (get-in s [:env "AWS_ENDPOINT_URL"])))
     (is (= {"API_KEY" "arn:aws:secretsmanager:eu-central-1:000000000000:secret:estate/api-key-AbCdEf"
             "TABLE_NAME" "arn:aws:ssm:eu-central-1:000000000000:parameter/estate/common/table-name"}
            (:secrets s)))

@@ -14,6 +14,7 @@
   `runtime.edn` must already carry 14566/15432 when 4566/5432 belong to another project. The home
   is `$DELIBERATOR_HOME`."
   (:require [babashka.process :as p]
+            [daemon-client]
             [estate]))
 
 (defn- arg [args k] (second (drop-while #(not= k %) args)))
@@ -21,7 +22,7 @@
 (defn- clj [env & more]
   (:exit (apply p/shell {:dir "core" :continue true :extra-env env} "clojure" "-M:test" more)))
 
-(defn -main [& args]
+(defn- run [args]
   (let [ws (or (arg args "--ws") "default")
         keep? (some #{"--keep"} args)]
     (println "== pass A: estate down, clojure -M:test")
@@ -36,4 +37,8 @@
                       "-n" "deliberator.steps-test" "-n" "deliberator.aws-kinds-test")
                  (finally (when-not keep? (estate/down ["--ws" ws]))))]
       (println "== pass A exit" a ", pass B exit" b)
-      (System/exit (if (and (zero? a) (zero? b)) 0 1)))))
+      (if (and (zero? a) (zero? b)) 0 1))))
+
+(defn -main [& args]
+  ;; the estate steps start the daemon of $DELIBERATOR_HOME when none runs; it is stopped again at the end
+  (System/exit (daemon-client/stop-if-started! #(run args))))

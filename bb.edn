@@ -12,19 +12,22 @@
   check:arch {:doc "Layering rules: core, cli, ide separation, no employer names"
               :requires ([check-arch])
               :task (check-arch/-main)}
-  runtime:up {:doc "Reconcile the local runtime (Floci, Postgres); args: --ws NAME (default \"default\")"
-              :task (apply shell {:dir "core"} "clojure" "-M" "-m" "deliberator.runtime" "up" *command-line-args*)}
-  runtime:status {:doc "Show the local runtime's containers and health"
-                  :task (apply shell {:dir "core"} "clojure" "-M" "-m" "deliberator.runtime" "status" *command-line-args*)}
-  runtime:down {:doc "Remove this workspace's runtime containers"
-                :task (apply shell {:dir "core"} "clojure" "-M" "-m" "deliberator.runtime" "down" *command-line-args*)}
+  runtime:up {:doc "Reconcile the local runtime (Floci, Postgres) through the daemon; args: --ws NAME (default \"default\"), --infra, --no-daemon (one-shot JVM)"
+              :requires ([daemon-client])
+              :task (apply daemon-client/-main "up" *command-line-args*)}
+  runtime:status {:doc "Show the local runtime's containers and health (through the daemon; --no-daemon for a one-shot JVM)"
+                  :requires ([daemon-client])
+                  :task (apply daemon-client/-main "status" *command-line-args*)}
+  runtime:down {:doc "Remove this workspace's runtime containers (through the daemon; --no-daemon for a one-shot JVM)"
+                :requires ([daemon-client])
+                :task (apply daemon-client/-main "down" *command-line-args*)}
   estate:build {:doc "Build the estate services (Maven, JDK 21)"
                 :requires ([estate])
                 :task (estate/build)}
-  estate:deploy {:doc "terraform apply on Floci + write the service roles into runtime.edn; args: --ws W [--auto-publish]"
+  estate:deploy {:doc "terraform apply on Floci + write the service roles into runtime.edn; args: --ws W [--auto-publish] [--no-daemon]"
                  :requires ([estate])
                  :task (estate/deploy *command-line-args*)}
-  estate:up {:doc "Runtime (Floci, Postgres) -> deploy -> services; args: --ws W [--auto-publish]"
+  estate:up {:doc "Runtime (Floci, Postgres) -> deploy -> services; args: --ws W [--auto-publish] [--no-daemon]"
              :requires ([estate])
              :task (estate/up *command-line-args*)}
   estate:status {:doc "Runtime status and the services' health; args: --ws W"

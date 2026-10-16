@@ -12,12 +12,15 @@
   - down:   removes the workspace's containers and the Floci root's Terraform state (Floci keeps
             nothing, a stale state would lie).
 
-  The workspace is `--ws W` (default \"default\"); its home is $DELIBERATOR_HOME."
+  The workspace is `--ws W` (default \"default\"); its home is $DELIBERATOR_HOME. The runtime steps
+  (`runtime up|status|down`, `sync-env`, `adopt-taskdefs`) go through the daemon (`daemon-client`); only
+  Maven and Terraform run out of process. `--no-daemon` runs them in one-shot JVMs as before."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.edn :as edn]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [daemon-client]))
 
 (def repo (str (fs/absolutize ".")))
 (def tf-dir (str repo "/estate/terraform/floci"))
@@ -43,8 +46,15 @@
     (println (format "== %s: %d ms" label (ms-since t0)))
     r))
 
-(defn- runtime [& args]
-  (apply p/shell {:dir (str repo "/core")} "clojure" "-M" "-m" "deliberator.runtime" args))
+(defn- runtime
+  "`daemon-client/runtime` for the task's `args` (they may carry `--no-daemon`); a failure stops the task."
+  [args & cmd]
+  (let [code (apply daemon-client/runtime (concat cmd (when (some #{"--no-daemon"} args) ["--no-daemon"])))]
+    (when-not (zero? code) (throw (ex-info (str "runtime " (first cmd) " failed") {:babashka/exit code})))))
+
+(defn- container
+  "The runtime's container name of `role` in `ws` (store/container-name: `deliberator-<ws>-<role>`)."
+  [ws role] (str "deliberator-" ws "-" role))
 
 (defn build []
   (let [jdk (java21)]
@@ -68,12 +78,15 @@
 (defn deploy [args]
   (let [ws (ws-of args)
         auto (if (some #{"--auto-publish"} args) "true" "false")]
-    (step "local environment follows runtime.edn" #(runtime "sync-env" "--ws" ws))
+    (step "local environment follows runtime.edn" #(runtime args "sync-env" "--ws" ws))
     (let [endpoint (local-endpoint ws)]
       (println "floci endpoint" endpoint)
       (step "terraform init" #(terraform "init" "-input=false" "-no-color"))
       (step "terraform apply" #(terraform "apply" "-auto-approve" "-input=false" "-no-color"
-                                          "-var" (str "endpoint=" endpoint) "-var" (str "auto_publish=" auto))))
+                                          "-var" (str "endpoint=" endpoint) "-var" (str "auto_publish=" auto)
+                                          "-var" (str "container_endpoint=http://" (container ws "floci") ":4566")
+                                          "-var" (str "service_a_url=http://" (container ws "service-a") ":8081")
+                                          "-var" (str "db_url=jdbc:postgresql://" (container ws "postgres") ":5432/deliberator"))))
     (step "adopt task definitions"
           (fn []
             (let [out (json/parse-string (:out (p/shell {:dir tf-dir :env (tf-env) :out :string}
@@ -85,15 +98,15 @@
                   f (str repo "/.scratch/estate/adopt.edn")]
               (fs/create-dirs (fs/parent f))
               (spit f (pr-str d))
-              (runtime "adopt-taskdefs" "--ws" ws "--file" f))))))
+              (runtime args "adopt-taskdefs" "--ws" ws "--file" f))))))
 
 (defn up [args]
   (let [ws (ws-of args) t0 (System/nanoTime)]
     (when-not (every? #(fs/exists? (str repo "/" (:jar %))) (vals services))
       (step "build" build))
-    (step "runtime (floci, postgres)" #(runtime "up" "--infra" "--ws" ws))
+    (step "runtime (floci, postgres)" #(runtime args "up" "--infra" "--ws" ws))
     (deploy args)
-    (step "runtime (services)" #(runtime "up" "--ws" ws))
+    (step "runtime (services)" #(runtime args "up" "--ws" ws))
     (println (format "estate up in %d ms" (ms-since t0)))))
 
 (defn- health [url]
@@ -103,12 +116,12 @@
 
 (defn status [args]
   (let [ws (ws-of args)]
-    (runtime "status" "--ws" ws)
+    (runtime args "status" "--ws" ws)
     (doseq [[n port] [["a" 8081] ["b" 8082]]]
       (println (str "service-" n " :" port " /actuator/health") (health (str "http://localhost:" port "/actuator/health"))))))
 
 (defn down [args]
   (let [ws (ws-of args)]
-    (runtime "down" "--ws" ws)
+    (runtime args "down" "--ws" ws)
     (doseq [f (fs/glob tf-dir "terraform.tfstate*")] (fs/delete f))
     (println "terraform state of the floci root removed")))

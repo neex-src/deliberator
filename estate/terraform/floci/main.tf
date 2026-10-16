@@ -13,18 +13,18 @@ variable "endpoint" {
 
 variable "container_endpoint" {
   type        = string
-  default     = "http://deliberator-floci:4566"
-  description = "Floci as the service containers see it on the runtime network."
+  default     = "http://deliberator-default-floci:4566"
+  description = "Floci as the service containers see it on the runtime network; `bb estate:deploy` passes the workspace's own container names."
 }
 
 variable "service_a_url" {
   type    = string
-  default = "http://deliberator-service-a:8081"
+  default = "http://deliberator-default-service-a:8081"
 }
 
 variable "db_url" {
   type    = string
-  default = "jdbc:postgresql://deliberator-postgres:5432/deliberator"
+  default = "jdbc:postgresql://deliberator-default-postgres:5432/deliberator"
 }
 
 variable "auto_publish" {
