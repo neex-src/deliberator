@@ -208,3 +208,19 @@
             final (slurp (:result (:paths res)))]
         (is (= "ok" (name (:status res))))
         (is (re-find #"RUN ok steps 3 failed 0\n$" final))))))
+
+(deftest result-txt-already-has-the-step-when-step-finished-is-emitted
+  ;; m2/12: the progressive write precedes the event, so a client reading the file on the event sees that step
+  (tu/with-temp-home
+    (call "workspace.open" {})
+    (session/start! "default" "S1")
+    (let [scn (write! (store/home) "q.scn" "### wait a\n# @for 1ms\n\n### wait b\n# @for 1ms\n\n### wait c\n# @for 1ms\n")
+          rt (fn [] (some-> (first (.listFiles (io/file (str (store/path "default" "sessions" "S1" "runs"))))) (io/file "result.txt") slurp))
+          seen (atom [])
+          ctx* (assoc ctx :emit! (fn [ev] (when (= :step.finished (:event ev))
+                                            (swap! seen conj [(:step ev) (rt)]))))
+          res (ops/call! "scenario.run" ctx* {:path scn :env "local"})]
+      (is (= "ok" (name (:status res))))
+      (is (= 3 (count @seen)))
+      (doseq [[n t] @seen]
+        (is (re-find (re-pattern (str "### wait " (nth ["a" "b" "c"] (dec n)) " . ok")) (str t)) (str "step " n ": " t))))))

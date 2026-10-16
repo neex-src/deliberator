@@ -297,6 +297,11 @@
   (select-keys rec [:n :kind :verb :target :name :label :line :status :elapsed :facts :fact-types
                     :checks :captures :output :error :correlation :lines :concurrent?]))
 
+(defn- emit-finished! [st rec]
+  (emit! st (cond-> {:event :step.finished :step (:n rec) :status (:status rec) :facts (:facts rec)
+                     :elapsed (:elapsed rec)}
+              (:error rec) (assoc :error (:error rec)))))
+
 (defn- close!
   [st rec]
   (Thread/interrupted)
@@ -304,9 +309,10 @@
     (Files/createDirectories d (make-array FileAttribute 0))
     (try (store/write-edn! (.resolve d "step.edn") rec)
          (catch Throwable e (emit! st {:event :line :step (:n rec) :text (str "cannot write step.edn: " (ex-message e))}))))
-  (emit! st (cond-> {:event :step.finished :step (:n rec) :status (:status rec) :facts (:facts rec)
-                     :elapsed (:elapsed rec)}
-              (:error rec) (assoc :error (:error rec))))
+  ;; recorded and written to run.edn/result.txt BEFORE the event, so a client reacting to it reads that step
+  (if-let [finish! (:finish! st)]
+    (finish! rec)
+    (emit-finished! st rec))
   rec)
 
 ;; ---------------------------------------------------------------- one step
@@ -531,7 +537,16 @@
         progress! (fn []
                     (try (write! :running nil {:owner (owner)})
                          (render/result! (:run-dir st))
-                         (catch Throwable _ nil)))]
+                         (catch Throwable _ nil)))
+        lock (Object.)
+        ;; every closed step (sequential or concurrent) goes through here: record, write the files, then emit
+        finish! (fn [rec]
+                  (locking lock
+                    (when-not (some #(= (:n %) (:n rec)) @recs)
+                      (swap! recs conj rec)
+                      (progress!))
+                    (emit-finished! st rec)))
+        st (assoc st :finish! finish!)]
     (try
       (let [pick (:selected plan')
             steps (filter #(or (nil? pick) (contains? pick (:n %))) (:steps plan'))
@@ -553,18 +568,15 @@
                         (let [fut (try (spawn (:scope st) #(exec-step st s nil))
                                        (catch RejectedExecutionException _ nil))]
                           (if fut (await-step st fut s) (exec-step st s nil))))]
-              (swap! recs conj rec)
-              (progress!)
               (when (seq (:captures rec)) (swap! (:vars st) vars/overlay (:captures rec)))))
           (doseq [[s fut] futs]
-            (swap! recs conj (await-step st fut s))
-            (progress!)))
+            (await-step st fut s)))
         (let [status (run-status st @recs)]
           (write! status (store/now) nil)
-          [status @recs]))
+          [status (vec (sort-by :n @recs))]))
       (catch Throwable e
         (write! :error (store/now) {:error (err-map e)})
-        [:error @recs]))))
+        [:error (vec (sort-by :n @recs))]))))
 
 (defrecord Run [run-id run-dir cancel-fn done]
   clojure.lang.IDeref
