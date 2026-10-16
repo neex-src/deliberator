@@ -112,3 +112,30 @@
           (podman/start! c b-name)
           (loop [n 0] (when (and (not (service-b-healthy?)) (< n 100)) (Thread/sleep 300) (recur (inc n)))))))
     (t/do-report {:type :skip :message "a-logs-step-on-a-container-that-stops-keeps-its-window: set ESTATE_WS=<ws>"})))
+
+(deftest a-logs-step-follows-a-container-that-comes-back
+  (if-let [ws (deliberator.floci-util/estate-ws)]
+    (let [e (env/load ws "local")
+          cfg (runtime/read-config ws)
+          c (podman/client (get-in cfg [:podman :endpoint]) :ws ws)
+          b-name (get-in cfg [:containers :service/b :name] "deliberator-service-b")
+          f (io/file (str (store/home)) "logs-resume.scn")
+          _ (do (io/make-parents f) (spit f "### logs log/service-b\n# @for 14s\n# @filter /Started/\n"))]
+      (session/start! ws "AUDIT-6")
+      (try
+        (let [t0 (System/currentTimeMillis)
+              run (engine/start! ws e (str f) :session "AUDIT-6" :resolve-target #(env/target e (keyword %)))]
+          (Thread/sleep 2000)
+          (podman/stop! c b-name)
+          (Thread/sleep 1000)
+          (podman/start! c b-name)
+          (let [res @run
+                ms (- (System/currentTimeMillis) t0)
+                txt (slurp (get-in res [:paths :result]))]
+            (is (>= ms 13000) (str "ended after " ms " ms"))
+            (is (re-find #"stopped at" txt) txt)
+            (is (re-find #"running again at" txt) txt)
+            (is (re-find #"Started \S+ in" txt) "the restart's own log lines are followed after the gap")))
+        (finally
+          (loop [n 0] (when (and (not (service-b-healthy?)) (< n 100)) (Thread/sleep 300) (recur (inc n)))))))
+    (t/do-report {:type :skip :message "a-logs-step-follows-a-container-that-comes-back: set ESTATE_WS=<ws>"})))
