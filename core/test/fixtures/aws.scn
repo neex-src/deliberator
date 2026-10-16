@@ -1,0 +1,72 @@
+# the five AWS kinds in one run: queue, event bus + rule, function, table, schedule
+# @env local
+# @var schedule = dlbtest-sched
+
+### sqs send queue/in send-order
+# @attr channel=fixture
+# @assert messageId matches /^[0-9a-f-]{36}$/
+# @assert md5 matches /^[0-9a-f]{32}$/
+{"order": "A-1", "qty": 2}
+
+### sqs receive queue/in receive-order
+# @max 5
+# @assert count == 1
+# @assert $[0].order == A-1
+# @assert $[0].qty == 2
+# @capture order = $[0].order
+
+### sqs receive queue/in drained
+# @wait 1s
+# @assert count == 0
+
+### eventbridge put bus/test put-event
+# @source dlbtest.fixture
+# @detail-type order.created
+# @assert failed == 0
+# @assert eventId matches /.+/
+{"order": "{{order}}", "qty": 2}
+
+### sqs receive queue/routed routed-event
+# @until count == 1 within 5s
+# @wait 1s
+# @assert count == 1
+# @assert $[0].source == dlbtest.fixture
+# @assert $[0].detail.order == A-1
+# @assert $[0].detail.correlation contains {{correlation}}
+
+### lambda invoke function/fn call-function
+# @assert status == 200
+# @assert $.ok == true
+# @assert $.echo.hello == world
+{"hello": "world"}
+
+### lambda invoke function/fn call-failing
+# @log-tail
+# @assert status == 200
+# @assert error == Unhandled
+# @assert $.errorMessage == kaboom
+{"boom": 1}
+
+### dynamodb get table/t get-item
+# @assert count == 1
+# @assert $.n.N == 5
+# @assert $.id.S == item-1
+{"Key": {"id": {"S": "item-1"}}}
+
+### dynamodb query table/t query-item
+# @assert count == 1
+# @assert scanned == 1
+# @assert $[0].n.N == 5
+{"KeyConditionExpression": "id = :i", "ExpressionAttributeValues": {":i": {"S": "item-1"}}}
+
+### dynamodb scan table/t scan-all
+# @assert count == 1
+# @assert $[0].id.S == item-1
+
+### scheduler list list-schedules
+# @assert count == 1
+# @assert $[0].Name == {{schedule}}
+
+### scheduler get schedule/s get-schedule
+# @assert $.Name == dlbtest-sched
+# @assert $.ScheduleExpression contains 2031
