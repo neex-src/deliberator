@@ -197,6 +197,40 @@
       (write-edn! mp (assoc meta :bytes (alength bytes) :sha sha)))
     {:sha sha :path p :bytes (alength bytes) :new? new?}))
 
+(defn raw-adopt!
+  "Like `raw-put!` for a finished file that must not be read into memory (a followed log of any length): the sha-256 is
+  streamed, the file is made read-only and the blob becomes a HARD LINK to it (one inode under two names; a copy when
+  the filesystem refuses the link). When the blob already exists nothing is linked and `file` stays what it is.
+  -> `{:sha :path :bytes :new?}` as `raw-put!`."
+  [ws file meta]
+  (let [problems (meta-problems meta)
+        f (->path file)]
+    (when (seq problems)
+      (throw (ex-info (str "invalid raw meta: " (pr-str problems)) {:type :store/invalid-meta :problems problems})))
+    (let [md (MessageDigest/getInstance "SHA-256")
+          n (with-open [in (Files/newInputStream f (make-array java.nio.file.OpenOption 0))]
+              (let [buf (byte-array 65536)]
+                (loop [total 0]
+                  (let [k (.read in buf)]
+                    (if (neg? k) total (do (.update md buf 0 k) (recur (+ total k))))))))
+          sha (hex (.digest md))
+          p (raw-path ws sha)
+          mp (meta-path ws sha)
+          new? (not (exists? p))]
+      (when new?
+        (.setWritable (.toFile f) false false)
+        (Files/createDirectories (.getParent p) (make-array FileAttribute 0))
+        (try (Files/createLink p f)
+             (catch java.io.IOException _
+               (let [tmp (.resolve (.getParent p) (str "." (.getFileName p) ".adopt.tmp"))]
+                 (Files/copy f tmp (into-array java.nio.file.CopyOption [StandardCopyOption/REPLACE_EXISTING]))
+                 (fsync! tmp)
+                 (Files/move tmp p (into-array java.nio.file.CopyOption [StandardCopyOption/ATOMIC_MOVE]))
+                 (.setWritable (.toFile p) false false)))))
+      (when-not (exists? mp)
+        (write-edn! mp (assoc meta :bytes n :sha sha)))
+      {:sha sha :path p :bytes n :new? new?})))
+
 (defn raw-get
   "The bytes of blob `sha`; throws `:store/not-found` when absent."
   ^bytes [ws sha]

@@ -9,6 +9,7 @@
             [deliberator.aws :as aws]
             [deliberator.env :as env]
             [deliberator.floci-util :as fu :refer [deftest-floci]]
+            [deliberator.logfetch :as logfetch]
             [deliberator.markers :as markers]
             [deliberator.ops :as ops]
             [deliberator.session :as session]
@@ -35,7 +36,7 @@
                               ["repo.attach" ["path" "kind" "ws"] "mutate"]
                               ["repo.detach" ["name" "ws"] "mutate"]
                               ["repo.list" ["ws"] "read"]
-                              ["logs.fetch" ["target" "env" "since" "for" "filter" "session" "ws"] "mutate"]
+                              ["logs.fetch" ["target" "env" "since" "for" "follow" "filter" "session" "ws"] "mutate"]
                               ["logs.match" ["path" "markers" "session" "ws"] "read"]
                               ["marker.add" ["file" "line" "logger" "ws"] "mutate"]
                               ["marker.remove" ["file" "line" "ws"] "mutate"]
@@ -337,6 +338,106 @@
           r (call "logs.fetch" {:target "log/app" :for "1500ms"})]
       @w
       (is (= "old line\nnew line\n" (slurp (:path r))) "history plus what arrived"))))
+
+;; --- logs.fetch streams and follows ------------------------------------------------
+
+(defn- wait-until [pred ms]
+  (let [end (+ (System/currentTimeMillis) ms)]
+    (loop [] (cond (pred) true (> (System/currentTimeMillis) end) false :else (do (Thread/sleep 25) (recur))))))
+
+(defn- session-logs [ws sess]
+  (vec (sort (map #(.getName ^java.io.File %) (.listFiles (io/file (str (session/dir ws sess)) "logs"))))))
+
+(deftest follow-streams-lines-and-leaves-one-file
+  (tu/with-temp-home
+    (session/start! "default" "S1")
+    (let [src (write! (store/home) "live.log" "old line\n")
+          _ (file-env! "default" src)
+          events (atom [])
+          cancelled (atom false)
+          ctx {:emit! #(swap! events conj %) :cancelled? #(deref cancelled)}
+          res (future (ops/call! "logs.fetch" ctx {:target "log/app" :follow true}))]
+      (try
+        (testing "the history and each new line arrive as events while the follow runs"
+          (is (wait-until #(= ["old line"] (map :text @events)) 3000))
+          (spit src "second\n" :append true)
+          (let [t0 (System/currentTimeMillis)]
+            (is (wait-until #(= ["old line" "second"] (map :text @events)) 3000))
+            (is (< (- (System/currentTimeMillis) t0) 1500) "within a moment, not at the end of a window"))
+          (is (= [1 2] (map :n @events)))
+          (is (every? #(and (= "logs.line" (:event %)) (= "log/app" (:target %)) (string? (:at %))) @events)))
+        (testing "while it runs there is ONE file and it already holds the lines"
+          (is (= 1 (count (session-logs "default" "S1"))))
+          (is (wait-until #(= "old line\nsecond\n" (slurp (io/file (str (session/dir "default" "S1")) "logs" (first (session-logs "default" "S1"))))) 2000)))
+        (spit src "third\n" :append true)
+        (is (wait-until #(= 3 (count @events)) 3000))
+        (finally (reset! cancelled true)))
+      (let [r (deref res 5000 ::timeout)]
+        (testing "cancelled: the file is the blob, the result says follow"
+          (is (map? r))
+          (is (true? (:follow r)))
+          (is (= 3 (:lines r)))
+          (is (= "old line\nsecond\nthird\n" (slurp (:path r))))
+          (is (= 1 (count (session-logs "default" "S1"))) "still one file")
+          (is (java.nio.file.Files/isSameFile (.toPath (io/file (:path r))) (store/raw-path "default" (:sha r))) "one inode")
+          (is (not (.canWrite (io/file (:path r)))))
+          (is (= (:bytes r) (count "old line\nsecond\nthird\n")))
+          (is (empty? (.listFiles (.toFile (store/path "default" "raw" "follow")))) "no work file or sidecar left"))))))
+
+(deftest follow-with-a-filter-keeps-the-raw-and-the-kept
+  (tu/with-temp-home
+    (session/start! "default" "S1")
+    (let [src (write! (store/home) "live.log" "a CORR-1\n  cont\nb CORR-2\n")
+          _ (file-env! "default" src)
+          events (atom [])
+          cancelled (atom false)
+          res (future (ops/call! "logs.fetch" {:emit! #(swap! events conj %) :cancelled? #(deref cancelled)}
+                                 {:target "log/app" :for "until-cancelled" :filter "CORR-1"}))]
+      (is (wait-until #(= ["a CORR-1" "  cont"] (map :text @events)) 3000))
+      (spit src "c CORR-1\n" :append true)
+      (is (wait-until #(= 3 (count @events)) 3000))
+      (reset! cancelled true)
+      (let [r (deref res 5000 ::timeout)
+            raw-sha (store/sha256 (.getBytes "a CORR-1\n  cont\nb CORR-2\nc CORR-1\n" "UTF-8"))]
+        (is (= "a CORR-1\n  cont\nc CORR-1\n" (slurp (:path r))))
+        (is (= 3 (:lines r)))
+        (is (= (:sha r) (store/sha256 (.getBytes "a CORR-1\n  cont\nc CORR-1\n" "UTF-8"))))
+        (is (some? (store/raw-meta "default" raw-sha)) "the unfiltered follow is in the raw store too")
+        (is (= 1 (count (session-logs "default" "S1"))))))))
+
+(deftest a-window-streams-events-and-keeps-its-result
+  (tu/with-temp-home
+    (session/start! "default" "S1")
+    (let [src (write! (store/home) "live.log" "old line\n")
+          _ (file-env! "default" src)
+          events (atom [])
+          r (ops/call! "logs.fetch" {:emit! #(swap! events conj %)} {:target "log/app" :for "300ms"})
+          quiet (call "logs.fetch" {:target "log/app" :for "300ms"})]
+      (is (= ["old line"] (map :text @events)))
+      (is (= #{:path :lines :bytes :sha :target :source} (set (keys r))) "the result shape did not change")
+      (is (= (dissoc quiet :path) (dissoc r :path))))))
+
+(deftest an-unfinished-follow-is-adopted-when-its-owner-is-gone
+  (tu/with-temp-home
+    (session/start! "default" "S1")
+    (let [logs-dir (io/file (str (session/dir "default" "S1")) "logs")
+          _ (.mkdirs logs-dir)
+          answer (io/file logs-dir "log-app-20261016-000000.log")
+          fdir (.toFile (store/path "default" "raw" "follow"))
+          _ (.mkdirs fdir)
+          _ (spit answer "half\nwritten\n")
+          side (io/file fdir "dead0001.edn")
+          m {:source :file :op "logs.fetch log/app (follow)" :env :local :at (store/now) :content-type "text/plain"}
+          _ (store/write-edn! (.toPath side) {:work (str answer) :answer (str answer) :filtered? false :target "log/app"
+                                              :raw-meta m :answer-meta m :owner {:pid 2147483000 :process-start nil}
+                                              :started (store/now) :sidecar (str side)})
+          live (io/file fdir "live0002.edn")
+          _ (store/write-edn! (.toPath live) {:work "x" :answer "x" :owner {:pid (.pid (java.lang.ProcessHandle/current))}})
+          adopted (logfetch/adopt-orphans! (store/home))]
+      (is (= [(str answer)] adopted))
+      (is (java.nio.file.Files/isSameFile (.toPath answer) (store/raw-path "default" (store/sha256 (.getBytes "half\nwritten\n" "UTF-8")))))
+      (is (not (.exists side)))
+      (is (.exists live) "a follow whose owner is alive is not touched"))))
 
 (deftest fetch-then-match-end-to-end
   (tu/with-temp-home

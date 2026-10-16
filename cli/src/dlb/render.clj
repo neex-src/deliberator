@@ -101,6 +101,7 @@
     "confirm.required" (str "! confirmation required, step " (:step ev) ": " (:summary ev))
     "run.finished" nil
     "service.build.line" (:text ev)
+    "logs.line" (:text ev)
     "service.reload.step" (str "reload " (:name ev) ": " (or (:detail ev) (:step ev)))
     "service.started" (str "service started " (:name ev) " " (:container ev))
     "service.stopped" (str "service stopped " (:name ev) " " (:container ev))
