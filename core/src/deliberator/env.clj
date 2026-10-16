@@ -64,7 +64,8 @@
   "`(local-for \"default\")`: the record of the default workspace; tests build on it."
   (local-for "default"))
 
-(def ^:private top-keys #{:name :kind :description :read-only :aws :targets})
+(def ^:private top-keys #{:name :kind :description :read-only :aws :targets :topology})
+(def ^:private topology-keys #{:mode :url :log})
 (def ^:private local-aws-keys #{:endpoint :region :account :credentials})
 (def ^:private remote-aws-keys #{:profile :region :account :endpoint})
 
@@ -73,6 +74,26 @@
 (defn- unknown-keys [m allowed where]
   (when-let [ks (seq (remove allowed (keys m)))]
     [(str where " has unknown keys " (pr-str (vec (sort-by str ks))) ", allowed " (pr-str (vec (sort allowed))))]))
+
+(defn- topology-problems [t]
+  (if-not (map? t)
+    [":topology must be a map of service name -> {:mode :external|:off [:url] [:log {:container}]}"]
+    (vec
+     (for [[n e] t
+           p (cond
+               (not (nonblank? n)) [(str ":topology key " (pr-str n) " must be a service name (string)")]
+               (not (map? e)) [(str ":topology " n " must be a map")]
+               :else
+               (concat
+                (unknown-keys e topology-keys (str ":topology " n))
+                (case (:mode e)
+                  :external (when-not (and (string? (:url e)) (re-matches #"https?://[^/\s]+(:\d+)?(/\S*)?" (:url e)))
+                              [(str ":topology " n " :external needs :url like http://host:port")])
+                  :off (when (contains? e :url) [(str ":topology " n " :off takes no :url")])
+                  [(str ":topology " n " :mode must be :external or :off (absent means local)")])
+                (when (and (contains? e :log) (not (and (map? (:log e)) (nonblank? (get-in e [:log :container])))))
+                  [(str ":topology " n " :log must be {:container \"name\"}")])))]
+       p))))
 
 (defn problems
   "The list of problems of the raw environment record `m` (empty when valid)."
@@ -90,6 +111,7 @@
         (when (and aws? (not (nonblank? (:region aws)))) [":aws :region must be a non-blank string"])
         (when (and aws? (not (and (string? (:account aws)) (re-matches #"\d{12}" (:account aws)))))
           [":aws :account must be a 12-digit string"])
+        (when (contains? m :topology) (topology-problems (:topology m)))
         (when-not (map? targets) [":targets must be a map"])
         (when (map? targets)
           (for [[k v] targets
@@ -165,17 +187,53 @@
 
 ;; targets ------------------------------------------------------------------------------------
 
+(defn service-entry
+  "The topology entry `{:mode :external|:off …}` of service `n` in `env`, nil when it is local."
+  [env n] (get-in env [:topology (str n)]))
+
+(defn service-mode
+  "`:local` (no entry), `:external` or `:off`."
+  [env n] (or (:mode (service-entry env n)) :local))
+
+(defn read-topology
+  "The `:topology` of environment `name` read raw from its file ({} when the file or the key is absent);
+  never creates the default environment and never validates (the runtime asks on every status)."
+  [ws name]
+  (or (:topology (store/read-edn (env-file ws name))) {}))
+
+(defn- topology-target
+  "The topology's answer for `k` (`service/<n>` url or off error; `log/service-<n>` of an external instance
+  that names its log container), or nil when the topology has nothing to say (local)."
+  [env k]
+  (let [n (name k)]
+    (case (namespace k)
+      "service" (let [e (service-entry env n)]
+                  (case (:mode e)
+                    :external (:url e)
+                    :off (throw (ex-info (str "service " n " is off in environment " (:name env))
+                                         {:type :topology/service-off :service n :env (:name env)
+                                          :hint (str "dlb topology set " (:name env) " " n " local   (or external URL)")}))
+                    nil))
+      "log" (when (str/starts-with? n "service-")
+              (let [e (service-entry env (subs n 8))]
+                (when (and (= :external (:mode e)) (:log e)) (:log e))))
+      nil)))
+
 (defn target
-  "Resolves a target key (`:queue/inbox` or \"queue/inbox\") in the environment."
+  "Resolves a target key (`:queue/inbox` or \"queue/inbox\") in the environment. `service/<n>` follows the
+  environment's topology: external -> its url, off -> throws `{:type :topology/service-off}`, local -> `:targets`."
   [env key]
   (let [k (if (keyword? key) key (keyword (str key)))
-        ts (:targets env)]
-    (if (contains? ts k)
-      (get ts k)
-      (let [known (vec (sort-by str (keys ts)))]
-        (throw (ex-info (str "unknown target " (pr-str k) " in environment " (:name env)
-                             ", known: " (str/join ", " (map #(subs (str %) 1) known)))
-                        {:type :env/unknown-target :target k :env (:name env) :known known}))))))
+        ts (:targets env)
+        t (topology-target env k)]
+    (if (some? t)
+      t
+      (if (contains? ts k)
+        (get ts k)
+        (let [known (vec (sort-by str (keys ts)))]
+          (throw (ex-info (str "unknown target " (pr-str k) " in environment " (:name env)
+                               ", known: " (str/join ", " (map #(subs (str %) 1) known)))
+                          {:type :env/unknown-target :target k :env (:name env) :known known})))))))
 
 (defn op-class
   "`:read` or `:mutate`; see `deliberator.env.ops`."

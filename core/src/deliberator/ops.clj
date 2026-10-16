@@ -31,7 +31,9 @@
     daemon.stop                                    -> {stopping pid runs}   (the daemon exits a moment later)
     runtime.sync-env ws                            -> {ws path}
     service.adopt path* taskdef name jdwp ws       -> {name created path repo module from}
-    service.list ws                                -> [{name kind repo module port jdwp image mode status}]
+    service.list env ws                            -> [{name kind repo module port jdwp image mode [url] status}]
+    topology.show env* ws                          -> {env services hash}
+    topology.set env* name* mode* url log-container ws -> as show + {dependents}
     service.show name* ws                          -> the description + {status container runtime}
     service.status name ws                         -> [{name status health detail container since drift}]
     service.build name* ws                         -> {artifact bytes took-ms log sha}   [service.build.line]
@@ -85,6 +87,7 @@
             [deliberator.service :as service]
             [deliberator.session :as session]
             [deliberator.store :as store]
+            [deliberator.topology :as topology]
             [deliberator.workspace :as workspace])
   (:import (java.nio.charset CodingErrorAction StandardCharsets)
            (java.nio ByteBuffer)
@@ -101,7 +104,7 @@
 
 (def ^:private error-keys
   [:hint :known :problems :line :token :summary :step :confirmations :result :expires :target :env
-   :role :key :sha :schema :account :expected :found :log :exit])
+   :role :key :sha :schema :account :expected :found :log :exit :service])
 
 (defn error-map
   "The wire error of a throwable: `{:type :message [:hint ...]}`."
@@ -272,9 +275,24 @@
                           (try (env-row (env/load ws n))
                                (catch Exception e {:name n :error (error-map e)}))))}))
 
+(defn- resolved-targets
+  "`:targets` of `e` with `service/<n>` (and the log of an external instance that names one) as the topology
+  resolves them; a service that is off shows \"off\"."
+  [e]
+  (reduce (fn [ts n]
+            (let [svc (keyword "service" n) lg (keyword "log" (str "service-" n))]
+              (cond-> (assoc ts svc (try (env/target e svc)
+                                         (catch clojure.lang.ExceptionInfo x
+                                           (if (= :topology/service-off (:type (ex-data x))) "off" (throw x)))))
+                (:log (env/service-entry e n)) (assoc lg (env/target e lg)))))
+          (or (:targets e) {}) (keys (:topology e))))
+
 (defn- env-describe [_ {:keys [name] :as args}]
-  (let [ws (ws-of args)]
-    {:env (env/load ws name) :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
+  (let [ws (ws-of args)
+        e (env/load ws name)]
+    (cond-> {:env (cond-> e (:topology e) (assoc :targets (resolved-targets e)))
+             :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}
+      (:topology e) (assoc :topology (:services (topology/show ws name))))))
 
 (defn- env-check [_ {:keys [name] :as args}]
   (let [ws (ws-of args)
@@ -302,7 +320,10 @@
   (service/adopt! (ws-of args) {:path path :taskdef taskdef :name name :jdwp jdwp}))
 (defn- config-chain [_ {:keys [name env] :as args}] (config/chain (ws-of args) name (or env "local")))
 (defn- config-refresh [_ {:keys [env path] :as args}] (config/refresh! (ws-of args) (or env "local") {:path (or path "/")}))
-(defn- service-list [_ args] (service/list (ws-of args)))
+(defn- service-list [_ {:keys [env] :as args}] (service/list (ws-of args) (or env "local")))
+(defn- topology-show [_ {:keys [env] :as args}] (topology/show (ws-of args) env))
+(defn- topology-set [_ {:keys [env name mode url log-container] :as args}]
+  (topology/set! (ws-of args) env name mode url {:log-container log-container}))
 (defn- service-show [_ {:keys [name] :as args}] (service/show (ws-of args) name))
 (defn- service-status [_ {:keys [name] :as args}] (service/status (ws-of args) name))
 (defn- service-build [ctx {:keys [name] :as args}] (service/build! (ws-of args) name {:sink (:emit! ctx)}))
@@ -391,7 +412,8 @@
                                     :on-created (fn [run]
                                                   (swap! (:runs d) assoc (:run-id run) run)
                                                   ((:on-cancel! ctx) (fn [] (engine/cancel! run))))
-                                    :resolve-target (fn [k] (env/target e (keyword k)))}
+                                    :resolve-target (fn [k] (env/target e (keyword k)))
+                                    :topology (topology/snapshot ws e)}
                              (seq steps) (assoc :steps (set steps))
                              confirm (assoc :confirm confirm))))]
     (try
@@ -625,8 +647,19 @@
                      :doc "Fetches the parameters (GetParametersByPath, no decryption) and the secrets' metadata (ListSecrets, DescribeSecret; never values) of an environment, persists every response raw and writes the snapshot config/<env>.edn (and a copy under the open session)."
                      :args (ws-schema :env {:type :string :doc "environment name; default local"}
                                       :path {:type :string :doc "SSM path to list recursively; default /"})}
-   "service.list" {:fn service-list :class :read :args (ws-schema)
-                   :doc "The services of the workspace with kind, repository, module, ports, image, mode and runtime status."}
+   "service.list" {:fn service-list :class :read
+                   :args (ws-schema :env {:type :string :doc "environment whose topology gives the mode; default local"})
+                   :doc "The services of the workspace with kind, repository, module, ports, image, mode (local, external with its url, off) and runtime status."}
+   "topology.show" {:fn topology-show :class :read
+                    :args (ws-schema :env {:type :string :required true :doc "environment name"})
+                    :doc "The mode of every service in an environment: {services {name {mode [url]}} hash}. local is the container (url = its host URL), external is served from a URL, off is not available."}
+   "topology.set" {:fn topology-set :class :mutate
+                   :args (ws-schema :env {:type :string :required true :doc "environment name"}
+                                    :name {:type :string :required true :doc "service name"}
+                                    :mode {:type :string :required true :doc "local, external or off"}
+                                    :url {:type :string :doc "base URL, for external"}
+                                    :log-container {:type :string :doc "for external: the container whose log stands for log/service-<name>"})
+                   :doc "Sets a service's mode in an environment. {{service/x}} and env.describe follow it; in the local environment off and external mean the service's container is not desired (the next runtime.ensure or service start/restart stops it) and the services that :depends on it are re-rendered and recreated then. Touches no container itself. Answers the new topology plus the dependents."}
    "service.show" {:fn service-show :class :read
                    :doc "One service: its description (task definition entries included) and its runtime status."
                    :args (ws-schema :name {:type :string :required true :doc "service name from service.list"})}
@@ -750,7 +783,7 @@
             :hint "op.describe lists the operations"))
     (let [args (validate-args op (:args entry) args)]
       (when (and (contains? (:args entry) :ws)
-                 (or (str/starts-with? op "service.") (str/starts-with? op "config.")   ; new families are strict, mutators too
+                 (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.")   ; new families are strict, mutators too
                      (and (= :read (:class entry)) (not= "scenario.parse" op))))
         (require-workspace! (:ws args)))
       ((:fn entry) ctx args))))

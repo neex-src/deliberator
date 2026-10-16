@@ -7,7 +7,8 @@
   | `:node-lambda`), `:repo` (name of an attached repository, nil = none) and `:module` (relative to that
   repository, absolute when `:repo` is nil), `:build {:cmd [argv] :dir <relative to the module> :artifact
   <relative to the module, the last segment may contain *> :java <major version>}`, `:image`, `:port`,
-  `:jdwp`, `:health` (path), `:java-opts`, `:taskdef {:module <terraform module> :container :key
+  `:jdwp`, `:health` (path), `:java-opts`, `:depends {\"ENV_VAR\" \"service\"}` (the entry holds that service's URL: topology
+  rewrites it, piece 03), `:taskdef {:module <terraform module> :container :key
   :environment {name value} :secrets {name valueFrom}}` (the rendered entries as last adopted; references
   only, never secret values), `:adopted {:at :from :file|:terraform}`.
 
@@ -41,7 +42,10 @@
               (not (string? (:name desc))) (conj "name")
               (not (kinds (:kind desc))) (conj "kind (spring-boot or node-lambda)")
               (and (= :spring-boot (:kind desc)) (not (integer? (:port desc)))) (conj "port")
-              (and (:jdwp desc) (not (integer? (:jdwp desc)))) (conj "jdwp"))]
+              (and (:jdwp desc) (not (integer? (:jdwp desc)))) (conj "jdwp")
+              (and (contains? desc :depends)
+                   (not (and (map? (:depends desc)) (every? string? (keys (:depends desc))) (every? string? (vals (:depends desc))))))
+              (conj ":depends ({\"ENV_VAR\" \"service\"})"))]
     (when (seq bad)
       (fail :service/invalid (str "invalid service description: " (str/join ", " bad)) :problems bad))
     (store/safe-name (:name desc))

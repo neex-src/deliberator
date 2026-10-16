@@ -51,7 +51,8 @@
             [deliberator.env :as env]
             [deliberator.podman :as podman]
             [deliberator.service.description :as description]
-            [deliberator.store :as store])
+            [deliberator.store :as store]
+            [deliberator.topology :as topology])
   (:import (java.net InetSocketAddress Socket URI)
            (java.net.http HttpClient HttpClient$Version HttpRequest HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
@@ -167,15 +168,35 @@
   [base over]
   (reduce-kv (fn [m k v] (if (#{:env :ports :secrets} k) (update m k #(into (or % {}) v)) (assoc m k v))) base over))
 
-(defn effective-containers
-  "role -> spec of everything `ensure!` reconciles: the roles of `runtime.edn` (infrastructure, or a hand-written
-  `:jar` role) plus one `:service/<name>` role per runnable service description of the workspace
-  (`description/->spec`, merged with `runtime.edn :services <name>`). Service roles are never stored."
+(defn declared-containers
+  "Like `effective-containers` but without the topology's say about which services are desired: every runnable
+  description has its role, dependents rendered against the `local` environment's topology."
   [ws cfg]
   (merge (:containers cfg)
          (into {} (for [d (description/list ws) :when (description/runnable? d)]
                     [(description/role (:name d))
-                     (merge-spec (description/->spec ws d) (get-in cfg [:services (:name d)]))]))))
+                     (merge-spec (topology/render-spec ws (description/->spec ws d) (:depends d))
+                                 (get-in cfg [:services (:name d)]))]))))
+
+(defn topology-stopped-roles
+  "Role labels (\"service-a\") of the described services whose mode in the `local` environment is not local:
+  their containers are not desired, `ensure!` stops (keeps) them."
+  [ws]
+  (let [off (topology/not-local ws)]
+    (into #{} (comp (filter #(and (off (:name %)) (description/runnable? %)))
+                    (map #(role-name (description/role (:name %)))))
+          (description/list ws))))
+
+(defn effective-containers
+  "role -> spec of everything `ensure!` reconciles: the roles of `runtime.edn` (infrastructure, or a hand-written
+  `:jar` role) plus one `:service/<name>` role per runnable service description of the workspace
+  (`description/->spec`, a dependent's `:depends` entries followed to the topology of the `local` environment,
+  merged with `runtime.edn :services <name>`), minus the services that topology serves externally or not at all.
+  Service roles are never stored."
+  [ws cfg]
+  (let [stopped (topology-stopped-roles ws)]
+    (into {} (remove (fn [[role _]] (and (= "service" (namespace role)) (stopped (role-name role)))))
+          (declared-containers ws cfg))))
 
 (defn desired-all [ws cfg]
   (mapv (fn [[role spec]] (desired ws cfg role spec)) (sort-by (comp str key) (effective-containers ws cfg))))
@@ -408,6 +429,13 @@
        (throw (ex-info (str "runtime.edn: " (:role d) " jar " (:jar-path d) " does not exist (bb estate:build)")
                        {:type :runtime/missing-jar :role (:role d) :jar (:jar-path d) :hint "bb estate:build"})))
      (podman/ensure-network! c (:network cfg))
+     ;; a service the topology serves elsewhere (or not at all) is not desired: stop it, keep the container
+     (when-not infra-only
+       (doseq [role (topology-stopped-roles ws)
+               ctr (podman/list-containers c :all true :labels (assoc (ws-labels ws) "deliberator.role" role))
+               :when (= "running" (:State ctr))]
+         (podman/stop! c (:Id ctr))
+         (emit sink {:event "runtime.stopped" :role role :name (first (:Names ctr)) :reason "topology"})))
      (doseq [d ds] (ensure-image! c d sink))
      ;; infrastructure first, then the services that need it (their secrets live in Floci)
      (doseq [group ((juxt remove filter) #(some? (seq (filter (fn [m] (= "/app/app.jar" (:destination m))) (:mounts %)))) ds)
@@ -526,7 +554,7 @@
                         (cond-> (assoc-in e [:targets (keyword "log" (str "service-" n))] {:container (or (:name spec) (store/container-name ws (role-name role)))})
                           host (assoc-in [:targets role] (str "http://localhost:" host))))
                       e))
-                  e (sort-by (comp str key) (effective-containers ws cfg)))]
+                  e (sort-by (comp str key) (declared-containers ws cfg)))]
     (env/save! ws e)))
 
 (defn sync-env!

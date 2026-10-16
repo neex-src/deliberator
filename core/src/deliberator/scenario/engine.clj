@@ -169,7 +169,9 @@
       (when resolve-target
         (try (resolve-target r)
              (catch clojure.lang.ExceptionInfo e
-               (throw (ex-info (str "line " line ": " (ex-message e)) (assoc (ex-data e) :line line) e)))))
+               ;; a service that is off is a fact of the environment, not of the plan: the step that uses it fails
+               (when-not (= :topology/service-off (:type (ex-data e)))
+                 (throw (ex-info (str "line " line ": " (ex-message e)) (assoc (ex-data e) :line line) e))))))
       (when-not (contains? defined r)
         (throw (ex-info (str "line " line ": unknown variable {{" r "}}; known: "
                              (str/join ", " (sort defined)))
@@ -512,6 +514,7 @@
           :status status :started started :finished finished
           :summary (summarise recs)
           :steps (mapv step-summary (sort-by :n recs))}
+         (when-let [t (:topology (:opts st))] {:topology t})
          extra))
 
 (declare owner)
