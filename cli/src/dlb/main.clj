@@ -57,19 +57,50 @@
   (let [r (client/request! ch "op.describe" {} (fn [_]))]
     (get-in r [:terminal :result])))
 
+(declare run-op*)
+
+(defn- daemon-stop
+  "`dlb daemon stop`: asks the running daemon to stop (never starts one) and waits for it to be gone."
+  [json? home]
+  (let [r (endpoint/stop-daemon! home)]
+    (if json?
+      (println (json/generate-string {:id nil :ok true :result r}))
+      (if (:running? r)
+        (do (println (str "daemon pid " (:pid r) (if (:gone? r) " stopped" " is stopping (still running after 20 s)")
+                          " (" (:via r) ")"))
+            (when (seq (:runs r)) (println (str "runs cancelled: " (str/join ", " (:runs r))))))
+        (println "daemon: not running")))
+    (if (and (:running? r) (not (:gone? r))) 2 0)))
+
+(defn- daemon-status
+  "`dlb daemon status`: `hello` of the running daemon (never starts one); exit 1 when none runs."
+  [json? home jar]
+  (let [want (some-> jar endpoint/jar-version)
+        c (when (endpoint/read-endpoint home) (try (endpoint/connect-existing home) (catch Exception _ nil)))
+        hello (when c (try (endpoint/hello! (:channel c) want) (finally (client/close! (:channel c)))))
+        st (if hello (assoc hello :running true :jar-version want) {:running false})]
+    (if json?
+      (println (json/generate-string st))
+      (if hello
+        (doseq [k [:version :pid :home :endpoint :runs :compatible :jar-version]]
+          (when (some? (get st k)) (println (str (name k) ": " (get st k)))))
+        (println "daemon: not running")))
+    (if hello 0 1)))
+
 (defn- run* [script-dir argv]
   (let [[{:keys [json? home]} words] (extract-flags argv)
         home (endpoint/home home)
         jar (endpoint/jar script-dir)
-        want (some-> jar endpoint/jar-version)
-        {:keys [channel]} (endpoint/connect! home jar)
-        hello (get-in (client/request! channel "hello" (cond-> {:client "dlb"} want (assoc :version want)) (fn [_]))
-                      [:terminal :result])]
+        want (some-> jar endpoint/jar-version)]
+    (case (vec (take 2 words))
+      ["daemon" "stop"] (daemon-stop json? home)
+      ["daemon" "status"] (daemon-status json? home jar)
+      (run-op* script-dir argv json? home jar want words))))
+
+(defn- run-op* [script-dir argv json? home jar want words]
+  (let [{:keys [channel hello]} (endpoint/connect-compatible! home jar)]
     (try
-      (if (false? (:compatible hello))
-        (local-error json? "daemon/incompatible"
-                     (str "daemon pid " (:pid hello) " runs " (:version hello) " but this dlb ships " want)
-                     "stop that daemon (kill its pid) and run dlb again")
+      (do
         (let [table (describe channel)
               help? (or (empty? words) (= "help" (first words)) (some #{"--help" "-h"} words))]
           (cond
@@ -107,6 +138,6 @@
   (let [json? (boolean (some #{"--json"} argv))]
     (try (run* script-dir argv)
          (catch clojure.lang.ExceptionInfo e
-           (local-error json? (or (:type (ex-data e)) "error") (ex-message e)))
+           (local-error json? (or (:type (ex-data e)) "error") (ex-message e) (:hint (ex-data e))))
          (catch Exception e
            (local-error json? "error" (or (ex-message e) (str (class e))))))))
