@@ -1,10 +1,8 @@
 package com.neex.deliberator.daemon
 
-import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
-import com.intellij.openapi.extensions.PluginId
 import java.nio.file.Path
 
 /**
@@ -28,7 +26,7 @@ class DaemonService {
 
     fun jar(): Path? = DaemonHome.resolveJar(
         System.getProperty("deliberator.jar"), System.getenv(),
-        PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))?.pluginPath?.resolve("lib"),
+        com.intellij.openapi.application.PathManager.getJarPathForClass(DaemonService::class.java)?.let { Path.of(it).parent },
     )
 
     /** `-Ddeliberator.daemon.args` (words) is appended to the daemon's command line; the test task sets `--idle-minutes 1`. */

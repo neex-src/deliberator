@@ -54,6 +54,26 @@ class DaemonLifecycleTest {
         assertEquals(first.hello.pid, second.hello.pid)
     }
 
+    /** The cljdev loop: a daemon started by someone else on the home (a REPL's `dev/start!`, `dlb`; here the jar on the system java, no launcher) is reused. */
+    @Test fun aDaemonStartedByAnotherLauncherIsReused() {
+        Files.createDirectories(d.home.resolve("daemon"))
+        val out = d.home.resolve("daemon").resolve("foreign.out").toFile()
+        val foreign = ProcessBuilder("java", "-jar", TempDaemon.shippedJar().toString(), "--home", d.home.toString(), "--idle-minutes", "5")
+            .redirectErrorStream(true).redirectOutput(out).start()
+        try {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(90)
+            while (d.launcher.connectExisting(d.home) == null && System.nanoTime() < deadline) Thread.sleep(300)
+            val c = d.connect()
+            assertFalse("the plugin's launcher must not start a second daemon", c.started)
+            assertFalse(c.restarted)
+            assertEquals(foreign.pid(), c.hello.pid)
+            assertEquals(1, TempDaemon.survivors(d.home).size)
+        } finally {
+            d.close()
+            foreign.destroy()
+        }
+    }
+
     @Test fun aRunStreamsEventsInOrderThenOneTerminal() {
         val client = d.client
         assertTrue(client.call("session.start", args("key" to "J-1")).ok)

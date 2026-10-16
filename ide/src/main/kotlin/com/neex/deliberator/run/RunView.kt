@@ -308,7 +308,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
         }
         return listOf(
             act("Run This Step") { runSteps(listOf(step)) },
-            act("Run From Here") { runSteps(from(step)) },
+            act("Run From Here") { runFrom(step) },
             act("Run All") { runSteps(null) },
         )
     }
@@ -319,6 +319,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
     }
 
     fun runSteps(steps: List<Int>?) = runner.run(file, steps)
+    fun runFrom(step: Int) = runSteps(from(step))
     fun cancel() = runner.cancel(path)
 
     fun toggleAll() {
