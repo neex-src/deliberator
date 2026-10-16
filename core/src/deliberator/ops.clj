@@ -9,7 +9,7 @@
   Argument schema: `{name {:type :required :positional :doc :default}}` (`:positional`: an optional arg that `dlb` takes as a bare word), types `string int number bool string[]
   int[] object any`. Unknown, missing or ill-typed arguments are a `bad-args` error naming the
   problems and the schema; defaults are applied. Every op that touches a workspace takes `ws`
-  (default \"default\"). Class: `read` (changes nothing), `mutate` (changes the store, the runtime or
+  (default \"default\"; ops without one ignore a `ws` argument). Class: `read` (changes nothing), `mutate` (changes the store, the runtime or
   the world). Errors on the wire: `{type message hint ...}`; `type` is the ex-data `:type` of the
   throwing namespace (`env/not-found`, `scenario/parse`, `runtime/port-conflict`, ...), plus
   `bad-args`, `unknown-op`, `internal`.
@@ -18,7 +18,9 @@
 
     hello client version                           -> {version pid home endpoint protocol runs compatible}
     op.describe                                    -> [{op class doc args order events}]   (order = argument names as declared)
-    workspace.show ws                              -> {ws path workspace environments}
+    workspace.open path ws                         -> {ws dir project created}   (the one op that creates a workspace on purpose)
+    workspace.show ws                              -> {ws path workspace environments}   (reading ops: unknown ws is workspace/not-found)
+    session.note name* text* session ws            -> {path}
     session.start key* title ws                    -> {session path}   (reopens an existing key)
     session.end key ws                             -> {session path}   (default: the current session)
     session.list ws                                -> {sessions current}
@@ -120,6 +122,8 @@
   [schema]
   (mapv name (or (:order (meta schema)) (keys schema))))
 
+(def ^:private ignored-ws-arg {:doc "accepted and ignored: this operation is not bound to a workspace"})
+
 (defn- describe-args [schema]
   (into (sorted-map)
         (for [[k {:keys [type required doc default positional]}] schema]
@@ -130,7 +134,7 @@
 (defn validate-args
   "Applies defaults and checks `args` against `schema`; throws `bad-args` listing every problem."
   [op schema args]
-  (let [unknown (remove #(contains? schema %) (keys args))
+  (let [unknown (remove #(or (contains? schema %) (= :ws %)) (keys args))   ; ws is accepted by every op (ignored without one)
         problems (vec (concat
                        (for [k (sort unknown)] (str "unknown argument " (name k)))
                        (for [[k {:keys [required]}] schema
@@ -182,9 +186,41 @@
   "The table as data: `[{:op :class :doc :args :order :events}]`, sorted by op; `:order` lists the
   argument names in declared order (required ones are the positionals of the CLI, in that order)."
   []
-  (vec (for [[op {:keys [class doc args events]}] (sort-by key table)]
-         {:op op :class (name class) :doc doc :args (describe-args args) :order (arg-order args)
+  (vec (for [[op {:keys [class doc args events]}] (sort-by key table)
+             :let [ws? (contains? args :ws)]]
+         {:op op :class (name class) :doc doc
+          :args (cond-> (describe-args args)
+                  (not ws?) (assoc "ws" {:type "string" :required false :doc (:doc ignored-ws-arg) :ignored true}))
+          :order (cond-> (arg-order args) (not ws?) (conj "ws"))
           :events (vec events)})))
+
+(defn workspace-exists? [ws] (exists? (store/path ws "workspace.edn")))
+
+(defn- require-workspace!
+  "Reading ops never create a workspace: an unknown one is `workspace/not-found`."
+  [ws]
+  (when-not (Files/isDirectory (store/path ws) (make-array LinkOption 0))
+    (fail :workspace/not-found (str "no workspace " (store/ws-name ws))
+          :hint "workspace.open creates it (dlb workspace open NAME); check the spelling of --ws")))
+
+(defn- workspace-open [_ {:keys [path] :as args}]
+  (let [ws (ws-of args)
+        _ (store/ws-name ws)
+        created (not (workspace-exists? ws))
+        _ (when (and path (not (.isAbsolute (io/file (str path)))))
+            (fail :bad-args "workspace.open: path must be absolute" :problems ["path"]
+                  :hint "the directory of an existing project to bind, or leave it out for <workspace dir>/project"))
+        w (workspace/load ws)
+        project (if path (str (.normalize (.toPath (io/file (str path))))) (str (store/path ws "project")))
+        w (cond-> w path (assoc :project project))]
+    (workspace/save! w)
+    (env/load ws "local")
+    (Files/createDirectories (.toPath (io/file project)) (make-array java.nio.file.attribute.FileAttribute 0))
+    {:ws (store/ws-name ws) :dir (str (store/path ws)) :project project :created created}))
+
+(defn- session-note [_ {:keys [name text] :as args}]
+  (let [ws (ws-of args)]
+    (select-keys (session/note! ws (session-key ws args) name text) [:path])))
 
 (defn- workspace-show [_ args]
   (let [ws (ws-of args)]
@@ -221,7 +257,6 @@
 
 (defn- env-list [_ args]
   (let [ws (ws-of args)]
-    (env/load ws "local")
     {:environments (vec (for [n (env/names ws)]
                           (try (env-row (env/load ws n))
                                (catch Exception e {:name n :error (error-map e)}))))}))
@@ -518,6 +553,14 @@
                   :doc "Every operation with its class, documentation and argument schema."}
    "daemon.stop" {:fn daemon-stop :class :mutate :args {}
                   :doc "Stops the daemon gracefully: runs in flight are cancelled and finalised, endpoint, socket and lock are removed, the process exits. The answer comes first; the stop follows a moment later."}
+   "workspace.open" {:fn workspace-open :class :mutate
+                     :doc "Creates the workspace when missing (record, default local environment, and the project directory an IDE project binds to) or confirms it; created says which. path: use this existing project directory instead of <workspace dir>/project."
+                     :args (ws-schema :path {:type :string :doc "absolute project directory; default <workspace dir>/project"})}
+   "session.note" {:fn session-note :class :mutate
+                   :doc "Persists a text as sessions/<key>/notes/<name>-<ts>.txt (raw store first, then a hard link); answers the path."
+                   :args (ws-schema :name {:type :string :required true :doc "note name (letters, digits, . _ - kept)"}
+                                    :text {:type :string :required true :doc "the text to keep"}
+                                    :session {:type :string :doc "session key; default the current session"})}
    "workspace.show" {:fn workspace-show :class :read :args (ws-schema)
                      :doc "The workspace record, its path and its environments."}
    "session.start" {:fn session-start :class :mutate
@@ -532,7 +575,7 @@
    "session.current" {:fn session-current :class :read :args (ws-schema)
                       :doc "The current session and its directory, or null."}
    "env.list" {:fn env-list :class :read :args (ws-schema)
-               :doc "The environments of the workspace (the default local one is created on first use)."}
+               :doc "The environments of the workspace (workspace.open writes the default local one)."}
    "env.describe" {:fn env-describe :class :read
                    :doc "One environment record and the file it lives in."
                    :args (ws-schema :name {:type :string :required true :doc "environment name"})}
@@ -644,4 +687,7 @@
     (when-not entry
       (fail :unknown-op (str "no such operation " op) :known (vec (sort (keys table)))
             :hint "op.describe lists the operations"))
-    ((:fn entry) ctx (validate-args op (:args entry) args))))
+    (let [args (validate-args op (:args entry) args)]
+      (when (and (= :read (:class entry)) (contains? (:args entry) :ws) (not= "scenario.parse" op))
+        (require-workspace! (:ws args)))
+      ((:fn entry) ctx args))))

@@ -73,6 +73,29 @@
 
 (def ^:private max-scenario-part 64)
 
+(defn note!
+  "Persists `text` as `sessions/<key>/notes/<safe-name>-<ts>.txt`: the raw store first (source `:note`),
+  then a hard link of the blob. Returns `{:path :sha :bytes}`. The session must exist."
+  [ws key note-name text]
+  (let [k (store/safe-name key)
+        _ (get-session ws k)
+        safe (let [s (str/replace (str note-name) #"[^A-Za-z0-9._-]+" "-")
+                   s (str/replace s #"^[.-]+" "")]
+               (if (str/blank? s) "note" (subs s 0 (min 64 (count s)))))
+        bs (.getBytes ^String (str text) "UTF-8")
+        put (store/raw-put! ws bs {:source :note :op (str "session.note " safe) :env nil :at (store/now)
+                                   :content-type "text/plain"})
+        base (str safe "-" (.format stamp (store/now)))
+        notes (.resolve (dir ws k) "notes")]
+    (loop [n 1]
+      (let [p (.resolve notes (str base (when (> n 1) (str "-" n)) ".txt"))
+            r (try (store/link! ws (:sha put) p)
+                   (catch clojure.lang.ExceptionInfo e
+                     (if (= :store/target-exists (:type (ex-data e))) nil (throw e))))]
+        (if r
+          {:path (str (:path r)) :sha (:sha put) :bytes (:bytes put)}
+          (recur (inc n)))))))
+
 (defn run-dir!
   "Allocates and creates a fresh run directory in the session; returns its Path."
   [ws key scenario-name]

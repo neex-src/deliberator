@@ -514,19 +514,28 @@
           :steps (mapv step-summary (sort-by :n recs))}
          extra))
 
+(declare owner)
+
 (defn- coordinate! [st plan']
   (let [started (store/now)
         recs (atom [])
         snap (atom nil)
         write! (fn [status finished extra]
                  (store/write-edn! (.resolve ^Path (:run-dir st) "run.edn")
-                                   (run-edn (assoc st :snapshot @snap) plan' status @recs started finished extra)))]
+                                   (run-edn (assoc st :snapshot @snap) plan' status @recs started finished extra)))
+        ;; progressive view: after every finished step run.edn says :running with the steps so far and
+        ;; result.txt is rendered from it (trailer `RUN running ...`); the final write replaces both
+        progress! (fn []
+                    (try (write! :running nil {:owner (owner)})
+                         (render/result! (:run-dir st))
+                         (catch Throwable _ nil)))]
     (try
       (let [pick (:selected plan')
             steps (filter #(or (nil? pick) (contains? pick (:n %))) (:steps plan'))
             snapshot (vars/snapshot (:header plan') :correlation (:run-id st) :env (:env st)
                                     :vars (:vars (:opts st)) :builtins (:builtins (:opts st)))
             _ (reset! snap snapshot)
+            _ (progress!)
             st (assoc st :snapshot snapshot :vars (atom snapshot))
             sha (store/raw-put! (:ws st) (:bytes plan')
                                 {:source :file :op "scenario" :env (some-> (:env st) :name)
@@ -542,9 +551,11 @@
                                        (catch RejectedExecutionException _ nil))]
                           (if fut (await-step st fut s) (exec-step st s nil))))]
               (swap! recs conj rec)
+              (progress!)
               (when (seq (:captures rec)) (swap! (:vars st) vars/overlay (:captures rec)))))
           (doseq [[s fut] futs]
-            (swap! recs conj (await-step st fut s))))
+            (swap! recs conj (await-step st fut s))
+            (progress!)))
         (let [status (run-status st @recs)]
           (write! status (store/now) nil)
           [status @recs]))

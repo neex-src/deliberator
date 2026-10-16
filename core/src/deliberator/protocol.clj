@@ -190,9 +190,10 @@
 
 (defn serve-connection!
   "Serves one client until it disconnects (see the namespace docstring). Blocks."
-  [^SocketChannel ch {:keys [dispatch error-fn log]}]
+  [^SocketChannel ch {:keys [dispatch error-fn log register!]}]
   (let [in (BufferedInputStream. (channel-in ch) 8192)
         alive (atom true)
+        pending (atom 0)                ; lines queued and not yet written (or dropped)
         inflight (atom #{})
         q (LinkedBlockingQueue.)
         writer-done (promise)
@@ -207,12 +208,14 @@
                                        (catch Throwable e
                                          (reset! alive false)
                                          (when log (log "write failed, connection dropped" (ex-message e)))
-                                         false))
+                                         false)
+                                       (finally (swap! pending dec)))
                               (recur)))))
                       (catch Throwable e (reset! alive false) (when log (log "writer died" (ex-message e))))
                       (finally (reset! alive false) (.clear q) (deliver writer-done true)))))
         write! (fn [m]
                  (when @alive
+                   (swap! pending inc)
                    (.offer q (.getBytes (str (encode m) "\n") StandardCharsets/UTF_8))
                    true))
         run-request!
@@ -231,6 +234,9 @@
                    (write! line))
                  (catch Throwable e (when log (log "terminal write failed" op (ex-message e))))
                  (finally (swap! inflight disj st)))))))]
+    (when register!
+      (register! {:drained? (fn [] (or (not @alive) (and (empty? @inflight) (zero? @pending))))
+                  :cancel-all! (fn [] (doseq [st @inflight] (cancel! st)))}))
     (try
       (loop []
         (let [l (read-line* in)]
@@ -256,9 +262,13 @@
   [st] (cancel! st))
 
 (defn listen!
-  "Accepts connections on `ssc` (a bound `ServerSocketChannel`) until `stop!` -> `{:stop! f}`."
+  "Accepts connections on `ssc` (a bound `ServerSocketChannel`) until `stop!` -> `{:stop! f}`. `stop!` stops
+  accepting, cancels the requests in flight and waits (at most 3 s) until their terminal lines are written
+  before it closes the connections, so a client sees `cancelled` terminals instead of a closed stream."
   [^ServerSocketChannel ssc {:keys [log] :as opts}]
-  (let [conns (ConcurrentHashMap/newKeySet)]
+  (let [conns (ConcurrentHashMap/newKeySet)
+        ctl (ConcurrentHashMap.)
+        opts (assoc opts :register! (fn [c] (.put ctl (Thread/currentThread) c)))]
     (spawn! (fn []
               (loop []
                 (let [ch (try (.accept ssc)
@@ -272,8 +282,12 @@
                         :else (do (.add conns ch)
                                   (spawn! (fn [] (try (serve-connection! ch opts)
                                                       (catch Throwable e (when log (log "connection failed" (ex-message e))))
-                                                      (finally (.remove conns ch)))))
+                                                      (finally (.remove conns ch) (.remove ctl (Thread/currentThread))))))
                                   (recur)))))))
     {:stop! (fn []
               (try (.close ssc) (catch IOException _ nil))
+              (doseq [c (vals ctl)] (try ((:cancel-all! c)) (catch Throwable _ nil)))
+              (let [until (+ (System/currentTimeMillis) 3000)]
+                (loop [] (when (and (not-every? #((:drained? %)) (vals ctl)) (< (System/currentTimeMillis) until))
+                           (Thread/sleep 20) (recur))))
               (doseq [c conns] (try (.close ^SocketChannel c) (catch IOException _ nil))))}))

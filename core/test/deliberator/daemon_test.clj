@@ -42,7 +42,7 @@
 (def two-waits "### wait one\n# @for 100ms\n\n### wait two\n# @for 100ms\n")
 
 (def expected-ops
-  ["hello" "op.describe" "daemon.stop" "runtime.sync-env" "runtime.adopt" "workspace.show" "session.start" "session.end" "session.list" "session.current"
+  ["hello" "op.describe" "daemon.stop" "runtime.sync-env" "runtime.adopt" "workspace.show" "workspace.open" "session.note" "session.start" "session.end" "session.list" "session.current"
    "env.list" "env.describe" "env.check" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs"
    "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "repo.attach" "repo.detach" "repo.list" "logs.fetch" "logs.match" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
 
@@ -159,7 +159,7 @@
           (is (= ["a" "b" "session" "ws"] (get-in by ["runs.diff" :order])))
           (is (= ["role" "since" "follow" "tail" "ws"] (get-in by ["runtime.logs" :order])))
           (is (= ["path" "env" "session" "steps" "confirm" "ws"] (get-in by ["scenario.run" :order])))
-          (is (= ["client" "version"] (get-in by ["hello" :order]))))))))
+          (is (= ["client" "version" "ws"] (get-in by ["hello" :order])) "ws is accepted (and ignored) by ops without one"))))))
 
 (deftest daemon-stop-finalises-runs-and-exits
   (with-daemon [h {:idle-minutes 0}]
@@ -179,6 +179,9 @@
             (is (= :requested (deref (:stopped h) 10000 :timeout)) "the same stop! ran")
             (is (not (.exists (io/file dir "endpoint"))))
             (is (not (.exists (io/file dir "deliberatord.sock"))))
+            (let [t (:terminal (deref fut 5000 nil))]
+              (is (true? (:ok t)) "the open run stream ends with a terminal, not a closed connection")
+              (is (= "cancelled" (get-in t [:result :status]))))
             (let [run-dir (first (filter #(.isDirectory %) (.listFiles (io/file (str (store/home)) "workspaces" "default" "sessions" "T-STOP" "runs"))))
                   run (store/read-edn (.toPath (io/file run-dir "run.edn")))]
               (is (not= :running (:status run)) "the run was finalised, not left running")
@@ -214,6 +217,11 @@
 (deftest workspace-session-and-environment-ops
   (with-daemon [h {:idle-minutes 0}]
     (with-client [c h]
+      (testing "reading an unknown workspace is workspace/not-found and writes nothing"
+        (is (= "workspace/not-found" (get-in (tc/request c "workspace.show" {:ws "w1"}) [:terminal :error :type])))
+        (is (= "workspace/not-found" (get-in (tc/request c "env.list" {:ws "w1"}) [:terminal :error :type])))
+        (is (not (.exists (io/file (str (store/home)) "workspaces" "w1")))))
+      (is (true? (:created (:result (ok! c "workspace.open" {:ws "w1"})))))
       (let [ws (:result (ok! c "workspace.show" {:ws "w1"}))]
         (is (= "w1" (:ws ws)))
         (is (str/ends-with? (:path ws) "workspaces/w1")))
@@ -251,6 +259,7 @@
 (deftest runtime-ops-answer-without-a-runtime
   (with-daemon [h {:idle-minutes 0}]
     (with-client [c h]
+      (ok! c "workspace.open" {:ws "w1"})
       (let [r (:result (ok! c "runtime.status" {:ws "w1"}))]
         (is (contains? r :podman))
         (is (vector? (:containers r))))

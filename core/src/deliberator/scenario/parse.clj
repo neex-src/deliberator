@@ -129,7 +129,7 @@
            (perr no (str "unknown header directive @" name " (header has @env and @var)")))
          h)
        (str/starts-with? text "//") h
-       :else (perr no (str "unexpected text before the first ### step: " (pr-str text)))))
+       :else (perr no (str "unexpected text before the first ### step: " (pr-str (u8 text))))))
    {:env nil :vars []}
    lines))
 
@@ -199,7 +199,7 @@
         _ (doseq [j (range body-from-i (inc (max end-i (dec body-from-i))))
                   :let [l (nth lines j)]
                   :when (re-matches engine-body-re (:text l))]
-            (perr (:no l) (str "directive after the body: " (pr-str (:text l))
+            (perr (:no l) (str "directive after the body: " (pr-str (u8 (:text l)))
                                " (directives go right after the ### line)")))
         body-file (some #(when (= "body" (:name %)) (:value %)) dirs)
         body-dir (some #(when (= "body" (:name %)) %) dirs)

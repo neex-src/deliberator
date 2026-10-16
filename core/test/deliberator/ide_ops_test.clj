@@ -30,7 +30,7 @@
 
 (deftest describe-lists-the-new-ops-with-order
   (let [by (into {} (map (juxt :op identity)) (ops/describe))]
-    (doseq [[op order class] [["scenario.kinds" [] "read"]
+    (doseq [[op order class] [["scenario.kinds" ["ws"] "read"]
                               ["scenario.parse" ["path" "text" "ws"] "read"]
                               ["repo.attach" ["path" "kind" "ws"] "mutate"]
                               ["repo.detach" ["name" "ws"] "mutate"]
@@ -158,6 +158,7 @@
 
 (deftest repo-round-trip-and-kinds
   (tu/with-temp-home
+    (call "workspace.open" {})
     (let [root (io/file (str (store/home)) "checkouts")
           gradle (io/file root "svc-g") maven (io/file root "svc-m") plain (io/file root "svc-p")
           both (io/file root "svc-b") ktl (io/file root "svc-k")]
@@ -198,6 +199,7 @@
 
 (deftest repo-workspaces-are-separate
   (tu/with-temp-home
+    (call "workspace.open" {:ws "b"})
     (let [d (io/file (str (store/home)) "r1")]
       (.mkdirs d)
       (call "repo.attach" {:path (str d) :ws "a"})
@@ -208,6 +210,7 @@
 
 (deftest markers-round-trip
   (tu/with-temp-home
+    (call "workspace.open" {})
     (is (= [] (call "marker.list" {})))
     (let [r (call "marker.add" {:file "/src/A.java" :line 42 :logger "com.acme.ServiceA"})]
       (is (= [{:id "m1" :file "/src/A.java" :line 42 :logger "com.acme.ServiceA"}] r)))
