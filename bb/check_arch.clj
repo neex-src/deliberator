@@ -5,7 +5,7 @@
   - core/ never references `com.intellij`.
   - cli/ contains no `deliberator.` namespace (no business logic, nothing of the core).
   - ide/ never references `cognitect.aws`, `software.amazon`, Podman or JDBC.
-  - ide/**/*.kt never names the store layout (`sessions/`, `workspaces/`, `worktrees/`, `repos/`,
+  - ide/src/main/**/*.kt never names the store layout (test fixtures may write a temp home) (`sessions/`, `workspaces/`, `worktrees/`, `repos/`,
     `runs/`, any `.edn` file but the jar's `version.edn`): the IDE asks the daemon; the discovery
     contract (`daemon/endpoint`, `daemon/lock`, `daemon/daemon.out`) is the only disk knowledge.
   - nowhere in the repository does a forbidden (employer) name occur. The list is never kept in
@@ -24,7 +24,7 @@
    {:rule "cli/ must not reference deliberator.* namespaces" :dir "cli/" :re #"\bdeliberator\.[a-z]"}
    {:rule "ide/ must not reference AWS, Podman or JDBC" :dir "ide/"
     :re #"(?i)cognitect\.aws|software\.amazon|podman|java\.sql|jdbc|org\.postgresql"}
-   {:rule "ide/ Kotlin must not name the store layout (ask the daemon)" :dir "ide/" :ext ".kt"
+   {:rule "ide/ Kotlin must not name the store layout (ask the daemon)" :dir "ide/src/main/" :ext ".kt"
     :re #"\b(?:sessions|workspaces|worktrees|repos|runs)/|(?<!version)\.edn\b"}])
 
 (defn- repo-files []
