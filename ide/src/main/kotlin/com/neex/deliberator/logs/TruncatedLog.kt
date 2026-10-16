@@ -57,10 +57,10 @@ object LogTruncations {
     /** Null when [doc] holds the whole of [file]. A file that is not bigger than its document is never counted (cheap exit for ordinary logs). */
     fun of(file: VirtualFile, doc: Document): LogTruncation? {
         // the document's numbers under the read lock; the count of the file on disk outside it (it streams the whole file once)
-        val (chars, loaded) = com.intellij.openapi.application.ReadAction.compute<Pair<Int, Int>, RuntimeException> {
+        val (chars, loaded) = com.intellij.openapi.application.ApplicationManager.getApplication().runReadAction(com.intellij.openapi.util.Computable<Pair<Int, Int>> {
             val cs = doc.charsSequence
             doc.textLength to (doc.lineCount - (if (cs.isNotEmpty() && cs[cs.length - 1] == '\n') 1 else 0))
-        }
+        })
         if (file.length - chars <= 1024) return null
         val total = try { totalLines(file) } catch (_: Exception) { return null }
         return if (total > loaded) LogTruncation(file.path, loaded, total, file.length) else null

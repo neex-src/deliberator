@@ -189,4 +189,26 @@ class AttachDetachTest : HeavyPlatformTestCase() {
         assertTrue(WorkspaceService.getInstance(project).state.repos.isEmpty())
         assertEquals(emptyList<Pair<String, String>>(), recorded())
     }
+
+    /** F12: a directory with a Gradle wrapper is linked as "wrapped" (its own distribution), one without as the IDE's bundled Gradle. */
+    fun testAGradleRepositoryWithAWrapperFixtureIsLinkedAsWrapped() {
+        val bundled = work.resolve("gradle")
+        val wrapped = work.resolve("gradle-wrapped")
+        bundled.toFile().copyRecursively(wrapped.toFile())
+        Files.createDirectories(wrapped.resolve("gradle/wrapper"))
+        // a distribution that cannot be fetched: the link is what is under test, the import is allowed to fail
+        Files.writeString(wrapped.resolve("gradle/wrapper/gradle-wrapper.properties"),
+            "distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\ndistributionUrl=file\\:///nonexistent/gradle-0-bin.zip\nzipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n")
+        bg { attacher.attach(wrapped.toString()) }
+        assertEquals(org.jetbrains.plugins.gradle.settings.DistributionType.DEFAULT_WRAPPED,
+            GradleSettings.getInstance(project).getLinkedProjectSettings(wrapped.toString())!!.distributionType)
+        bg { attacher.detach("gradle-wrapped") }
+        assertNull(GradleSettings.getInstance(project).getLinkedProjectSettings(wrapped.toString()))
+
+        bg { attacher.attach(bundled.toString()) }
+        assertEquals(org.jetbrains.plugins.gradle.settings.DistributionType.BUNDLED,
+            GradleSettings.getInstance(project).getLinkedProjectSettings(bundled.toString())!!.distributionType)
+        until("the Gradle modules", 240) { moduleNames().containsAll(listOf("gradle-fixture", "gradle-fixture.main")) }
+        bg { attacher.detach("gradle") }
+    }
 }

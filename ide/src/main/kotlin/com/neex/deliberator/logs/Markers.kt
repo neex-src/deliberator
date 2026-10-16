@@ -73,9 +73,9 @@ class MarkerService(private val project: Project) : Disposable {
 
     /** The logger for [line0] of [file] from the first resolver that knows. Takes the read lock itself. */
     fun loggerFor(file: VirtualFile, line0: Int): String? =
-        com.intellij.openapi.application.ReadAction.compute<String?, RuntimeException> {
+        com.intellij.openapi.application.ApplicationManager.getApplication().runReadAction(com.intellij.openapi.util.Computable<String?> {
             LoggerResolver.EP.extensionList.firstNotNullOfOrNull { r -> runCatching { r.loggerAt(project, file, line0) }.getOrNull() }
-        }
+        })
 
     // calls, blocking and off the EDT ----------------------------------------------------------------
 

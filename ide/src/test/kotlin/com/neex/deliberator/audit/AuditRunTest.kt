@@ -121,8 +121,8 @@ class AuditRunTest : BasePlatformTestCase() {
     }
 
     /**
-     * The daemon finalises the cancelled run on disk but the stream ends in `daemon/closed` (balloon only); the editor still ends up
-     * showing that run, because an empty view reloads the latest run of the file from the daemon (which `ensure()` has restarted).
+     * The daemon finalises the cancelled run on disk and ends the open stream with the run's own terminal (`ok`, status `cancelled`;
+     * audit F9, fixed in core), so the editor reads that run straight from the terminal's paths, no error balloon, no reload by luck.
      */
     fun testADaemonStoppedMidRunLeavesTheCancelledRunVisibleInTheEditor() {
         val (vf, view) = open("### wait long\n# @for 60s\n")
