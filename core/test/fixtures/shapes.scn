@@ -1,0 +1,34 @@
+# order flow, every step shape
+# @env local
+# @var orderId = ord-{{uuid}}
+# @var topic=orders
+
+### http create-order
+# @assert status == 201
+# @capture id = $.orderId
+POST {{service/a}}/orders
+Content-Type: application/json
+
+{ "orderId": "{{orderId}}", "note": "
+### this line starts with hashes but sits inside a JSON string
+" }
+   ### indented is body too
+#### four hashes are body
+### sqs send queue/inbox
+# @attr id={{orderId}}
+# @body ./payloads/no-newline.json
+
+### sqs receive queue/outbox got-it
+# @until $.Item.status.S == "ACKED" within 10s
+
+### dynamodb get table/messages
+{ "id": {"S": "{{orderId}}"} }
+### logs log/service-a
+# @filter {{correlation}}
+# @for 10s
+# @assert lines >= 2
+### wait
+# @name pause
+# @for 1s
+### sql db/main q1
+select 1;
