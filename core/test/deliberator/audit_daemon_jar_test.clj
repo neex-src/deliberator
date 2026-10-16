@@ -8,7 +8,8 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [deliberator.store :as store]
-            [deliberator.test-client :as tc])
+            [deliberator.test-client :as tc]
+            [deliberator.test-util :as tu])
   (:import (java.util.concurrent LinkedBlockingQueue TimeUnit)))
 
 (def jar (io/file (System/getProperty "user.dir") "target" "deliberatord.jar"))
@@ -27,8 +28,7 @@
 (defn- banner-endpoint [{:keys [^LinkedBlockingQueue lines]}]
   (second (re-find #"listening on (\S+)" (str (.poll lines 60 TimeUnit/SECONDS)))))
 
-(defn- home [tag]
-  (doto (io/file (System/getProperty "user.dir") "target" "th" (str tag (Long/toString (mod (System/nanoTime) 1679616) 36))) .mkdirs))
+(defn- home [_tag] (tu/short-home))
 
 (defn- start-long-run!
   "Daemon + a 60 s wait run; returns {:d :ep :home :c :run-id}."
@@ -59,7 +59,7 @@
         (is (.isFile (io/file h "workspaces" "default" "sessions" "K-1" "runs" run-id "result.txt")) "result.txt written")
         (is (not (.exists (io/file h "daemon" "endpoint"))) "endpoint removed")
         (is (not (.exists (io/file h "daemon" "deliberatord.sock"))) "socket removed")
-        (finally (tc/close! c) (.destroyForcibly ^Process (:proc d)))))))
+        (finally (tc/close! c) (.destroyForcibly ^Process (:proc d)) (tu/release-home! h))))))
 
 (deftest a-killed-daemons-run-is-not-running-for-ever
   (if-not (.isFile jar)
@@ -80,4 +80,4 @@
               (is (some? row))
               (is (not= "running" (:status row)) "nothing is running this run any more")
               (tc/close! c2))))
-        (finally (tc/close! c) (.destroyForcibly ^Process (:proc d)) (some-> @d2 :proc ^Process (.destroyForcibly)))))))
+        (finally (tc/close! c) (.destroyForcibly ^Process (:proc d)) (some-> @d2 :proc ^Process (.destroyForcibly)) (tu/release-home! h))))))

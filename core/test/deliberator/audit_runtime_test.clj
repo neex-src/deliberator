@@ -180,7 +180,7 @@
   "A daemon whose threads see the credentials file (the binding must exist before `start!`), on a
   home where `default` has the remote-shaped environment `dlbdev`."
   [[h] & body]
-  `(binding [store/*home* (dt/short-home)]
+  `(tu/with-short-home
      (let [f# (io/file (str (store/home)) "credentials")]
        (spit f# "[dlbaudit]\naws_access_key_id = test\naws_secret_access_key = test\n")
        (binding [env/*credentials-file* f#]

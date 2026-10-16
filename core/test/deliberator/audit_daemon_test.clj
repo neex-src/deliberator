@@ -91,7 +91,8 @@
           (is (= "ok" (:status (:result (ok! c "scenario.run" {:path (str outside)}))))))
         (testing "relative with .. climbs out of the session's scenarios directory (no containment)"
           (let [sd (io/file (str (session/dir "default" "T-1")) "scenarios")
-                rel (str (.relativize (.toPath sd) (.toPath outside)))]
+                ;; `..` is resolved by the filesystem: relative to the real directory, not a symlinked home
+                rel (str (.relativize (.toRealPath (.toPath sd) (make-array java.nio.file.LinkOption 0)) (.toRealPath (.toPath outside) (make-array java.nio.file.LinkOption 0))))]
             (is (str/starts-with? rel ".."))
             (is (= "ok" (:status (:result (ok! c "scenario.run" {:path rel})))))))
         (testing "missing, empty, a directory: a typed error each"
