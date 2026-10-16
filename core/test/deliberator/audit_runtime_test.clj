@@ -146,24 +146,29 @@
 
 (deftest-floci a-cancelled-run-ends-a-long-poll-promptly
   (with-queue [q e]
-    (env/save! "default" e)
     (with-daemon [h {:idle-minutes 0}]
       (env/save! "default" e)
       (with-client [a h]
         (with-client [b h]
           (ok! a "session.start" {:key "T-1"})
           (let [path (write-file "poll.scn" "### sqs receive queue/audit\n# @wait 20s\n")
-                id (tc/send! a "scenario.run" {:path path})
+                _ (tc/send! a "scenario.run" {:path path})
                 started (tc/recv a)
                 _ (is (= "run.started" (:event started)))
                 _ (Thread/sleep 1500)
                 t0 (System/currentTimeMillis)
                 c (:result (ok! b "scenario.cancel" {:run-id (:run-id started)}))
-                {:keys [terminal]} (tc/collect a id 30000)
+                status (loop []
+                         (let [st (get-in (:result (ok! b "runs.show" {:run (:run-id started)})) [:run :status])]
+                           (if (or (= "cancelled" st) (> (- (System/currentTimeMillis) t0) 30000))
+                             st (do (Thread/sleep 100) (recur)))))
                 took (- (System/currentTimeMillis) t0)]
+            ;; the state is read from a second connection: the interrupt may cost the first one (see the
+            ;; known-bug test in audit-daemon-test)
             (is (true? (:cancelled c)))
-            (is (= "cancelled" (get-in terminal [:result :status])) (pr-str (:error terminal)))
-            (is (< took 6000) (str "cancel took " took " ms to end a 20 s long poll"))))))))
+            (is (= "cancelled" status))
+            (is (< took 6000) (str "cancel took " took " ms to end a 20 s long poll"))
+            (tc/close! a)))))))
 
 ;; --- the confirmation flow through the daemon ---------------------------------------------------------------
 
