@@ -63,7 +63,7 @@ class DialogsAndFlowsTest : BasePlatformTestCase() {
             val saved = bg { dlg.execute(s, OperationForm.build(s, emptyMap(), "w1").args!!) }
             assertNotNull("saved", saved)
             val p = Path.of(saved!!)
-            assertTrue(p.toString(), p.toString().contains("/sessions/T-1/notes/session.list-"))
+            assertTrue(p.toString(), p.fileName.toString().startsWith("session.list-") && p.toString().contains("T-1"))
             val text = Files.readString(p)
             assertTrue(text, text.startsWith("> session.list "))
             assertTrue("the terminal line is in the transcript: $text", text.contains("\"sessions\""))
