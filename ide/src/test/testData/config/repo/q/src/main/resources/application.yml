@@ -1,0 +1,3 @@
+app:
+  yaml-table: ${TABLE_NAME}
+  yaml-missing: "${NO_ENTRY_Y}"

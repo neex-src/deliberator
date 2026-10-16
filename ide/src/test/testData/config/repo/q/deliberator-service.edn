@@ -1,0 +1,7 @@
+{:name "q"
+ :kind :spring-boot
+ :build {:cmd ["mvn" "-q" "package"] :dir "." :artifact "target/q.jar" :java 21}
+ :image "docker.io/library/eclipse-temurin:21-jre"
+ :port 9000
+ :health "/actuator/health"
+ :taskdef {:module "tf" :container "service-q" :key "q"}}

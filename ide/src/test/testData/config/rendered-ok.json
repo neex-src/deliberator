@@ -1,0 +1,4 @@
+[{"name": "service-ok", "portMappings": [{"containerPort": 9001}],
+  "environment": [{"name": "APP_AUTO", "value": "false"}],
+  "secrets": [{"name": "TABLE_NAME", "valueFrom": "arn:aws:ssm:eu:0:parameter/p/table"},
+              {"name": "API_KEY", "valueFrom": "arn:aws:secretsmanager:eu:0:secret:p/api-key-AbCdEf"}]}]
