@@ -1,0 +1,10 @@
+# two waits and their asserts: runs without the local runtime
+# @env local
+
+### wait first
+# @for 200ms
+# @assert elapsed >= 150
+
+### wait second
+# @for 300ms
+# @assert elapsed >= 250
