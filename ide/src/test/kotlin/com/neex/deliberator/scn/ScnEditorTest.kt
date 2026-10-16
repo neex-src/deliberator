@@ -275,4 +275,24 @@ class ScnEditorTest : BasePlatformTestCase() {
         assertEquals(ScnColors.VERB, coloured["send"])
         assertEquals(ScnColors.NAME, coloured["send-order"])
     }
+
+    /** The audit's 5 000-step file: PSI build plus walking every step's lines; the number goes into. */
+    fun testFiveThousandStepsPsi() {
+        val text = buildString {
+            append("# @env local\n# @var a = 1\n\n")
+            for (i in 1..5000) append("### sqs send queue/inbox step-$i\n# @attr id={{a}}\n# @assert messageId matches /x/\n{\"order\": \"A-$i\", \"qty\": 2}\n\n")
+        }
+        val factory = com.intellij.psi.PsiFileFactory.getInstance(project)
+        val ms = (1..5).map {
+            val t0 = System.nanoTime()
+            val f = factory.createFileFromText("big.scn", ScnFileType, text) as ScnFile
+            val steps = f.steps
+            var sum = 0L
+            for (st in steps) sum += st.endLine - st.startLine
+            assertEquals(5000, steps.size)
+            (System.nanoTime() - t0) / 1_000_000.0
+        }.sorted()
+        println("SCN-PSI-5000: median ms=${ms[2]} min=${ms[0]} max=${ms[4]}")
+        assertTrue("5000 steps: ${ms[2]} ms", ms[2] < 5000)
+    }
 }
