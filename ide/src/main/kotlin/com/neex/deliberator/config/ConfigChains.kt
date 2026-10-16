@@ -48,6 +48,8 @@ class ConfigChains(private val project: Project) : Disposable {
     @Volatile var debounceMs: Long = 300
     /** Counts every load that finished (tests wait on it). */
     @Volatile var loads: Int = 0; private set
+    /** Counts the `config.chain` loads alone. */
+    @Volatile var chainLoads: Int = 0; private set
 
     init {
         WorkspaceService.getInstance(project).addListener(this) { invalidate() }
@@ -105,6 +107,7 @@ class ConfigChains(private val project: Project) : Disposable {
         val before = slots.put(k, Slot(chain, false))?.chain
         interest += k
         loads++
+        chainLoads++
         if (!chain.sameFacts(before)) changed()
         return chain
     }
