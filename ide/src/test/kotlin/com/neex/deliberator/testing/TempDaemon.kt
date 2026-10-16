@@ -1,5 +1,6 @@
 package com.neex.deliberator.testing
 
+import com.neex.deliberator.daemon.ClosedHomes
 import com.neex.deliberator.daemon.DaemonClient
 import com.neex.deliberator.daemon.DaemonConnection
 import com.neex.deliberator.daemon.DaemonLauncher
@@ -38,17 +39,33 @@ class TempDaemon private constructor(val home: Path, val jar: Path) : AutoClosea
     fun scenario(name: String, text: String): String =
         home.resolve(name).also { Files.writeString(it, text) }.toString()
 
+    /**
+     * Marks the home closed (a late `DaemonService.ensure()` now fails with `daemon/home-closed` instead of starting a daemon),
+     * stops the daemon, then kills whatever still carries `--home <home>`, and deletes the home. Idempotent.
+     */
     override fun close() {
+        ClosedHomes.close(home)
         try {
             val r = launcher.stopDaemon(home)
             if (r.running && !r.gone) lockPid()?.let { ProcessHandle.of(it).ifPresent { h -> h.destroy() } }
         } catch (_: DaemonException) {
             lockPid()?.let { ProcessHandle.of(it).ifPresent { h -> h.destroy() } }
         }
+        survivors(home).forEach { it.destroyForcibly() }
         home.toFile().deleteRecursively()
     }
 
     companion object {
+        /** Processes whose command line carries `--home <home>` (a `deliberatord` of that home). */
+        fun survivors(home: Path): List<ProcessHandle> = ProcessHandle.allProcesses().filter { commandOwnsHome(it.info().commandLine().orElse(""), home) }.toList()
+
+        /** True when [commandLine] is a daemon started with exactly `--home <home>` (not a longer sibling path). */
+        fun commandOwnsHome(commandLine: String, home: Path): Boolean {
+            val h = "--home $home"
+            val i = commandLine.indexOf(h)
+            return commandLine.contains("deliberatord") && i >= 0 && (commandLine.length == i + h.length || commandLine[i + h.length] == ' ')
+        }
+
         private fun launcher(jar: Path) =
             DaemonLauncher(System.getProperty("java.home"), jar, listOf("--idle-minutes", "5"), startTimeoutMs = 60_000)
 
