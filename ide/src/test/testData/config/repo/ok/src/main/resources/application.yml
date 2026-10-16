@@ -1,0 +1,3 @@
+app:
+  yaml-table: ${TABLE_NAME}
+  yaml-auto: ${APP_AUTO:true}

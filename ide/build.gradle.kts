@@ -21,6 +21,8 @@ dependencies {
         bundledPlugin("com.intellij.java")
         bundledPlugin("com.intellij.gradle")
         bundledPlugin("org.jetbrains.idea.maven")
+        bundledPlugin("com.intellij.properties")
+        bundledPlugin("org.jetbrains.plugins.yaml")
         testFramework(TestFrameworkType.Platform)
         pluginVerifier()
     }

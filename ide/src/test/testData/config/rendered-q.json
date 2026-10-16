@@ -1,0 +1,7 @@
+[{"name": "service-q", "portMappings": [{"containerPort": 9000}],
+  "environment": [{"name": "APP_AUTO", "value": "false"}, {"name": "AWS_REGION", "value": "eu"}],
+  "secrets": [{"name": "TABLE_NAME", "valueFrom": "arn:aws:ssm:eu:0:parameter/p/table"},
+              {"name": "API_KEY", "valueFrom": "arn:aws:secretsmanager:eu:0:secret:p/api-key-AbCdEf"},
+              {"name": "GONE_PARAM", "valueFrom": "/p/gone"},
+              {"name": "APP_RELAXED_NAME", "valueFrom": "arn:aws:secretsmanager:eu:0:secret:p/other-ZZZZZZ"},
+              {"name": "UNUSED", "valueFrom": "/p/unused"}]}]
