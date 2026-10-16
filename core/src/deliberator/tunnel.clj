@@ -2,7 +2,7 @@
   "The `ssh://` Podman endpoint: `ssh://[user@]host[:port]/abs/path/podman.sock` in `runtime.edn :podman :endpoint`.
   The core opens ONE tunnel per daemon per workspace and endpoint through the `ssh` binary,
 
-      ssh -N -L <ws>/tunnel/p-<hash>.sock:<remote socket> -o ExitOnForwardFailure=yes -o BatchMode=yes
+      ssh -N -L <ws>/tunnel/t-<hash>.sock:<remote socket> -o ExitOnForwardFailure=yes -o BatchMode=yes
           -o StreamLocalBindUnlink=yes -o ServerAliveInterval=15 [-p PORT] <:ssh :options> [user@]host
 
   and the Podman client speaks `unix://` to the local end (`deliberator.runtime/podman-client`). Nothing overrides
@@ -38,9 +38,9 @@
 (defn target [{:keys [user host]}] (if user (str user "@" host) host))
 
 (defn socket-file
-  "The local end of the tunnel of `endpoint` in `ws`: `<ws>/tunnel/p-<hash>.sock`."
+  "The local end of the tunnel of `endpoint` in `ws`: `<ws>/tunnel/t-<hash>.sock`."
   [ws endpoint]
-  (let [f (.toFile (store/path ws "tunnel" (str "p-" (subs (store/sha256 (.getBytes (str endpoint) "UTF-8")) 0 8) ".sock")))]
+  (let [f (.toFile (store/path ws "tunnel" (str "t-" (subs (store/sha256 (.getBytes (str endpoint) "UTF-8")) 0 6) ".sock")))]
     (when (> (count (.getBytes (str f) "UTF-8")) 103)
       (fail :podman/tunnel-path-too-long (str "the tunnel socket path " f " is longer than a unix socket path may be (103 bytes)")
             :path (str f) :hint "use a shorter DELIBERATOR_HOME"))
