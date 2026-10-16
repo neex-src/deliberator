@@ -154,6 +154,7 @@ class BindWorkspaceAction : AnAction() {
         if (name.isBlank()) return
         svc.bind(name.trim())
         svc.refresh()
+        ApplicationManager.getApplication().executeOnPooledThread { com.neex.deliberator.repo.ReattachOnOpen.reattach(p) }
     }
 }
 

@@ -1,0 +1,6 @@
+<idea-plugin>
+    <!-- Loaded only when the Maven plugin is present: attach of a Maven repository. -->
+    <extensions defaultExtensionNs="com.neex.deliberator">
+        <repositoryKind implementation="com.neex.deliberator.repo.MavenKind"/>
+    </extensions>
+</idea-plugin>

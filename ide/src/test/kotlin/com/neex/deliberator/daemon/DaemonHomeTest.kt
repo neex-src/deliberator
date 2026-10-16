@@ -38,3 +38,23 @@ class DaemonHomeTest {
         assertTrue(!versionNewer("0.1.0", "0.1.0-m1"))
     }
 }
+
+/** The net under every IDE test: a home outside `deliberator.test.homes` (above all the real default) is refused. */
+class TestHomeGuardTest {
+    @Test fun aHomeOutsideTheTestHomesIsRefused() {
+        val th = "/work/ide/build/th"
+        assertEquals(Path.of("$th/abc"), DaemonHome.guardUnderTest(Path.of("$th/abc"), th))
+        for (bad in listOf("~/.local/share/deliberator", "/work/ide/build/never-use-home", "/work/ide/build/th2/x")) {
+            val e = try { DaemonHome.guardUnderTest(Path.of(bad), th); null } catch (e: DaemonException) { e }
+            assertEquals(bad, "daemon/test-home", e?.type)
+        }
+        assertEquals(Path.of("/anywhere"), DaemonHome.guardUnderTest(Path.of("/anywhere"), null))
+    }
+
+    @Test fun theRunningTestJvmIsGuardedAndNeverResolvesTheDefaultHome() {
+        assertTrue("deliberator.test.homes must be set by the Gradle test task", !System.getProperty("deliberator.test.homes").isNullOrBlank())
+        val real = Path.of(System.getProperty("user.home"), ".local/share/deliberator")
+        val resolved = DaemonHome.resolve("", System.getenv(), System.getProperty("user.home"))
+        assertTrue("DELIBERATOR_HOME must point below ide/build in tests: $resolved", resolved != real && resolved.toString().contains("/build/"))
+    }
+}

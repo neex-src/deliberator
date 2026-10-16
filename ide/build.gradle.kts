@@ -18,6 +18,8 @@ dependencies {
     intellijPlatform {
         intellijIdea("2026.2.3")
         bundledPlugin("com.intellij.java")
+        bundledPlugin("com.intellij.gradle")
+        bundledPlugin("org.jetbrains.idea.maven")
         testFramework(TestFrameworkType.Platform)
         pluginVerifier()
     }
@@ -64,6 +66,13 @@ tasks.runIde {
 // that cannot be instantiated in the light test environment and fails every platform test.
 tasks.test {
     dependsOn(buildDaemonJar)
+    // heavy platform tests make real projects: keep them (and the temp copies of the fixtures) under build/, not in /tmp
+    val tmp = layout.buildDirectory.dir("test-tmp").get().asFile
+    doFirst { tmp.mkdirs() }
+    // second net: a daemon home that is not the real one even if the guard were bypassed (the guard refuses it as well)
+    environment("DELIBERATOR_HOME", layout.buildDirectory.dir("never-use-home").get().asFile.absolutePath)
+    systemProperty("java.io.tmpdir", tmp.absolutePath)
+    systemProperty("deliberator.testdata", layout.projectDirectory.dir("src/test/testData").asFile.absolutePath)
     systemProperty("idea.suppressed.plugins.id", "com.intellij.modules.ultimate")
     systemProperty("deliberator.jar", daemonJar.asFile.absolutePath)
     systemProperty("deliberator.test.homes", layout.buildDirectory.dir("th").get().asFile.absolutePath)

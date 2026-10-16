@@ -9,6 +9,12 @@
 
     <depends>com.intellij.modules.platform</depends>
     <depends optional="true" config-file="deliberator-java.xml">com.intellij.java</depends>
+    <depends optional="true" config-file="deliberator-gradle.xml">com.intellij.gradle</depends>
+    <depends optional="true" config-file="deliberator-maven.xml">org.jetbrains.idea.maven</depends>
+
+    <extensionPoints>
+        <extensionPoint name="repositoryKind" interface="com.neex.deliberator.repo.RepositoryKind" dynamic="true"/>
+    </extensionPoints>
 
     <extensions defaultExtensionNs="com.intellij">
         <applicationService serviceImplementation="com.neex.deliberator.daemon.DaemonService"/>
@@ -16,6 +22,8 @@
         <applicationConfigurable parentId="tools" instanceId="deliberator" displayName="Deliberator"
                                  id="deliberator.settings" instance="com.neex.deliberator.daemon.DeliberatorConfigurable"/>
         <projectService serviceImplementation="com.neex.deliberator.workspace.WorkspaceService"/>
+        <projectService serviceImplementation="com.neex.deliberator.repo.RepositoryAttacher"/>
+        <postStartupActivity implementation="com.neex.deliberator.repo.ReattachOnOpen"/>
         <toolWindow id="Deliberator" anchor="right" secondary="false" canCloseContents="false"
                     factoryClass="com.neex.deliberator.ui.DeliberatorToolWindowFactory"/>
         <notificationGroup id="Deliberator" displayType="BALLOON"/>
@@ -35,6 +43,10 @@
         <editorFactoryListener implementation="com.neex.deliberator.scn.ScnEditorListener"/>
     </extensions>
 
+    <extensions defaultExtensionNs="com.neex.deliberator">
+        <repositoryKind implementation="com.neex.deliberator.repo.PlainKind"/>
+    </extensions>
+
     <actions>
         <group id="deliberator.menu" text="Deliberator" popup="true">
             <add-to-group group-id="MainMenu" anchor="before" relative-to-action="HelpMenu"/>
@@ -44,6 +56,10 @@
                     text="Open Workspace..." description="Open the project directory of a workspace (created through the daemon)"/>
             <action id="deliberator.workspace.bind" class="com.neex.deliberator.actions.BindWorkspaceAction"
                     text="Use Workspace for This Project..." description="Bind the current project to a workspace"/>
+            <action id="deliberator.repo.attach" class="com.neex.deliberator.actions.AttachRepositoryAction"
+                    text="Attach Repository..." description="Add a directory (Gradle, Maven or plain) to this project without reopening it"/>
+            <action id="deliberator.repo.detach" class="com.neex.deliberator.actions.DetachRepositoryAction"
+                    text="Detach Repository..." description="Remove an attached repository from this project (files untouched)"/>
             <action id="deliberator.ops.show" icon="AllIcons.Actions.Edit" class="com.neex.deliberator.actions.OperationsAction"
                     text="Operations..." description="Every daemon operation with a generated form"/>
         </group>
