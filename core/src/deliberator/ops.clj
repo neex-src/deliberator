@@ -6,7 +6,7 @@
   `deliberator.protocol`. `(call! op ctx args)` is the one entry point; `ctx` is the request context
   of the protocol plus `:daemon` (`{:version :pid :home :endpoint :runs :checked :stop-later!}`).
 
-  Argument schema: `{name {:type :required :doc :default}}`, types `string int number bool string[]
+  Argument schema: `{name {:type :required :positional :doc :default}}` (`:positional`: an optional arg that `dlb` takes as a bare word), types `string int number bool string[]
   int[] object any`. Unknown, missing or ill-typed arguments are a `bad-args` error naming the
   problems and the schema; defaults are applied. Every op that touches a workspace takes `ws`
   (default \"default\"). Class: `read` (changes nothing), `mutate` (changes the store, the runtime or
@@ -122,9 +122,10 @@
 
 (defn- describe-args [schema]
   (into (sorted-map)
-        (for [[k {:keys [type required doc default]}] schema]
+        (for [[k {:keys [type required doc default positional]}] schema]
           [(name k) (cond-> {:type (second (types type)) :required (boolean required) :doc doc}
-                      (some? default) (assoc :default default))])))
+                      (some? default) (assoc :default default)
+                      positional (assoc :positional true))])))
 
 (defn validate-args
   "Applies defaults and checks `args` against `schema`; throws `bad-args` listing every problem."
@@ -574,7 +575,7 @@
                      :doc "The registered step kinds as data: verbs, target rule, directives (engine-owned ones marked), facts, capture roots, concurrency. Completion and documentation are generated from it."}
    "scenario.parse" {:fn scenario-parse :class :read
                      :doc "Parses a scenario with the daemon's parser: header, steps (kind, verb, target, name, lines, directives, body size) and errors. A syntax error is returned in errors (steps empty), not raised. With text, an unsaved buffer is parsed; path then only resolves # @body."
-                     :args (ws-schema :path {:type :string :doc "scenario file; relative paths are looked up in the session's scenarios/"}
+                     :args (ws-schema :path {:type :string :positional true :doc "scenario file (or use text); relative paths are looked up in the session's scenarios/"}
                                       :text {:type :string :doc "scenario text (an unsaved buffer); wins over the file's content"})}
    "repo.attach" {:fn repo-attach :class :mutate
                   :doc "Records an existing checkout in the workspace (workspace.edn repositories): name = directory name, kind detected (gradle, maven, plain). Files are untouched."

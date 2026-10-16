@@ -93,7 +93,7 @@
 (deftest help-names-every-op
   (let [table (json/parse-string (:out (dlb *home* "help" "--json")) true)
         txt (:out (dlb *home* "help"))]
-    (is (= 25 (count table)))
+    (is (= 35 (count table)))
     (doseq [{:keys [op]} table]
       (is (str/includes? txt (str/replace op "." " ")) (str op " is in the help")))
     (is (= txt (:out (dlb *home*))) "no args = help")
@@ -184,7 +184,9 @@
 
 (defn- dlb-jar [home jar & args]
   (let [r (apply p/shell {:out :string :err :string :continue true
-                          :extra-env {"DELIBERATOR_HOME" home "DELIBERATOR_JAR" jar "DLB_DAEMON_ARGS" "--idle-minutes 0.2"}}
+                          :extra-env {"DELIBERATOR_HOME" home "DELIBERATOR_JAR" jar "DLB_DAEMON_ARGS" "--idle-minutes 0.2"
+                                     ;; a re-zipped jar loses the AOT classes (newer sources win): a cold start takes ~13 s
+                                     "DLB_START_TIMEOUT_MS" "60000"}}
                  dlb-bin args)]
     (select-keys r [:exit :out :err])))
 
@@ -314,3 +316,22 @@
           (is (#{0 1} (:exit r)) (str (:out r) (:err r)))
           (is (re-find #"▶ 001" (:out r))))
         (finally (stop-daemon! home))))))
+(deftest ide-ops-take-shell-relative-paths
+  (testing "scenario parse, repo attach and marker add send existing relative paths absolute"
+    (let [rel "cli/test/fixtures/wait.scn"
+          r (dlb *home* "scenario" "parse" rel "--json")
+          m (json-line (:out r))]
+      (is (zero? (:exit r)) (:err r))
+      (is (= 2 (count (get-in m [:result :steps]))))
+      (is (= [] (get-in m [:result :errors]))))
+    (let [r (dlb *home* "repo" "attach" "cli/test/fixtures" "--json")]
+      (is (zero? (:exit r)) (:err r))
+      (is (= (str (fs/normalize root) "/cli/test/fixtures") (get-in (json-line (:out r)) [:result :path]))))
+    (is (zero? (:exit (dlb *home* "marker" "add" "cli/test/fixtures/wait.scn" "3"))))
+    (let [m (json-line (:out (dlb *home* "marker" "list" "--json")))]
+      (is (= [(str (fs/normalize root) "/cli/test/fixtures/wait.scn")] (map :file (:result m))))))
+  (testing "help reads well for the new areas"
+    (is (str/includes? (:out (dlb *home* "help" "logs" "fetch")) "dlb logs fetch <target> [--env string] [--since string] [--for string] [--filter string] [--session string] [--ws string]"))
+    (is (str/includes? (:out (dlb *home* "help" "marker" "add")) "dlb marker add <file> <line> [--logger string]"))
+    (is (str/includes? (:out (dlb *home* "help" "repo")) "dlb repo attach <path>"))
+    (is (str/includes? (:out (dlb *home* "help" "scenario")) "dlb scenario kinds"))))
