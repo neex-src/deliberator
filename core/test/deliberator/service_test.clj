@@ -32,7 +32,7 @@
   (tu/with-temp-home
     (doseq [[op args] [["service.list" {}] ["service.show" {:name "a"}] ["service.status" {}]
                        ["service.adopt" {:path "/x"}] ["service.build" {:name "a"}]
-                       ["service.start" {:name "a"}] ["service.stop" {:name "a"}] ["service.restart" {:name "a"}]]]
+                       ["service.start" {:name "a"}] ["service.stop" {:name "a"}] ["service.restart" {:name "a"}] ["service.reload" {:name "a"}]]]
       (is (= "workspace/not-found" (:type (thrown-type #(call op (assoc args :ws "nope"))))) op))
     (is (not (ops/workspace-exists? "nope")))))
 
@@ -40,7 +40,7 @@
   (tu/with-temp-home
     (let [root (tu/temp-home)
           repo-dir (io/file root "checkout")
-          m1 (module! repo-dir "mod-a" {:name "a" :kind :spring-boot :port 8081 :jdwp 5005
+          m1 (module! repo-dir "mod-a" {:name "a" :kind :spring-boot :main "m.Main" :port 8081 :jdwp 5005
                                          :build {:artifact "target/*.jar"}
                                          :taskdef {:module "tf" :container "service-a" :key "a"}})
           m2 (module! root "service-q" nil)
@@ -79,7 +79,7 @@
     (let [root (tu/temp-home)
           jar (io/file root "mod" "target" "x-1.jar")]
       (io/make-parents jar) (spit jar "j")
-      (let [d {:name "a" :kind :spring-boot :module (str (io/file root "mod")) :port 8081 :jdwp 5005 :java-opts ["-Xmx64m"]
+      (let [d {:name "a" :kind :spring-boot :image description/plain-image :module (str (io/file root "mod")) :port 8081 :jdwp 5005 :java-opts ["-Xmx64m"]
                :build {:artifact "target/x-*.jar"} :taskdef {:environment {"A" "1"} :secrets {"S" "/s"}}}
             spec (description/->spec "w" d)]
         (is (= (str jar) (:jar spec)) "a glob picks the built file")
@@ -91,7 +91,7 @@
 (deftest secrets-gate-needs-two-distinct-confirmations-and-never-injects
   (tu/with-temp-home
     (call "workspace.open" {:ws "w"})
-    (description/write! "w" {:name "a" :kind :spring-boot :port 8081 :module "/m" :build {:artifact "t.jar"}})
+    (description/write! "w" {:name "a" :kind :spring-boot :main "m.Main" :port 8081 :module "/m" :build {:artifact "t.jar"}})
     (let [e1 (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "local"}))
           e2 (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "local" :confirm (:token e1)}))
           e3 (thrown-type #(call "service.start" {:ws "w" :name "a" :secrets-from "local" :confirm (:token e2)}))]
@@ -118,14 +118,14 @@
     (let [m (module! (tu/temp-home) "m" nil)
           events (atom [])]
       (spit (io/file m "out.txt") "x")
-      (description/write! "w" {:name "b" :kind :spring-boot :port 1 :module (str m)
+      (description/write! "w" {:name "b" :kind :spring-boot :main "m.Main" :port 1 :module (str m)
                                :build {:cmd ["sh" "-c" "echo one; echo two; touch built.jar"] :artifact "built.jar"}})
       (let [r (ops/call! "service.build" {:emit! #(swap! events conj %)} {:ws "w" :name "b"})]
         (is (= ["one" "two"] (map :text (filter #(= "service.build.line" (:event %)) @events))))
         (is (= (str (io/file m "built.jar")) (:artifact r)))
         (is (= "one\ntwo\n" (slurp (:log r))))
         (is (= "one\ntwo\n" (String. ^bytes (store/raw-get "w" (:sha r)) "UTF-8"))))
-      (description/write! "w" {:name "bad" :kind :spring-boot :port 1 :module (str m)
+      (description/write! "w" {:name "bad" :kind :spring-boot :main "m.Main" :port 1 :module (str m)
                                :build {:cmd ["sh" "-c" "echo boom; exit 3"] :artifact "none.jar"}})
       (let [e (thrown-type #(call "service.build" {:ws "w" :name "bad"}))]
         (is (= "service/build-failed" (:type e)))

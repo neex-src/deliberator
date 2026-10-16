@@ -51,7 +51,7 @@
     (is (= {"API_KEY" "arn:aws:secretsmanager:eu-central-1:000000000000:secret:estate/api-key-AbCdEf"
             "TABLE_NAME" "arn:aws:ssm:eu-central-1:000000000000:parameter/estate/common/table-name"}
            (:secrets s)))
-    (is (str/includes? (:image s) "eclipse-temurin:21-jre"))))
+    (is (= description/default-image (:image s)))))
 
 (defn- jar-config [root]
   {:network "n" :root (str root)
@@ -91,7 +91,7 @@
                       (-> (runtime/default-config)
                           (assoc-in [:containers :floci :ports] {4566 14566})
                           (assoc-in [:containers :postgres :ports] {5432 15432})))
-    (description/write! "w" {:name "a" :kind :spring-boot :repo nil :module "/repo/estate/services/service-a"
+    (description/write! "w" {:name "a" :kind :spring-boot :image description/plain-image :repo nil :module "/repo/estate/services/service-a"
                              :build {:artifact "target/a.jar"} :port 8081 :jdwp 5005
                              :taskdef {:environment {"AWS_REGION" "eu-central-1"}
                                        :secrets {"API_KEY" "arn:aws:secretsmanager:eu-central-1:000000000000:secret:estate/api-key-AbCdEf"}}})

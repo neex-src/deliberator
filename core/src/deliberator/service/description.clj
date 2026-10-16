@@ -193,7 +193,8 @@
 
 (defn from-taskdef
   "A description derived from a rendered task definition when the module carries no
-  `deliberator-service.edn`: kind from the module (pom.xml, package.json), default build, `name` or the
+  `deliberator-service.edn`: kind from the module (pom.xml, package.json), default build (a Spring Boot service runs
+  its fat jar on the plain JRE: the main class cannot be derived), `name` or the
   container name without its `service-` prefix."
   [^File module {:keys [container ports]} {:keys [name jdwp]}]
   (let [kind (cond (.isFile (io/file module "pom.xml")) :spring-boot
@@ -203,5 +204,6 @@
                                :hint "add a deliberator-service.edn to the module"))
         n (or name (some-> container (str/replace #"^service-" "")) (.getName module))]
     (cond-> {:name n :kind kind :build (get default-builds kind)}
+      (= :spring-boot kind) (assoc :image plain-image)   ; no main class to derive: the fat jar on a plain JRE
       (first ports) (assoc :port (first ports))
       jdwp (assoc :jdwp jdwp))))

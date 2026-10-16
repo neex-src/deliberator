@@ -128,7 +128,7 @@
     (spit (io/file tfd "taskdef.json.tftpl") tftpl)
     (call "workspace.open" {:ws "w"})
     (call "repo.attach" {:ws "w" :path (str repo)})
-    (description/write! "w" {:name "q" :kind :spring-boot :port 9000 :repo "checkout" :module "mod"
+    (description/write! "w" {:name "q" :kind :spring-boot :main "m.Main" :port 9000 :repo "checkout" :module "mod"
                              :taskdef {:module "tf" :container "service-q" :key "q"
                                        :environment {"APP_AUTO" "false" "AWS_REGION" "eu"}
                                        :secrets {"TABLE_NAME" "arn:aws:ssm:eu:0:parameter/p/table"
@@ -266,7 +266,7 @@
               (is (some? (store/raw-get "w" response)))
               (is (some? (store/raw-get "w" request)))))
           (testing "the chain sees the parameter, then a deletion after the next refresh"
-            (description/write! "w" {:name "q" :kind :spring-boot :port 9000 :module (str (io/file (tu/temp-home)))
+            (description/write! "w" {:name "q" :kind :spring-boot :main "m.Main" :port 9000 :module (str (io/file (tu/temp-home)))
                                      :taskdef {:secrets {"P" p}}}))
           (is (= :present (get-in (config/chain "w" "q" "local") [:extra 0 :parameter :status])))
           (inv :ssm :DeleteParameter {:Name p})

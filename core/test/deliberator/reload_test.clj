@@ -3,6 +3,7 @@
   hotswap description (kind, derived reload command, exploded role, command line, mounts), the JDWP client against a fake
   JDWP server. The live story is `reload_estate_test` (pass B)."
   (:require [clojure.edn :as edn]
+            [deliberator.ops]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -180,3 +181,16 @@
         (close)
         (let [r (jdwp/redefine! "127.0.0.1" port (str root) ["estate/a/Api.class"])]
           (is (false? (:ok r))) (is (string? (:exception r))))))))
+
+(deftest reload-refuses-what-cannot-be-reloaded
+  (tu/with-temp-home
+    (let [call (fn [op args] (try (deliberator.ops/call! op {:emit! (fn [_]) :on-cancel! (fn [_]) :daemon {:runs (atom {}) :checked (atom #{})}} args)
+                                  (catch clojure.lang.ExceptionInfo e (deliberator.ops/error-map e))))]
+      (call "workspace.open" {:ws "w"})
+      (is (= "workspace/not-found" (:type (call "service.reload" {:ws "nope" :name "a"}))))
+      (is (= "service/not-found" (:type (call "service.reload" {:ws "w" :name "a"}))))
+      (description/write! "w" (assoc base :module "/m/a"))
+      (description/write! "w" {:name "l" :kind :node-lambda :build {:cmd ["npm" "ci"]} :module "/m/l"})
+      (is (= "service/not-runnable" (:type (call "service.reload" {:ws "w" :name "l"}))))
+      (is (= "service/not-running" (:type (call "service.reload" {:ws "w" :name "a"})))
+          "no container of A is running in this workspace"))))

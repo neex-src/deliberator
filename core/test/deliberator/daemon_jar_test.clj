@@ -47,7 +47,7 @@
                 (let [r (:result (:terminal (tc/request c "hello" {:client "jar-test"})))]
                   (is (= "0.1.0-m1" (:version r)))
                   (is (= (.pid ^Process (:proc d)) (:pid r))))
-                (is (= 48 (count (:result (:terminal (tc/request c "op.describe" {}))))))
+                (is (= 49 (count (:result (:terminal (tc/request c "op.describe" {}))))))
                 (tc/request c "session.start" {:key "J-1"})
                 (let [f (io/file home "w.scn")
                       _ (spit f "### wait one\n# @for 100ms\n")
