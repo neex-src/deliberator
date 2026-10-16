@@ -83,7 +83,7 @@ class SecretsCheckboxTest : BasePlatformTestCase() {
         assertEquals(listOf(2, 2), seen.map { it.of })
         assertEquals("local", seen[0].env)
         assertTrue(seen[0].summary, seen[0].summary.contains("REAL secret values") && seen[0].summary.contains("local"))
-        assertTrue(seen[1].summary, seen[1].summary.contains("podman inspect"))
+        assertTrue(seen[1].summary, seen[1].summary.contains("Confirmation 2 of 2"))
         assertNotSame(seen[0].token, seen[1].token)
         // both given: the daemon went on (token 2 was accepted: not refused, not asked a third time) and failed at the missing Floci / environment
         assertTrue("after token 2 the start is not asked again or refused: ${type(r)}", r.isFailure && type(r) != "confirm-required" && type(r) != "service/confirmation-refused" && type(r) != "service/cancelled")
