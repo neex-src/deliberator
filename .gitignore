@@ -18,3 +18,9 @@ target/
 .clj-ai/
 .clojure-mcp/
 .repl-tap.log
+
+# Terraform (estate)
+.terraform/
+*.tfstate
+*.tfstate.*
+.build/

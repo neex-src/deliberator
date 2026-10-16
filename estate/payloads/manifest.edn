@@ -1,0 +1,9 @@
+;; payloads:run reads this. :expect lists what must be true; everything else is just recorded.
+[{:file "01-simple-order.json"}
+ {:file "02-nested.json"}
+ {:file "03-unicode.json"}
+ {:file "04-malformed.json" :expect {:stored true :published false :acked false :lambda false}
+  :note "invalid JSON: stored with status MALFORMED, publish refused (422)"}
+ {:file "05-empty-object.json"}
+ {:file "06-top-level-array.json"}
+ {:file "07-large-200kb.json" :note "~200 KB: close to the SQS/EventBridge 256 KB limit, half the DynamoDB 400 KB item limit"}]
