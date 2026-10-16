@@ -1,3 +1,6 @@
 <idea-plugin>
-    <!-- Loaded only when the Java plugin is present; later pieces register the Java PSI features here. -->
+    <!-- Loaded only when the Java plugin is present. -->
+    <extensions defaultExtensionNs="com.neex.deliberator">
+        <loggerResolver implementation="com.neex.deliberator.logs.JavaLoggerResolver"/>
+    </extensions>
 </idea-plugin>

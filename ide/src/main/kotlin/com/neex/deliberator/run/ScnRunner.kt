@@ -206,7 +206,7 @@ class ScnRunner(private val project: Project) : Disposable {
         return snap
     }
 
-    private fun ensureSession(svc: WorkspaceService) {
+    internal fun ensureSession(svc: WorkspaceService) {
         val cur = WorkspaceModel.parseSessions(svc.call("session.list").resultObject()).second
         if (cur != null) return
         val key = sessionKeyAsker() ?: throw DaemonException("no session: a scenario runs in a session", "run/no-session", "Deliberator | Start Session")
