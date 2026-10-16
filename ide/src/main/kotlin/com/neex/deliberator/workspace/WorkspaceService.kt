@@ -131,6 +131,10 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
         part { WorkspaceModel.parseSessions(obj("session.list")) }?.let { (s, c) -> m = m.copy(sessions = s, currentSession = c) }
         part { WorkspaceModel.parseRuntime(obj("runtime.status")) }?.let { (r, h, c) -> m = m.copy(engineReachable = r, engineHint = h, containers = c) }
         part { WorkspaceModel.parseEnvs(obj("env.list")) }?.let { m = m.copy(envs = it) }
+        part {
+            val list = call("service.list", JsonObject().apply { addProperty("env", selectedEnv) }).result
+            WorkspaceModel.parseServices(list, call("service.status").result, m.containers)
+        }?.let { m = m.copy(services = it) }
         m = if (m.currentSession != null) {
             part { WorkspaceModel.parseRuns(obj("runs.list", JsonObject().apply { addProperty("limit", 20) })) }?.let { m.copy(runs = it) } ?: m
         } else m.copy(runs = emptyList())

@@ -57,6 +57,11 @@
         <editorFactoryListener implementation="com.neex.deliberator.logs.LogsEditorListener"/>
         <editorNotificationProvider implementation="com.neex.deliberator.logs.TruncatedLogBanner"/>
 
+        <!-- services: the tab, the run configuration (m3 piece 06); the debug runner lives in deliberator-java.xml -->
+        <projectService serviceImplementation="com.neex.deliberator.services.ServiceOps"/>
+        <projectService serviceImplementation="com.neex.deliberator.services.ServiceConsoles"/>
+        <configurationType implementation="com.neex.deliberator.services.ServiceRunConfigurationType"/>
+
         <!-- the config chain (m3 piece 07); the references live in deliberator-properties.xml and deliberator-yaml.xml -->
         <projectService serviceImplementation="com.neex.deliberator.config.ConfigChains"/>
         <projectService serviceImplementation="com.neex.deliberator.config.ConfigViews"/>
@@ -132,6 +137,28 @@
                     text="Show Config Chain" description="The whole config chain of this file's service in the selected environment, as text (config.chain)"/>
             <action id="deliberator.config.refresh" class="com.neex.deliberator.config.ConfigRefreshAction"
                     text="Refresh Config Snapshot" description="config.refresh: fetch the parameters and secret metadata of the selected environment into the cached snapshot"/>
+        </group>
+        <group id="deliberator.services" text="Deliberator Services" popup="true">
+            <add-to-group group-id="deliberator.menu" anchor="last"/>
+            <action id="deliberator.service.start" icon="AllIcons.Actions.Execute" class="com.neex.deliberator.services.ServiceStartAction"
+                    text="Start" description="service.start: create or start the container and wait until healthy"/>
+            <action id="deliberator.service.stop" icon="AllIcons.Actions.Suspend" class="com.neex.deliberator.services.ServiceStopAction"
+                    text="Stop" description="service.stop: stop the container, keep it"/>
+            <action id="deliberator.service.restart" icon="AllIcons.Actions.Restart" class="com.neex.deliberator.services.ServiceRestartAction"
+                    text="Restart" description="service.restart: stop, then start (a rebuilt jar recreates the container)"/>
+            <action id="deliberator.service.reload" icon="AllIcons.Actions.ForceRefresh" class="com.neex.deliberator.services.ServiceReloadAction"
+                    text="Reload" description="service.reload: compile and bring the changed classes into the running container"/>
+            <action id="deliberator.service.debug" icon="AllIcons.Actions.StartDebugger" class="com.neex.deliberator.services.ServiceDebugAction"
+                    text="Debug" description="Start the service and attach the IDE's debugger to its JDWP port"/>
+            <action id="deliberator.service.logs" icon="AllIcons.Actions.ShowAsTree" class="com.neex.deliberator.services.ServiceLogsAction"
+                    text="Log" description="logs.fetch of the service's container log, opened in the editor"/>
+            <action id="deliberator.service.build" icon="AllIcons.Actions.Compile" class="com.neex.deliberator.services.ServiceBuildAction"
+                    text="Build" description="service.build"/>
+            <action id="deliberator.topology.set" icon="AllIcons.General.Web" class="com.neex.deliberator.services.TopologySetAction"
+                    text="Topology..." description="topology.set in the selected environment: local, external or off"/>
+            <separator/>
+            <action id="deliberator.service.adopt" icon="AllIcons.General.Add" class="com.neex.deliberator.services.ServiceAdoptAction"
+                    text="Adopt Service..." description="service.adopt: take a module directory (its deliberator-service.edn) into the workspace"/>
         </group>
         <group id="deliberator.toolwindow.actions">
             <action id="deliberator.workspace.create" icon="AllIcons.General.Add" class="com.neex.deliberator.actions.CreateWorkspaceAction" text="Open Workspace" description="The workspace of this project does not exist yet: workspace.open creates it"/>
