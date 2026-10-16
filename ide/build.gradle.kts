@@ -59,8 +59,12 @@ tasks.prepareSandbox {
     from(daemonJar) { into(pluginName.map { "$it/lib" }) }
 }
 
+// `bb ide:run --ws W --home H` passes -PdlbHome / -PdlbProject: the sandbox IDE gets DELIBERATOR_HOME, the jar of this checkout
+// and opens the workspace project. Without -PdlbHome the environment is left as it is.
 tasks.runIde {
-    jvmArgs("-Didea.trust.all.projects=true")
+    jvmArgs("-Didea.trust.all.projects=true", "-Ddeliberator.jar=" + daemonJar.asFile.absolutePath)
+    providers.gradleProperty("dlbHome").orNull?.let { environment("DELIBERATOR_HOME", it) }
+    providers.gradleProperty("dlbProject").orNull?.let { args(it) }
 }
 
 // 2026.2's Ultimate distribution has an obfuscated post-startup activity (com.intellij.modules.ultimate)

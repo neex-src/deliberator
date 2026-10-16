@@ -79,7 +79,7 @@ class RunFromHereAction : ScnEditorAction() {
         val v = viewOf(e) ?: return
         val n = stepAtCaret(e)
         if (n == null) { Ui.notify(v.project, "Run from here", "The caret is not in a step (### line).", NotificationType.WARNING); return }
-        v.runActionsFor(n)[1].actionPerformed(e)
+        v.runFrom(n)
     }
 }
 
