@@ -311,7 +311,9 @@
    (let [cfg (load-config! ws sink)
          ds (desired-all ws cfg)
          c (connect-client ws cfg)
-         socket-path (delay (podman/socket-path c))]
+         socket-path (delay (or (podman/socket-path c)
+                                (throw (ex-info "cannot tell the Podman socket path for this endpoint; give :podman-socket \"/path/to/podman.sock\" in runtime.edn"
+                                                {:type :runtime/no-socket-path}))))]
      (podman/ensure-network! c (:network cfg))
      (doseq [d ds] (ensure-image! c d sink))
      (let [started (doall (for [d ds]

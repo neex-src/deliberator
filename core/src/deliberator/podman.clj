@@ -318,12 +318,14 @@
 
 (defn socket-path
   "Filesystem path of the Podman socket as seen by the machine Podman runs on: the endpoint's own
-  path for `unix://`, else `host.remoteSocket.path` from `info`."
+  path for `unix://`, else `host.remoteSocket.path` from `info` when that is a unix path (nil when
+  the service listens on tcp only: then the path must be given explicitly)."
   [c]
   (let [ep (parse-endpoint (:endpoint c))]
     (if (= :unix (:scheme ep))
       (:path ep)
-      (some-> (get-in (info c) [:host :remoteSocket :path]) (str/replace #"^unix://" "")))))
+      (let [p (get-in (info c) [:host :remoteSocket :path])]
+        (when (and p (re-find #"^(unix://)?/" p)) (str/replace p #"^unix://" ""))))))
 
 (defn ensure-network!
   "Creates the DNS-enabled bridge network `name` unless it exists. -> `{:name :created? bool}`."
