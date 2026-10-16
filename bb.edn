@@ -7,6 +7,12 @@
   check:arch {:doc "Layering rules: core, cli, ide separation, no employer names"
               :requires ([check-arch])
               :task (check-arch/-main)}
+  runtime:up {:doc "Reconcile the local runtime (Floci, Postgres); args: --ws NAME (default \"default\")"
+              :task (apply shell {:dir "core"} "clojure" "-M" "-m" "deliberator.runtime" "up" *command-line-args*)}
+  runtime:status {:doc "Show the local runtime's containers and health"
+                  :task (apply shell {:dir "core"} "clojure" "-M" "-m" "deliberator.runtime" "status" *command-line-args*)}
+  runtime:down {:doc "Remove this workspace's runtime containers"
+                :task (apply shell {:dir "core"} "clojure" "-M" "-m" "deliberator.runtime" "down" *command-line-args*)}
   cli:install {:doc "Symlink cli/dlb into ~/.local/bin"
                :requires ([cli-install])
                :task (cli-install/-main)}}}

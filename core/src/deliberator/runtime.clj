@@ -1,8 +1,422 @@
 (ns deliberator.runtime
-  "The local runtime, reconciled lazily. Contract: `(ensure! ws)` reconciles `runtime.edn`
-  (network, images, containers labelled `deliberator.workspace=<ws>` and `deliberator.role=<role>`),
-  idempotent, emitting `runtime.pulling`, `runtime.starting`, `runtime.ready`; `(status ws) ->
-  {:containers [{:role :name :state :since :health}] :podman {...}}`; `(down! ws)`;
-  `(logs ws role opts)`. Health per role: Floci `GET /_floci/health`, Postgres `pg_isready` via
-  exec, services `GET /actuator/health`. `:podman-socket true` mounts the runtime's own socket
-  into the container (Floci's Lambda needs it).")
+  "The local runtime, reconciled lazily from `runtime.edn` (desired state, architecture section 7)
+  at `$DELIBERATOR_HOME/workspaces/<ws>/runtime.edn`; the first `ensure!` writes the default:
+  Floci 2.3.0 (ECS mock, advertised as `localhost:<host port>`) and Postgres 17.
+
+  Shape: `{:podman {:endpoint \"unix:///…\"} :network \"deliberator\" :containers {<role> spec}}`.
+  A spec: `:image`, `:ports {container-port host-port}` (published on `:host-ip`, default
+  127.0.0.1), `:env`, `:command`, `:name` (default `deliberator-<role>`), `:mounts [{:source
+  :destination :options}]`, `:init <dir>` (mounted at `/docker-entrypoint-initdb.d`, relative to
+  the workspace directory), `:podman-socket true|\"/path\"` (mounts the socket of the Podman that
+  runs the container at `/var/run/docker.sock`; the path is taken from the endpoint, or from
+  `info` for tcp), `:health`. Env values may use `{{port:<container-port>}}` (the host port),
+  `{{network}}`, `{{name}}`, `{{role}}`.
+
+  Contract: `(ensure! ws [opts])` reconciles network, images and containers labelled
+  `deliberator.workspace=<ws>`, `deliberator.role=<role>`, `deliberator.spec=<hash>`: idempotent,
+  a changed spec recreates the container, a host port that is taken throws `:runtime/port-conflict`
+  naming the holder; waits until every container is healthy and returns `(status ws)`. Events go to
+  `(:sink opts)` as maps: `runtime.pulling`, `runtime.starting`, `runtime.ready`. `(status ws)` ->
+  `{:ws :podman {:endpoint :reachable :version} :containers [{:role :name :id :image :state :since
+  :health :detail :ports :drift?}]}`; `:health` is `:healthy`, `:unhealthy` or nil (not running).
+  `(down! ws)` removes only containers labelled with the workspace. `(logs ws role opts)` reads a
+  container's logs through `podman/logs` and mirrors them to `logs/services/<role>/<date>.log`.
+  Health per role (overridable with `:health {:http path :port cp}` or `{:exec [cmd…]}`): Floci
+  `GET /_floci/health` with every service `running`, Postgres `pg_isready` via exec, `service-*`
+  `GET /actuator/health`. `opts`: `:sink`, `:timeout-ms` (health wait per container, default 120 s).
+  Home resolution is the store's (`store/*home*`, `$DELIBERATOR_HOME`). `-main`: `up|status|down
+  [--ws W]` (the `bb runtime:*` tasks)."
+  (:require [clojure.data.json :as json]
+            [clojure.string :as str]
+            [clojure.walk :as walk]
+            [deliberator.podman :as podman]
+            [deliberator.store :as store])
+  (:import (java.net InetSocketAddress Socket URI)
+           (java.net.http HttpClient HttpClient$Version HttpRequest HttpResponse$BodyHandlers)
+           (java.nio.charset StandardCharsets)
+           (java.time Duration Instant)))
+
+(def default-timeout-ms 120000)
+
+(defn default-config
+  "The `runtime.edn` written on first `ensure!`."
+  []
+  {:podman {:endpoint (podman/default-endpoint)}
+   :network "deliberator"
+   :containers
+   {:floci {:image "docker.io/floci/floci:2.3.0"
+            :ports {4566 4566}
+            :env {"FLOCI_SERVICES_ECS_MOCK" "true"
+                  "FLOCI_HOSTNAME" "localhost"
+                  "FLOCI_BASE_URL" "http://localhost:{{port:4566}}"
+                  "FLOCI_SERVICES_DOCKER_NETWORK" "{{network}}"
+                  "FLOCI_SERVICES_LAMBDA_DOCKER_HOST_OVERRIDE" "{{name}}"}
+            :podman-socket true}
+    :postgres {:image "docker.io/library/postgres:17"
+               :ports {5432 5432}
+               :env {"POSTGRES_USER" "deliberator"
+                     "POSTGRES_PASSWORD" "deliberator"
+                     "POSTGRES_DB" "deliberator"}}}})
+
+(defn- emit [sink m] (when sink (sink m)))
+
+;; ---------------------------------------------------------------------------------------------
+;; Desired state
+
+(defn config-path [ws] (store/path ws "runtime.edn"))
+
+(defn read-config
+  "The workspace's `runtime.edn`, nil when absent."
+  [ws]
+  (store/read-edn (config-path ws)))
+
+(defn- load-config! [ws sink]
+  (or (read-config ws)
+      (let [cfg (default-config)]
+        (store/write-edn! (config-path ws) cfg)
+        (emit sink {:event "runtime.config-created" :path (str (config-path ws))})
+        cfg)))
+
+(defn role-name
+  "Role keyword -> label value: `:floci` -> \"floci\", `:service/a` -> \"service-a\"."
+  [k]
+  (str/replace (subs (str k) 1) "/" "-"))
+
+(defn- template [s {:keys [ports network name role]}]
+  (-> (str s)
+      (str/replace #"\{\{port:(\d+)\}\}" (fn [[_ cp]] (str (get ports (Long/parseLong cp) cp))))
+      (str/replace "{{network}}" network)
+      (str/replace "{{name}}" name)
+      (str/replace "{{role}}" role)))
+
+(defn- sorted-deep [x]
+  (walk/postwalk (fn [v] (if (map? v) (into (sorted-map-by #(compare (pr-str %1) (pr-str %2))) v) v)) x))
+
+(defn desired
+  "One container of the config resolved into what will be created:
+  `{:role :name :image :ports {cp hp} :host-ip :env :command :mounts :health :podman-socket :hash}`.
+  `:hash` covers everything that would change the container."
+  [ws cfg role spec]
+  (when-not (:image spec)
+    (throw (ex-info (str "runtime.edn: " role " has no :image") {:type :runtime/invalid-config :role role})))
+  (when (:from spec)
+    (throw (ex-info (str "runtime.edn: " role " uses :from (service containers arrive with the estate)")
+                    {:type :runtime/invalid-config :role role})))
+  (let [rn (role-name role)
+        network (:network cfg)
+        name (or (:name spec) (str "deliberator-" rn))
+        ports (into (sorted-map) (:ports spec))
+        ctx {:ports ports :network network :name name :role rn}
+        mounts (vec (concat (:mounts spec)
+                            (when-let [init (:init spec)]
+                              [{:source (if (str/starts-with? (str init) "/") (str init) (str (store/path ws init)))
+                                :destination "/docker-entrypoint-initdb.d" :options ["ro" "z"]}])))
+        d {:role rn :name name :image (:image spec) :ports ports
+           :host-ip (or (:host-ip spec) "127.0.0.1")
+           :env (into (sorted-map) (for [[k v] (:env spec)] [(str (clojure.core/name k)) (template v ctx)]))
+           :command (:command spec) :mounts mounts :network network
+           :health (:health spec) :podman-socket (:podman-socket spec)}]
+    (assoc d :hash (subs (store/sha256 (.getBytes ^String (pr-str (sorted-deep (dissoc d :health))) StandardCharsets/UTF_8)) 0 16))))
+
+(defn desired-all [ws cfg]
+  (mapv (fn [[role spec]] (desired ws cfg role spec)) (sort-by (comp str key) (:containers cfg))))
+
+(defn- container-spec
+  "The libpod creation body for `d`."
+  [ws d socket-path]
+  {"name" (:name d)
+   "image" (:image d)
+   "labels" {"deliberator.workspace" (store/ws-name ws) "deliberator.role" (:role d) "deliberator.spec" (:hash d)}
+   "env" (:env d)
+   "command" (:command d)
+   "netns" {"nsmode" "bridge"}
+   "Networks" {(:network d) {}}
+   "log_configuration" {"driver" "k8s-file"}
+   "portmappings" (vec (for [[cp hp] (:ports d)]
+                         {"container_port" cp "host_port" hp "host_ip" (:host-ip d) "protocol" "tcp"}))
+   "mounts" (vec (concat (for [{:keys [source destination options]} (:mounts d)]
+                           {"type" "bind" "source" (str source) "destination" destination "options" (vec options)})
+                         (when socket-path
+                           [{"type" "bind" "source" socket-path "destination" "/var/run/docker.sock" "options" ["z"]}])))})
+
+;; ---------------------------------------------------------------------------------------------
+;; Health
+
+(defn- probe-host [c]
+  (let [ep (podman/parse-endpoint (:endpoint c))]
+    (if (= :tcp (:scheme ep)) (:host ep) "127.0.0.1")))
+
+(defn- default-health [d]
+  (let [r (:role d)]
+    (cond
+      (= r "floci") {:http "/_floci/health" :port 4566}
+      (= r "postgres") {:exec ["pg_isready" "-U" (get (:env d) "POSTGRES_USER" "postgres")]}
+      (str/starts-with? r "service-") {:http "/actuator/health"}
+      :else nil)))
+
+(defonce ^:private http-client (delay (-> (HttpClient/newBuilder) (.version HttpClient$Version/HTTP_1_1)
+                                   (.connectTimeout (Duration/ofSeconds 2)) (.build))))
+
+(defn- http-probe [c ws d {:keys [http port]}]
+  (let [cp (or port (first (keys (:ports d))))
+        hp (get (:ports d) cp)
+        url (str "http://" (probe-host c) ":" hp http)]
+    (try
+      (let [resp (.send ^HttpClient @http-client (-> (HttpRequest/newBuilder (URI. url)) (.timeout (Duration/ofSeconds 3)) .build)
+                        (HttpResponse$BodyHandlers/ofByteArray))
+            body ^bytes (.body resp)
+            status (.statusCode resp)]
+        (when (pos? (alength body))
+          (store/raw-put! ws body {:source :http :op (str "GET " url) :env nil :at (store/now)
+                                   :content-type (or (.orElse (.firstValue (.headers resp) "content-type") nil) "application/octet-stream")}))
+        (if-not (<= 200 status 299)
+          {:health :unhealthy :detail (str "HTTP " status)}
+          (let [j (try (json/read-str (String. body StandardCharsets/UTF_8)) (catch Exception _ nil))
+                services (when (map? j) (get j "services"))
+                down (when (map? services) (sort (for [[k v] services :when (not= "running" v)] (str k ":" v))))]
+            (cond
+              (seq down) {:health :unhealthy :detail (str "not running: " (str/join " " down))}
+              (map? services) {:health :healthy :detail (str (count services) " services running")}
+              :else {:health :healthy :detail (str "HTTP " status)}))))
+      (catch java.io.IOException e
+        {:health :unhealthy :detail (str "no answer on " url ": " (.getMessage e))}))))
+
+(defn- exec-probe [c d {:keys [exec]}]
+  (try
+    (let [r (podman/exec! c (:name d) exec)]
+      (if (zero? (:exit r))
+        {:health :healthy :detail (str/trim (str (:stdout r)))}
+        {:health :unhealthy :detail (str "exit " (:exit r) " " (str/trim (str (:stdout r) (:stderr r))))}))
+    (catch clojure.lang.ExceptionInfo e
+      {:health :unhealthy :detail (ex-message e)})))
+
+(defn probe
+  "Health of the running container `d`: `{:health :healthy|:unhealthy :detail str}`."
+  [c ws d]
+  (let [h (or (:health d) (default-health d))]
+    (cond
+      (:http h) (http-probe c ws d h)
+      (:exec h) (exec-probe c d h)
+      :else {:health :healthy :detail "running (no probe)"})))
+
+;; ---------------------------------------------------------------------------------------------
+;; Reconciling
+
+(defn- label [ctr k] (get-in ctr [:Labels (keyword k)]))
+
+(defn- ws-labels [ws] {"deliberator.workspace" (store/ws-name ws)})
+
+(defn- connect-client [ws cfg]
+  (let [endpoint (get-in cfg [:podman :endpoint] (podman/default-endpoint))
+        c (podman/client endpoint :ws (store/ws-name ws))]
+    (when-not (podman/available? c)
+      (throw (ex-info (str "podman is not answering at " endpoint
+                           " (unix: systemctl --user enable --now podman.socket)")
+                      {:type :runtime/podman-unreachable :endpoint endpoint
+                       :hint "systemctl --user enable --now podman.socket"})))
+    c))
+
+(defn- port-open? [host port]
+  (try (with-open [s (Socket.)] (.connect s (InetSocketAddress. ^String host (int port)) 300) true)
+       (catch java.io.IOException _ false)))
+
+(defn- port-holder [c port]
+  (some (fn [ctr] (when (some #(= port (:host_port %)) (:Ports ctr)) (first (:Names ctr))))
+        (podman/list-containers c :all false)))
+
+(defn- check-ports! [c d]
+  (doseq [[cp hp] (:ports d)]
+    (when (port-open? (probe-host c) hp)
+      (let [holder (port-holder c hp)]
+        (throw (ex-info (str "host port " hp " (" (:role d) " :" cp ") is already in use"
+                             (if holder (str " by container " holder) " by another process")
+                             "; set another host port in runtime.edn, e.g. :ports {" cp " " (+ 10000 hp) "}"
+                             " (Floci's advertised URLs follow it)")
+                        {:type :runtime/port-conflict :role (:role d) :port hp :container-port cp
+                         :held-by holder :config "runtime.edn"}))))))
+
+(defn- start-container! [c d id]
+  (try (podman/start! c id)
+       (catch clojure.lang.ExceptionInfo e
+         (if (re-find #"(?i)address already in use|port is already allocated|bind" (str (ex-message e)))
+           (throw (ex-info (str "starting " (:role d) " failed on a host port: " (ex-message e))
+                           {:type :runtime/port-conflict :role (:role d) :ports (:ports d)} e))
+           (throw e)))))
+
+(defn- reconcile! [c ws d socket-path sink]
+  (let [mine (podman/list-containers c :all true :labels (assoc (ws-labels ws) "deliberator.role" (:role d)))
+        [keep & extra] (sort-by #(not= "running" (:State %)) mine)]
+    (doseq [x extra] (podman/remove! c (:Id x)))
+    (cond
+      (and keep (= (:hash d) (label keep "deliberator.spec")))
+      (if (= "running" (:State keep))
+        {:action :kept :id (:Id keep)}
+        (do (emit sink {:event "runtime.starting" :role (:role d) :name (:name d) :action :restart})
+            (check-ports! c d)
+            (start-container! c d (:Id keep))
+            {:action :restarted :id (:Id keep)}))
+      :else
+      (do
+        (when keep
+          (emit sink {:event "runtime.recreating" :role (:role d) :reason "runtime.edn changed"})
+          (podman/remove! c (:Id keep)))
+        (when-let [other (podman/inspect c (:name d))]
+          (throw (ex-info (str "a container named " (:name d) " exists but is not this workspace's "
+                               (:role d) " (workspace=" (pr-str (get-in other [:Config :Labels :deliberator.workspace]))
+                               "); set :name for this role in runtime.edn")
+                          {:type :runtime/name-conflict :name (:name d) :role (:role d)})))
+        (check-ports! c d)
+        (emit sink {:event "runtime.starting" :role (:role d) :name (:name d) :action :create})
+        (let [{:keys [id]} (podman/create! c (container-spec ws d socket-path))]
+          (start-container! c d id)
+          {:action (if keep :recreated :created) :id id})))))
+
+(defn- ensure-image! [c d sink]
+  (when-not (podman/image-exists? c (:image d))
+    (emit sink {:event "runtime.pulling" :role (:role d) :image (:image d)})
+    (podman/pull! c (:image d)
+                  :on-event (fn [e] (when-let [s (or (:stream e) (:error e))]
+                                      (emit sink {:event "runtime.pulling" :role (:role d) :image (:image d)
+                                                  :detail (str/trim s)}))))))
+
+(defn- await-healthy! [c ws d id sink timeout-ms]
+  (let [t0 (System/nanoTime) deadline (+ t0 (* 1000000 timeout-ms))]
+    (loop [last nil]
+      (let [state (some-> (podman/inspect c id) (get-in [:State :Status]))]
+        (when-not (= "running" state)
+          (let [tail (try (mapv :text (doall (podman/logs c id :tail 20))) (catch Exception _ []))]
+            (throw (ex-info (str (:role d) " container is " (or state "gone") " while starting; last log lines:\n"
+                                 (str/join "\n" tail))
+                            {:type :runtime/container-exited :role (:role d) :state state :tail tail})))))
+      (let [r (probe c ws d)]
+        (cond
+          (= :healthy (:health r))
+          (emit sink {:event "runtime.ready" :role (:role d) :name (:name d) :detail (:detail r)
+                      :ms (quot (- (System/nanoTime) t0) 1000000)})
+          (> (System/nanoTime) deadline)
+          (throw (ex-info (str (:role d) " not healthy after " timeout-ms " ms: " (:detail r))
+                          {:type :runtime/unhealthy :role (:role d) :detail (:detail r)}))
+          :else (do (Thread/sleep 500) (recur r)))))))
+
+;; ---------------------------------------------------------------------------------------------
+;; Public API
+
+(declare status)
+
+(defn ensure!
+  "Reconciles the runtime of `ws` with its `runtime.edn` and waits until it is healthy. Idempotent.
+  -> `(status ws)`."
+  ([ws] (ensure! ws {}))
+  ([ws {:keys [sink timeout-ms] :or {timeout-ms default-timeout-ms}}]
+   (let [cfg (load-config! ws sink)
+         ds (desired-all ws cfg)
+         c (connect-client ws cfg)
+         socket-path (delay (or (podman/socket-path c)
+                                (throw (ex-info "cannot tell the Podman socket path for this endpoint; give :podman-socket \"/path/to/podman.sock\" in runtime.edn"
+                                                {:type :runtime/no-socket-path}))))]
+     (podman/ensure-network! c (:network cfg))
+     (doseq [d ds] (ensure-image! c d sink))
+     (let [started (doall (for [d ds]
+                            (assoc (reconcile! c ws d (when (:podman-socket d)
+                                                        (if (string? (:podman-socket d)) (:podman-socket d) @socket-path))
+                                               sink)
+                                   :d d)))]
+       (doseq [{:keys [d id]} started]
+         (await-healthy! c ws d id sink timeout-ms)))
+     (status ws))))
+
+(defn- since-instant [ctr]
+  (let [s (:StartedAt ctr)]
+    (when (and (number? s) (pos? s)) (Instant/ofEpochSecond s))))
+
+(defn status
+  "State of the workspace's runtime without changing it (see the namespace docstring)."
+  ([ws] (status ws {}))
+  ([ws _opts]
+   (let [cfg (read-config ws)
+         endpoint (get-in cfg [:podman :endpoint] (podman/default-endpoint))
+         c (podman/client endpoint :ws (store/ws-name ws))]
+     (if-not (podman/available? c)
+       {:ws (store/ws-name ws) :podman {:endpoint endpoint :reachable false :hint "systemctl --user enable --now podman.socket"}
+        :containers []}
+       (let [ds (when cfg (into {} (map (juxt :role identity)) (desired-all ws cfg)))
+             ctrs (podman/list-containers c :all true :labels (ws-labels ws))
+             rows (for [ctr ctrs
+                        :let [role (label ctr "deliberator.role")
+                              d (get ds role)
+                              state (keyword (:State ctr))
+                              pr (when (and d (= :running state)) (probe c (store/ws-name ws) d))]]
+                    (cond-> {:role role :name (first (:Names ctr)) :id (subs (:Id ctr) 0 12) :image (:Image ctr)
+                             :state state :since (since-instant ctr)
+                             :health (:health pr) :detail (:detail pr)
+                             :ports (into (sorted-map) (for [p (:Ports ctr)] [(:container_port p) (:host_port p)]))}
+                      d (assoc :drift? (not= (:hash d) (label ctr "deliberator.spec")))))
+             present (set (map :role rows))
+             absent (for [[role d] ds :when (not (present role))]
+                      {:role role :name (:name d) :image (:image d) :state :absent :ports (:ports d)})
+             v (podman/info c)]
+         {:ws (store/ws-name ws)
+          :podman {:endpoint endpoint :reachable true :version (get-in v [:version :Version])
+                   :rootless (get-in v [:host :security :rootless])}
+          :containers (vec (sort-by :role (concat rows absent)))})))))
+
+(defn down!
+  "Removes the containers labelled with workspace `ws` (and only those). The network stays.
+  -> `{:removed [{:role :name}]}`."
+  ([ws] (down! ws {}))
+  ([ws {:keys [sink]}]
+   (let [cfg (read-config ws)
+         c (connect-client ws cfg)
+         ctrs (podman/list-containers c :all true :labels (ws-labels ws))]
+     {:removed (vec (for [ctr ctrs]
+                      (do (podman/remove! c (:Id ctr))
+                          (emit sink {:event "runtime.removed" :role (label ctr "deliberator.role") :name (first (:Names ctr))})
+                          {:role (label ctr "deliberator.role") :name (first (:Names ctr))})))})))
+
+(defn logs
+  "Log events of `role` of `ws` (`{:stream :at :text}`), mirrored to `logs/services/<role>/<date>.log`.
+  `opts`: `:since` Instant, `:follow`, `:tail`."
+  [ws role opts]
+  (let [role (if (keyword? role) (role-name role) (str role))
+        c (connect-client ws (read-config ws))
+        ctr (first (podman/list-containers c :all true :labels (assoc (ws-labels ws) "deliberator.role" role)))]
+    (when-not ctr
+      (throw (ex-info (str "no container for role " role " in workspace " (store/ws-name ws))
+                      {:type :runtime/no-such-role :role role})))
+    (apply podman/logs c (:Id ctr) :mirror [(store/ws-name ws) role]
+           (mapcat identity (select-keys opts [:since :follow :tail :until])))))
+
+;; ---------------------------------------------------------------------------------------------
+;; Command line
+
+(defn- print-event [{:keys [event role image detail name ms]}]
+  (println (str/join " " (remove nil? [event role (or name image) detail (when ms (str ms "ms"))]))))
+
+(defn- print-status [{:keys [ws podman containers]}]
+  (println (str "workspace " ws " podman " (:endpoint podman)
+                (if (:reachable podman) (str " " (:version podman)) " UNREACHABLE")))
+  (doseq [{:keys [role name id state since health detail ports drift?]} containers]
+    (println (format "  %-10s %-22s %-8s %-10s %s%s%s"
+                     role name (clojure.core/name state) (if health (clojure.core/name health) "-")
+                     (str/join "," (for [[cp hp] ports] (str hp "->" cp)))
+                     (if drift? "  DRIFT (runtime.edn changed)" "")
+                     (if detail (str "  " detail) "")))))
+
+(defn -main [& args]
+  (let [[cmd & more] args
+        ws (or (second (drop-while #(not= "--ws" %) more)) "default")
+        opts {:sink print-event}
+        code (try
+               (case cmd
+                 "up" (print-status (ensure! ws opts))
+                 "status" (print-status (status ws opts))
+                 "down" (doseq [r (:removed (down! ws opts))] (println "removed" (:name r)))
+                 (do (println "usage: runtime up|status|down [--ws NAME]") (throw (ex-info "usage" {:type :usage}))))
+               0
+               (catch clojure.lang.ExceptionInfo e
+                 (binding [*out* *err*]
+                   (println "runtime" cmd "failed:" (ex-message e))
+                   (when-let [h (:hint (ex-data e))] (println "  hint:" h)))
+                 1))]
+    (shutdown-agents)
+    (System/exit code)))
