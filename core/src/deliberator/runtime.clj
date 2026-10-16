@@ -484,16 +484,27 @@
       debug (assoc :debug debug)
       java-opts (assoc :java-opts (vec java-opts)))))
 
+(defn- db-url
+  "The JDBC URL `url` on host port `port`, with the Postgres credentials of the runtime's `:postgres`
+  env (`POSTGRES_USER`, `POSTGRES_PASSWORD`) appended as `user=`/`password=` when the URL has none."
+  [url port pg-env]
+  (let [url (str/replace url #"//localhost:\d+/" (str "//localhost:" port "/"))
+        user (get pg-env "POSTGRES_USER") pw (get pg-env "POSTGRES_PASSWORD")]
+    (if (or (str/includes? url "user=") (not user))
+      url
+      (str url (if (str/includes? url "?") "&" "?") "user=" user (when pw (str "&password=" pw))))))
+
 (defn sync-local-env!
   "Points the workspace's `local` environment at the host ports of `cfg` (Floci endpoint, Postgres
-  and service targets), leaving every other field alone."
+  and service targets), leaving every other field alone. `db/main` carries the runtime's Postgres
+  credentials (`?user=&password=`) so the `sql` kind can connect."
   [ws cfg]
   (let [hp (fn [role cp] (get-in cfg [:containers role :ports cp]))
         e (env/load ws "local")
         e (cond-> e
             (hp :floci 4566) (assoc-in [:aws :endpoint] (str "http://localhost:" (hp :floci 4566)))
-            (and (hp :postgres 5432) (get-in e [:targets :db/main]))
-            (update-in [:targets :db/main] str/replace #"//localhost:\d+/" (str "//localhost:" (hp :postgres 5432) "/"))
+            (and (hp :postgres 5432) (string? (get-in e [:targets :db/main])))
+            (update-in [:targets :db/main] #(db-url % (hp :postgres 5432) (get-in cfg [:containers :postgres :env])))
             (hp :service/a 8081) (assoc-in [:targets :service/a] (str "http://localhost:" (hp :service/a 8081)))
             (hp :service/b 8082) (assoc-in [:targets :service/b] (str "http://localhost:" (hp :service/b 8082))))]
     (env/save! ws e)))
