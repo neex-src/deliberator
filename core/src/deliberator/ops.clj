@@ -4,7 +4,7 @@
   they validate the arguments against the schema below, call the namespace that owns the behaviour
   and return a small map (summaries plus paths; full data is on disk). Wire format: see
   `deliberator.protocol`. `(call! op ctx args)` is the one entry point; `ctx` is the request context
-  of the protocol plus `:daemon` (`{:version :pid :home :endpoint :runs :checked}`).
+  of the protocol plus `:daemon` (`{:version :pid :home :endpoint :runs :checked :stop-later!}`).
 
   Argument schema: `{name {:type :required :doc :default}}`, types `string int number bool string[]
   int[] object any`. Unknown, missing or ill-typed arguments are a `bad-args` error naming the
@@ -16,8 +16,8 @@
 
   The M1 operations (events in brackets are streamed before the terminal line):
 
-    hello client version                           -> {version pid home endpoint protocol compatible}
-    op.describe                                    -> [{op class doc args events}]
+    hello client version                           -> {version pid home endpoint protocol runs compatible}
+    op.describe                                    -> [{op class doc args order events}]   (order = argument names as declared)
     workspace.show ws                              -> {ws path workspace environments}
     session.start key* title ws                    -> {session path}   (reopens an existing key)
     session.end key ws                             -> {session path}   (default: the current session)
@@ -26,6 +26,9 @@
     env.list ws                                    -> {environments [{name kind account ...}]}
     env.describe name* ws                          -> {env path}
     env.check name* ws                             -> {ok account expected targets [error]}
+    daemon.stop                                    -> {stopping pid runs}   (the daemon exits a moment later)
+    runtime.sync-env ws                            -> {ws path}
+    runtime.adopt file* ws                         -> {ws path roles}
     runtime.ensure ws infra-only timeout-ms        -> status   [runtime.pulling runtime.starting runtime.ready]
     runtime.status ws                              -> {ws podman containers}
     runtime.down ws                                -> {removed}  [runtime.removed]
@@ -44,7 +47,8 @@
   `confirm-required` carrying `token`, `summary`, `step`, `confirmations` and the finished run's
   `result`; re-running with `confirm` set to the token lets that exact request through.
   A run on a `:remote` environment first checks the account once per session (`account-mismatch`)."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [deliberator.aws :as aws]
             [deliberator.env :as env]
@@ -97,6 +101,11 @@
 
 (def ^:private ws-arg {:type :string :default "default" :doc "workspace name"})
 
+(defn- arg-order
+  "Argument names of `schema` in declared order (`ws-schema` keeps it in metadata)."
+  [schema]
+  (mapv name (or (:order (meta schema)) (keys schema))))
+
 (defn- describe-args [schema]
   (into (sorted-map)
         (for [[k {:keys [type required doc default]}] schema]
@@ -148,16 +157,19 @@
 
 (defn- hello [ctx {:keys [version]}]
   (let [d (:daemon ctx)]
-    (cond-> {:version (:version d) :pid (:pid d) :home (str (:home d)) :endpoint (:endpoint d) :protocol 1}
+    (cond-> {:version (:version d) :pid (:pid d) :home (str (:home d)) :endpoint (:endpoint d) :protocol 1
+             :runs (count @(:runs d))}
       version (assoc :compatible (= version (:version d))))))
 
 (declare table)
 
 (defn describe
-  "The table as data: `[{:op :class :doc :args :events}]`, sorted by op."
+  "The table as data: `[{:op :class :doc :args :order :events}]`, sorted by op; `:order` lists the
+  argument names in declared order (required ones are the positionals of the CLI, in that order)."
   []
   (vec (for [[op {:keys [class doc args events]}] (sort-by key table)]
-         {:op op :class (name class) :doc doc :args (describe-args args) :events (vec events)})))
+         {:op op :class (name class) :doc doc :args (describe-args args) :order (arg-order args)
+          :events (vec events)})))
 
 (defn- workspace-show [_ args]
   (let [ws (ws-of args)]
@@ -222,6 +234,19 @@
 (defn- runtime-status [_ args] (runtime/status (ws-of args)))
 
 (defn- runtime-down [ctx args] (runtime/down! (ws-of args) {:sink (:emit! ctx)}))
+
+(defn- runtime-sync-env [_ args] (runtime/sync-env! (ws-of args)))
+
+(defn- runtime-adopt [_ {:keys [file] :as args}]
+  (let [cfg (runtime/adopt-taskdefs! (ws-of args) (clojure.edn/read-string (slurp (str file))))]
+    {:ws (store/ws-name (ws-of args)) :path (str (runtime/config-path (ws-of args)))
+     :roles (mapv #(subs (str %) 1) (sort (keys (:containers cfg))))}))
+
+(defn- daemon-stop [ctx _]
+  (let [d (:daemon ctx)
+        ids (vec (sort (keys @(:runs d))))]
+    ((:stop-later! d))
+    {:stopping true :pid (:pid d) :runs ids}))
 
 (defn- runtime-logs [ctx {:keys [role since follow tail] :as args}]
   (let [ws (ws-of args)
@@ -407,7 +432,11 @@
 
 ;; the table -----------------------------------------------------------------------------------
 
-(defn- ws-schema [& more] (merge {:ws ws-arg} (apply hash-map more)))
+(defn- ws-schema
+  "An argument schema in declared order: the given `name spec` pairs, then `ws`."
+  [& kvs]
+  (let [pairs (concat (partition 2 kvs) [[:ws ws-arg]])]
+    (with-meta (apply array-map (mapcat identity pairs)) {:order (mapv first pairs)})))
 
 (def table
   "`op` -> `{:fn (fn [ctx args]) :args schema :class :read|:mutate :doc :events}`."
@@ -417,6 +446,8 @@
                    :version {:type :string :doc "core version the client expects; the answer says whether it matches"}}}
    "op.describe" {:fn (fn [_ _] (describe)) :class :read :args {}
                   :doc "Every operation with its class, documentation and argument schema."}
+   "daemon.stop" {:fn daemon-stop :class :mutate :args {}
+                  :doc "Stops the daemon gracefully: runs in flight are cancelled and finalised, endpoint, socket and lock are removed, the process exits. The answer comes first; the stop follows a moment later."}
    "workspace.show" {:fn workspace-show :class :read :args (ws-schema)
                      :doc "The workspace record, its path and its environments."}
    "session.start" {:fn session-start :class :mutate
@@ -443,6 +474,11 @@
                      :events ["runtime.pulling" "runtime.starting" "runtime.ready"]
                      :args (ws-schema :infra-only {:type :bool :doc "skip the service containers"}
                                       :timeout-ms {:type :int :doc "health wait per container"})}
+   "runtime.sync-env" {:fn runtime-sync-env :class :mutate :args (ws-schema)
+                       :doc "Writes the default runtime.edn when absent and points the workspace's local environment at its host ports and container names."}
+   "runtime.adopt" {:fn runtime-adopt :class :mutate
+                    :doc "Writes the service roles of an ECS task-definition descriptor (EDN file, see runtime/adopt-taskdefs!) into the workspace's runtime.edn."
+                    :args (ws-schema :file {:type :string :required true :doc "absolute path of the descriptor.edn"})}
    "runtime.status" {:fn runtime-status :class :read :args (ws-schema)
                      :doc "Containers of the workspace's runtime with state and health; changes nothing."}
    "runtime.down" {:fn runtime-down :class :mutate :args (ws-schema)

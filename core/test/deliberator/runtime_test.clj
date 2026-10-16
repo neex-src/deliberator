@@ -39,9 +39,9 @@
   (let [cfg (runtime/default-config)
         [floci postgres] (runtime/desired-all "w" cfg)]
     (is (= ["floci" "postgres"] (map :role [floci postgres])))
-    (is (= "deliberator-floci" (:name floci)))
+    (is (= "deliberator-w-floci" (:name floci)))
     (is (= "http://localhost:4566" (get-in floci [:env "FLOCI_BASE_URL"])))
-    (is (= "deliberator-floci" (get-in floci [:env "FLOCI_SERVICES_LAMBDA_DOCKER_HOST_OVERRIDE"])))
+    (is (= "deliberator-w-floci" (get-in floci [:env "FLOCI_SERVICES_LAMBDA_DOCKER_HOST_OVERRIDE"])))
     (is (= "true" (get-in floci [:env "FLOCI_SERVICES_ECS_MOCK"])))
     (is (= "docker.io/floci/floci:2.3.0" (:image floci)))
     (is (= "docker.io/library/postgres:17" (:image postgres)))
@@ -171,3 +171,39 @@
            (finally
              (try (runtime/down! ws) (catch Exception _))
              (podman/remove-network! c (:network cfg)))))))))
+
+(deftest two-workspaces-side-by-side-do-not-collide-by-name
+  (when-podman
+   (tu/with-temp-home
+     (let [id (sup/rand-id)
+           wa (str "rta-" id) wb (str "rtb-" id)
+           net (str "deliberator-test-" id)
+           cfg (fn [port] (-> (runtime/default-config)
+                              (assoc-in [:podman :endpoint] (sup/endpoint))
+                              (assoc :network net)
+                              (update :containers dissoc :floci)
+                              (assoc-in [:containers :postgres :ports] {5432 port})))
+           c (podman/client (sup/endpoint) :ws wa)]
+       (write-config! wa (cfg (sup/free-port)))
+       (write-config! wb (cfg (sup/free-port)))
+       (try
+         (let [sa (runtime/ensure! wa) sb (runtime/ensure! wb)
+               na (:name (first (:containers sa))) nb (:name (first (:containers sb)))]
+           (is (= (str "deliberator-" wa "-postgres") na))
+           (is (= (str "deliberator-" wb "-postgres") nb))
+           (is (every? #(= :healthy (:health %)) (concat (:containers sa) (:containers sb))))
+           (is (= [:running] (map :state (:containers (runtime/status wa)))))
+           (testing "down! of one workspace leaves the other"
+             (runtime/down! wa)
+             (is (= [:absent] (map :state (:containers (runtime/status wa)))))
+             (is (= [:running] (map :state (:containers (runtime/status wb)))))))
+         (finally
+           (try (runtime/down! wa) (catch Exception _))
+           (try (runtime/down! wb) (catch Exception _))
+           (podman/remove-network! c net)))))))
+
+(deftest container-names-carry-the-workspace
+  (is (= "deliberator-w1-service-a" (store/container-name "w1" "service-a")))
+  (is (= "deliberator-default-floci" (:name (first (runtime/desired-all "default" (runtime/default-config))))))
+  (is (= "deliberator-x-floci" (:name (first (runtime/desired-all "x" (runtime/default-config))))))
+  (is (= "custom" (:name (first (runtime/desired-all "x" (assoc-in (runtime/default-config) [:containers :floci :name] "custom")))))))

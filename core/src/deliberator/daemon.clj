@@ -14,7 +14,7 @@
   `-main` options: `--home DIR` (default `$DELIBERATOR_HOME`, else the store's default),
   `--idle-minutes N` (default 240; shuts down when no request has been served for that long and none
   is running; 0 disables), `--tcp [PORT]` (0 or no port: any free port), `--version`. It prints
-  `deliberatord <version> listening on <endpoint>` and blocks until stopped (idle, SIGTERM, `stop!`).
+  `deliberatord <version> listening on <endpoint>` and blocks until stopped (idle, SIGTERM, `stop!`, the `daemon.stop` op).
   Exit codes: 0 stopped, 2 usage, 3 another daemon owns the home, 1 anything else.
 
   `(start! opts)` is the same without the process: `{:home :idle-minutes :tcp}` -> a handle
@@ -158,8 +158,11 @@
               last-activity (atom (System/currentTimeMillis))
               inflight (atom 0)
               runs (atom {})
+              stop-ref (atom nil)
               dstate {:version (version) :pid (.pid (ProcessHandle/current)) :home home
-                      :endpoint endpoint :runs runs :checked (atom #{})}
+                      :endpoint endpoint :runs runs :checked (atom #{})
+                      ;; `daemon.stop`: the same `stop!`, started after the answer has been written
+                      :stop-later! (fn [] (protocol/spawn! (fn [] (Thread/sleep 150) (@stop-ref :requested))))}
               stopping (atom false)
               server (atom nil)
               stop! (fn stop!
@@ -194,6 +197,7 @@
                                   (done (str "error " (:type (ops/error-map e))))
                                   (when-not (ex-data e) (log "internal error in" op ":" e))
                                   (throw e)))))]
+          (reset! stop-ref stop!)
           (reset! server (binding [store/*home* home]
                            (protocol/listen! ssc {:dispatch dispatch :error-fn ops/error-map :log log})))
           (store/write-bytes-atomic! (.resolve dir "endpoint") (.getBytes (str endpoint "\n") StandardCharsets/UTF_8))

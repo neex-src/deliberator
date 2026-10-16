@@ -3,7 +3,7 @@
   with `args` = `{name {type required doc default}}`). Rules:
   - the op is `<area>.<verb>` from the first two words, else the first word alone (`hello`);
     `run` is sugar for `scenario.run`;
-  - the remaining words are positionals; they fill the op's required args sorted by name;
+  - the remaining words are positionals; they fill the op's required args in the order `op.describe` declares (`order`);
   - `--key value` or `--key=value` sets any arg of the op; a bool arg may omit its value;
   - values are typed by the schema: int, number, bool, string[] and int[] (comma-separated),
     object (JSON), any (JSON when it parses, else string)."
@@ -46,10 +46,15 @@
       "any" (try (json/parse-string s) (catch Exception _ s))
       s)))
 
-(defn required-order
-  "Names of the required args, sorted: the positional slots."
+(defn arg-order
+  "All arg names of the op in declared order (`:order` of `op.describe`)."
   [entry]
-  (->> (:args entry) (filter (comp :required val)) (map key) (map name) sort vec))
+  (vec (or (:order entry) (sort (map name (keys (:args entry)))))))
+
+(defn required-order
+  "Names of the required args in declared order: the positional slots."
+  [entry]
+  (vec (filter #(:required (get (:args entry) (keyword %))) (arg-order entry))))
 
 (defn parse
   "Maps `words` (after the op) onto args of `entry`. Throws a `bad-args` ex-info with `:cli true`."

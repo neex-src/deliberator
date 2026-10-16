@@ -1,7 +1,7 @@
 (ns dlb-test
   "Layer 4: `dlb` as a user runs it, against a real daemon started from the built jar by `dlb`
   itself on a short home under `cli/target/th/` (socket paths are limited to ~104 bytes). Every
-  daemon started here is stopped by SIGTERM to the pid in its lock file;
+  daemon started here is stopped by `dlb daemon stop` (SIGTERM to the pid in its lock file is the fallback);
   `DLB_DAEMON_ARGS=--idle-minutes 0.2` is the safety net if the tests die first."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
@@ -34,8 +34,8 @@
 
 (defn- alive? [pid] (zero? (:exit (p/shell {:out :string :err :string :continue true} "kill" "-0" (str pid)))))
 
-(defn stop-daemon!
-  "SIGTERM to the pid of the daemon of `home` (its shutdown hook stops it cleanly), then waits."
+(defn sigterm-daemon!
+  "SIGTERM to the pid of the daemon of `home` (its shutdown hook stops it cleanly), then waits; kill -9 last."
   [home]
   (when-let [pid (lock-pid home)]
     (when (alive? pid)
@@ -43,6 +43,12 @@
       (loop [n 0]
         (when (and (alive? pid) (< n 100)) (Thread/sleep 100) (recur (inc n))))
       (when (alive? pid) (p/shell {:continue true} "kill" "-9" (str pid))))))
+
+(defn stop-daemon!
+  "`dlb daemon stop` for the daemon of `home`; SIGTERM to the pid in the lock when that did not do it."
+  [home]
+  (dlb home "daemon" "stop")
+  (sigterm-daemon! home))
 
 (def ^:dynamic *home* nil)
 
@@ -59,13 +65,22 @@
 
 ;; arguments (in process) -------------------------------------------------------------------------
 
-(def fake {:op "x.y" :args {:key {:type "string" :required true :doc "k"}
+(def fake {:op "x.y" :order ["key" "other" "n" "f" "l" "o" "a"]
+           :args {:key {:type "string" :required true :doc "k"}
+                  :other {:type "string" :required true}
+                  :n {:type "int"} :f {:type "bool"} :l {:type "string[]"}
+                  :o {:type "object"} :a {:type "any"}}})
+
+(def fake-no-order {:op "x.y" :args {:key {:type "string" :required true :doc "k"}
                             :other {:type "string" :required true}
                             :n {:type "int"} :f {:type "bool"} :l {:type "string[]"}
                             :o {:type "object"} :a {:type "any"}}})
 
 (deftest arg-mapping
-  (is (= {:key "A" :other "B"} (args/parse fake ["A" "B"])) "positionals fill required args sorted by name: key, other")
+  (is (= {:key "A" :other "B"} (args/parse fake ["A" "B"])) "positionals fill required args in declared order: key, other")
+  (is (= {:other "A" :key "B"} (args/parse (assoc fake :order ["other" "key" "n" "f" "l" "o" "a"]) ["A" "B"]))
+      "the declared order decides, not the names")
+  (is (= {:key "A" :other "B"} (args/parse fake-no-order ["A" "B"])) "no order: sorted by name")
   (is (= {:key "A" :other "B" :n 5 :f true :l ["a" "b"] :o {"x" 1} :a 3}
          (args/parse fake ["A" "--n" "5" "--f" "--l" "a,b" "--o" "{\"x\":1}" "B" "--a=3"])))
   (is (= {:f false} (args/parse fake ["--f" "false"])))
@@ -78,7 +93,7 @@
 (deftest help-names-every-op
   (let [table (json/parse-string (:out (dlb *home* "help" "--json")) true)
         txt (:out (dlb *home* "help"))]
-    (is (= 22 (count table)))
+    (is (= 25 (count table)))
     (doseq [{:keys [op]} table]
       (is (str/includes? txt (str/replace op "." " ")) (str op " is in the help")))
     (is (= txt (:out (dlb *home*))) "no args = help")
@@ -109,6 +124,105 @@
           (is (or (nil? pid) (not (alive? pid))) "stopped by SIGTERM")
           (is (not (fs/exists? (fs/file h "daemon" "endpoint"))) "the endpoint file is removed at stop"))
         (fs/delete-tree h)))))
+
+(deftest positionals-follow-the-declared-order-of-the-real-ops
+  (let [table (json/parse-string (:out (dlb *home* "help" "--json")) true)
+        by (into {} (map (juxt :op identity)) table)]
+    (is (every? :order table))
+    (is (= ["a" "b" "session" "ws"] (:order (by "runs.diff"))))
+    (is (str/includes? (:out (dlb *home* "help" "runs" "diff")) "dlb runs diff <a> <b>"))
+    (is (str/includes? (:out (dlb *home* "help" "runtime" "logs")) "dlb runtime logs <role> [--since string] [--follow] [--tail int] [--ws string]"))
+    (is (str/includes? (:out (dlb *home* "help" "scenario" "run")) "dlb scenario run <path> [--env string]"))))
+
+(deftest daemon-status-and-stop
+  (let [h (new-home)]
+    (try
+      (let [r (dlb h "daemon" "status")]
+        (is (= 1 (:exit r)))
+        (is (str/includes? (:out r) "not running"))
+        (is (nil? (lock-pid h)) "status never starts a daemon"))
+      (is (zero? (:exit (dlb h "daemon" "stop"))) "stop with no daemon is fine")
+      (is (nil? (lock-pid h)) "stop never starts a daemon either")
+      (let [pid (get-in (json-line (:out (dlb h "hello" "--json"))) [:result :pid])
+            st (dlb h "daemon" "status")
+            js (json-line (:out (dlb h "daemon" "status" "--json")))]
+        (is (zero? (:exit st)))
+        (is (str/includes? (:out st) (str "pid: " pid)))
+        (is (true? (:running js)))
+        (is (= pid (:pid js)))
+        (let [r (dlb h "daemon" "stop")]
+          (is (zero? (:exit r)) (:err r))
+          (is (str/includes? (:out r) (str "daemon pid " pid " stopped"))))
+        (is (not (alive? pid)) "the process exited")
+        (is (not (fs/exists? (fs/file h "daemon" "endpoint"))))
+        (is (= 1 (:exit (dlb h "daemon" "status")))))
+      (finally (stop-daemon! h) (fs/delete-tree h)))))
+
+(deftest sigterm-still-stops-a-daemon
+  (let [h (new-home)]
+    (try
+      (let [pid (get-in (json-line (:out (dlb h "hello" "--json"))) [:result :pid])]
+        (sigterm-daemon! h)
+        (is (not (alive? pid)))
+        (is (not (fs/exists? (fs/file h "daemon" "endpoint")))))
+      (finally (stop-daemon! h) (fs/delete-tree h)))))
+
+(defn- jar-with-version
+  "A copy of the built jar under `dir` whose version.edn says `version`."
+  [dir version]
+  (let [src (str root "/core/target/deliberatord.jar")
+        dst (str dir "/daemon-" version ".jar")]
+    (with-open [zi (java.util.zip.ZipFile. src)
+                zo (java.util.zip.ZipOutputStream. (java.io.FileOutputStream. dst))]
+      (doseq [e (enumeration-seq (.entries zi))]
+        (.putNextEntry zo (java.util.zip.ZipEntry. (.getName e)))
+        (if (= "deliberator/version.edn" (.getName e))
+          (.write zo (.getBytes (str "{:version \"" version "\"}\n") "UTF-8"))
+          (with-open [in (.getInputStream zi e)] (.transferTo in zo)))
+        (.closeEntry zo)))
+    dst))
+
+(defn- dlb-jar [home jar & args]
+  (let [r (apply p/shell {:out :string :err :string :continue true
+                          :extra-env {"DELIBERATOR_HOME" home "DELIBERATOR_JAR" jar "DLB_DAEMON_ARGS" "--idle-minutes 0.2"}}
+                 dlb-bin args)]
+    (select-keys r [:exit :out :err])))
+
+(deftest an-older-daemon-is-replaced-a-newer-one-is-not
+  (let [h (new-home)
+        old (jar-with-version h "0.0.1-old")
+        new (jar-with-version h "99.0.0")
+        real (str root "/core/target/deliberatord.jar")]
+    (try
+      (let [old-pid (get-in (json-line (:out (dlb-jar h old "hello" "--json"))) [:result :pid])
+            st (json-line (:out (dlb-jar h real "daemon" "status" "--json")))]
+        (is (= "0.0.1-old" (:version st)))
+        (is (false? (:compatible st)) "status reports it and does not restart anything")
+        (is (= old-pid (:pid st)))
+        (let [r (dlb-jar h real "hello" "--json")
+              m (json-line (:out r))]
+          (is (zero? (:exit r)) (:err r))
+          (is (not= old-pid (get-in m [:result :pid])) "a new daemon answered")
+          (is (not (alive? old-pid)) "the old one is gone")
+          (is (not= "0.0.1-old" (get-in m [:result :version])))))
+      (testing "the daemon is newer than the jar: refused, nothing restarted"
+        (stop-daemon! h)
+        (let [pid (get-in (json-line (:out (dlb-jar h new "hello" "--json"))) [:result :pid])
+              r (dlb-jar h real "hello")]
+          (is (= 2 (:exit r)))
+          (is (str/includes? (:err r) "daemon/incompatible"))
+          (is (str/includes? (:err r) "newer"))
+          (is (alive? pid))))
+      (finally (stop-daemon! h) (fs/delete-tree h)))))
+
+(deftest version-compare
+  (let [newer? (requiring-resolve 'dlb.endpoint/version-newer?)]
+    (is (newer? "0.1.1" "0.1.0"))
+    (is (newer? "0.10.0" "0.9.0"))
+    (is (newer? "0.1.0-m2" "0.1.0-m1"))
+    (is (newer? "0.1.0-m1" "0.1.0"))
+    (is (not (newer? "0.1.0" "0.1.0")))
+    (is (not (newer? "0.0.9" "0.1.0")))))
 
 (deftest unreachable-daemon-is-exit-2
   (let [h (new-home)]

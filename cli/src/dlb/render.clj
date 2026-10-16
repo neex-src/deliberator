@@ -20,7 +20,7 @@
   "`dlb session start <key> [--title string] [--ws string]`."
   [{:keys [op args] :as entry}]
   (let [req (args/required-order entry)
-        opt (sort (remove (set req) (map name (keys args))))
+        opt (remove (set req) (args/arg-order entry))
         words (str/split op #"\.")]
     (str "dlb " (str/join " " words)
          (apply str (map #(str " <" % ">") req))
@@ -28,7 +28,7 @@
 
 (defn- arg-lines [{:keys [args] :as entry}]
   (let [req (args/required-order entry)]
-    (for [k (concat req (sort (remove (set req) (map name (keys args)))))
+    (for [k (concat req (remove (set req) (args/arg-order entry)))
           :let [{:keys [type required doc default]} (get args (keyword k))]]
       (str "  " (if required (str "<" k ">") (str "--" k)) "  " type
            (when (some? default) (str "  (default " (pr-str default) ")"))
@@ -56,7 +56,8 @@
                 "  dlb run <scenario> [--env E]     sugar for scenario.run"
                 "  dlb help [area|op]               this text, generated from op.describe"
                 ""
-                "Positional words fill the required args sorted by name; every arg is also --name value."
+                "Positional words fill the required args in the order shown by `dlb help <op>`; every arg is also --name value."
+                "  dlb daemon status                 version, pid, home of the running daemon (never starts one)"
                 "Exit codes: 0 ok, 1 failed checks / differing runs / confirm-required, 2 error."
                 ""]
                (mapcat (fn [area]

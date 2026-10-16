@@ -5,7 +5,14 @@
   (`setsid -f java -jar <jar> --home H $DLB_DAEMON_ARGS`, output to `daemon/daemon.out`) and the
   file is polled for up to 10 s. The jar is `$DELIBERATOR_JAR`, else `core/target/deliberatord.jar`
   next to this script's real location (`cli/../core/…`), else the same path under the cwd. The
-  client never waits for the daemon process, so it cannot leave a zombie behind."
+  client never waits for the daemon process, so it cannot leave a zombie behind.
+
+  `connect-compatible!` is the one way in for `dlb` and the bb tasks: connect (starting the daemon),
+  `hello` with the version of the jar, and when the daemon answers `compatible:false` and the jar's
+  version is newer (dotted numeric compare), no run is in flight: stop it (`daemon.stop`, or SIGTERM
+  to the pid it announced when it predates that op), wait until it is gone, start the jar's daemon
+  and say hello again. A same-version rebuilt jar is NOT noticed: `dlb daemon stop`.
+  `stop-daemon!` never starts anything."
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
             [dlb.client :as client])
@@ -74,10 +81,30 @@
     (when detach? (.waitFor p))
     nil))
 
+(defn- version-parts [v]
+  (map #(if (re-matches #"\d+" %) (parse-long %) %) (str/split (str v) #"[.\-]")))
+
+(defn version-newer?
+  "True when version string `a` is newer than `b`: dotted/dashed parts compared in order, numbers
+  numerically, a longer version newer than its own prefix."
+  [a b]
+  (loop [[x & xs :as as] (version-parts a), [y & ys :as bs] (version-parts b)]
+    (cond
+      (and (empty? as) (empty? bs)) false
+      (empty? bs) true
+      (empty? as) false
+      :else (let [c (if (and (number? x) (number? y)) (compare x y) (compare (str x) (str y)))]
+              (if (zero? c) (recur xs ys) (pos? c))))))
+
 (defn- try-connect [home]
   (when-let [ep (read-endpoint home)]
     (try {:channel (client/connect ep) :endpoint ep}
          (catch Exception _ nil))))
+
+(defn connect-existing
+  "A connection to the running daemon of `home` or nil; never starts one. -> {:channel :endpoint}."
+  [home]
+  (try-connect home))
 
 (defn connect!
   "A connection to the daemon of `home`, starting it when needed. -> {:channel :endpoint :started?}."
@@ -93,3 +120,76 @@
                   (throw (ex-info (str "the daemon did not come up in time; see "
                                        (fs/path home "daemon" "daemon.out"))
                                   {:type "daemon/unreachable"})))))))))
+
+(defn hello!
+  "`hello` on `channel`; -> the result map (`:compatible` only when `want` is given)."
+  [channel want]
+  (get-in (client/request! channel "hello" (cond-> {:client "dlb"} want (assoc :version want)) (fn [_]))
+          [:terminal :result]))
+
+(defn- pid-alive? [pid]
+  (boolean (some-> (.orElse (java.lang.ProcessHandle/of (long pid)) nil) .isAlive)))
+
+(defn- wait-gone!
+  "Waits until the process `pid` is gone and `home` has no endpoint file; false after `timeout-ms`."
+  [home pid timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (cond (and (not (pid-alive? pid)) (nil? (read-endpoint home))) true
+            (> (System/currentTimeMillis) deadline) false
+            :else (do (Thread/sleep 50) (recur))))))
+
+(defn stop-daemon!
+  "Stops the daemon of `home` without starting one. -> `{:running? false}` when none answers, else
+  `{:running? true :pid :runs [ids] :via \"daemon.stop\"|\"SIGTERM\" :gone? bool}`; `:gone?` is true
+  once the process has exited and removed its endpoint (waits up to 20 s)."
+  [home]
+  (if-let [{:keys [channel]} (try-connect home)]
+    (try
+      (let [{:keys [pid]} (hello! channel nil)
+            r (client/request! channel "daemon.stop" {} (fn [_]))
+            ok? (get-in r [:terminal :ok])
+            unknown? (= "unknown-op" (get-in r [:terminal :error :type]))]
+        (when-not (or ok? unknown?)
+          (throw (ex-info (str "daemon.stop failed: " (get-in r [:terminal :error :message]))
+                          {:type "daemon/stop-failed"})))
+        (when unknown? (some-> (.orElse (java.lang.ProcessHandle/of (long pid)) nil) .destroy))
+        {:running? true :pid pid :runs (get-in r [:terminal :result :runs] [])
+         :via (if ok? "daemon.stop" "SIGTERM") :gone? (wait-gone! home pid 20000)})
+      (finally (client/close! channel)))
+    {:running? false}))
+
+(defn connect-compatible!
+  "A connection to the daemon of `home` that speaks the version of the jar, starting or replacing it
+  (see the namespace docstring). -> `{:channel :hello :restarted? bool}`; throws `daemon/incompatible`
+  with a hint when it cannot be made compatible."
+  [home jar-path]
+  (let [want (some-> jar-path jar-version)
+        {:keys [channel]} (connect! home jar-path)
+        hello (hello! channel want)]
+    (if-not (false? (:compatible hello))
+      {:channel channel :hello hello :restarted? false}
+      (let [refuse (fn [msg hint] (client/close! channel)
+                     (throw (ex-info msg {:type "daemon/incompatible" :hint hint})))
+            running (str "daemon pid " (:pid hello) " runs " (:version hello) " but this dlb ships " want)]
+        (cond
+          (pos? (or (:runs hello) 0))
+          (refuse (str running " and has " (:runs hello) " run(s) in flight")
+                  "wait for them or cancel them, then `dlb daemon stop`; dlb restarts the daemon on its next call")
+          (not (version-newer? want (:version hello)))
+          (refuse (str running " (the daemon is newer than this dlb)")
+                  "update dlb's jar (bb core:build) or `dlb daemon stop` to start the one this dlb ships")
+          :else
+          (do (client/close! channel)
+              (let [r (stop-daemon! home)]
+                (when-not (:gone? r)
+                  (throw (ex-info (str "the old daemon (pid " (:pid hello) ") did not exit"
+                                       "; see " (fs/path home "daemon" "daemon.log"))
+                                  {:type "daemon/incompatible" :hint "kill that pid"}))))
+              (let [{:keys [channel]} (connect! home jar-path)
+                    hello (hello! channel want)]
+                (when (false? (:compatible hello))
+                  (client/close! channel)
+                  (throw (ex-info (str "the restarted daemon still runs " (:version hello) ", this dlb ships " want)
+                                  {:type "daemon/incompatible" :hint "check DELIBERATOR_JAR"})))
+                {:channel channel :hello hello :restarted? true})))))))

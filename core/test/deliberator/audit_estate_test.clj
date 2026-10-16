@@ -42,7 +42,7 @@
     (let [e (env/load ws "local")
           cfg (runtime/read-config ws)
           c (podman/client (get-in cfg [:podman :endpoint]) :ws ws)
-          b-name (get-in cfg [:containers :service/b :name] "deliberator-service-b")]
+          b-name (get-in cfg [:containers :service/b :name] (store/container-name ws "service-b"))]
       (session/start! ws "AUDIT-5")
       ;; service B starts its Postgres pool on first use, and those log lines (and a slow first ack) belong to
       ;; whichever run comes first: a throwaway run makes the comparison depend on nothing but the scenario
@@ -96,7 +96,7 @@
     (let [e (env/load ws "local")
           cfg (runtime/read-config ws)
           c (podman/client (get-in cfg [:podman :endpoint]) :ws ws)
-          b-name (get-in cfg [:containers :service/b :name] "deliberator-service-b")
+          b-name (get-in cfg [:containers :service/b :name] (store/container-name ws "service-b"))
           f (io/file (str (store/home)) "logs-window.scn")
           _ (do (io/make-parents f) (spit f "### logs log/service-b\n# @for 10s\n# @filter nothing-will-match-this\n"))]
       (session/start! ws "AUDIT-5")
@@ -121,7 +121,7 @@
     (let [e (env/load ws "local")
           cfg (runtime/read-config ws)
           c (podman/client (get-in cfg [:podman :endpoint]) :ws ws)
-          b-name (get-in cfg [:containers :service/b :name] "deliberator-service-b")
+          b-name (get-in cfg [:containers :service/b :name] (store/container-name ws "service-b"))
           f (io/file (str (store/home)) "logs-resume.scn")
           _ (do (io/make-parents f) (spit f "### logs log/service-b\n# @for 14s\n# @filter /Started/\n"))]
       (session/start! ws "AUDIT-6")
