@@ -67,9 +67,8 @@ tasks.runIde {
     providers.gradleProperty("dlbProject").orNull?.let { args(it) }
 }
 
-// 2026.2's Ultimate distribution has an obfuscated post-startup activity (com.intellij.modules.ultimate)
-// that cannot be instantiated in the light test environment and fails every platform test.
-tasks.test {
+// Everything both test tasks share: fences, test data, the sweep of orphan daemons (see the comments inside).
+fun Test.configureDeliberatorTests() {
     dependsOn(buildDaemonJar)
     // heavy platform tests make real projects: keep them (and the temp copies of the fixtures) under build/, not in /tmp
     val tmp = layout.buildDirectory.dir("test-tmp").get().asFile
@@ -95,6 +94,27 @@ tasks.test {
         ProcessHandle.allProcesses().filter { val c = it.info().commandLine().orElse(""); c.contains("deliberatord") && c.contains(thPrefix) }
             .forEach { logger.warn("test sweep: stopping orphan daemon pid ${it.pid()}"); it.destroy(); runCatching { it.onExit().get(10, TimeUnit.SECONDS) } }
     }
+}
+
+// 2026.2's Ultimate distribution has an obfuscated post-startup activity (com.intellij.modules.ultimate)
+// that cannot be instantiated in the light test environment and fails every platform test.
+// `./gradlew knownBugs` (`bb ide:test --known-bugs`) runs the SAME test task (the platform plugin gives only `test` the IDE's runtime,
+// its JVM arguments and sandbox) in the other mode: only the @Category(KnownBug::class) tests, which must FAIL until their bug is fixed
+// (the fix removes the category in the same commit). The default run, `./gradlew test`, excludes them (decision 24 for the IDE).
+val knownBugsRequested = gradle.startParameter.taskNames.any { it == "knownBugs" || it.endsWith(":knownBugs") }
+
+tasks.test {
+    configureDeliberatorTests()
+    useJUnit {
+        if (knownBugsRequested) includeCategories("com.neex.deliberator.testing.KnownBug")
+        else excludeCategories("com.neex.deliberator.testing.KnownBug")
+    }
+}
+
+tasks.register("knownBugs") {
+    description = "Runs only the tests that document known product bugs (they fail until the bug is fixed)"
+    group = "verification"
+    dependsOn(tasks.test)
 }
 
 // The .scn test data is the fixtures of the core and the estate scenario themselves, not a second copy (piece 05).

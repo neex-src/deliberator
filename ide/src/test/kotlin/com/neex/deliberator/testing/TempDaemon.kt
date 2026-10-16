@@ -80,6 +80,14 @@ class TempDaemon private constructor(val home: Path, val jar: Path) : AutoClosea
             return TempDaemon(home, jar)
         }
 
+        /** A fresh temp home whose directory is named [dirName] (a space, a long name: the audit's odd homes). */
+        fun createNamed(dirName: String, jar: Path = shippedJar()): TempDaemon {
+            val base = File(System.getProperty("deliberator.test.homes") ?: error("deliberator.test.homes is not set: run through Gradle"))
+            val home = base.toPath().resolve(dirName)
+            Files.createDirectories(home)
+            return TempDaemon(home, jar)
+        }
+
         /** A launcher for another jar (to play a plugin that ships another version) to use with this home. */
         fun launcherFor(jar: Path): DaemonLauncher = launcher(jar)
 
@@ -89,7 +97,9 @@ class TempDaemon private constructor(val home: Path, val jar: Path) : AutoClosea
             ZipFile(shippedJar().toFile()).use { zin ->
                 ZipOutputStream(Files.newOutputStream(out)).use { zout ->
                     for (e in zin.entries()) {
-                        zout.putNextEntry(ZipEntry(e.name))
+                        // keep each entry's time: Clojure loads a namespace from source when the .clj is not older than its .class, and a
+                        // re-zipped jar with "now" on every entry makes every namespace recompile at start (audit F-jar: 13 s+, one 60 s timeout)
+                        zout.putNextEntry(ZipEntry(e.name).also { n -> e.lastModifiedTime?.let { n.lastModifiedTime = it } })
                         if (e.name == "deliberator/version.edn") zout.write("{:version \"$version\"}\n".toByteArray())
                         else zin.getInputStream(e).use { it.copyTo(zout) }
                         zout.closeEntry()

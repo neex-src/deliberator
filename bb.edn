@@ -42,8 +42,9 @@
               :task (apply acceptance/-main *command-line-args*)}
   ide:build {:doc "Build the plugin zip ide/build/distributions/deliberator-*.zip (builds the core jar first, lib/deliberatord.jar inside)"
              :task (shell {:dir "ide"} "./gradlew" "buildPlugin")}
-  ide:test {:doc "Fixture tests of the plugin (JUnit on the platform test framework; real daemon on temp homes under ide/build/test-homes); extra args go to Gradle"
-            :task (apply shell {:dir "ide"} "./gradlew" "test" *command-line-args*)}
+  ide:test {:doc "Fixture tests of the plugin (JUnit on the platform test framework; real daemon on temp homes under ide/build/th); --known-bugs runs only the audit's @Category(KnownBug) tests (./gradlew knownBugs); extra args go to Gradle"
+            :requires ([ide-test])
+            :task (apply ide-test/-main *command-line-args*)}
   ide:run {:doc "Open the sandbox IDE with the plugin (a GUI: needs a display); args: [--ws W] [--home H] -> DELIBERATOR_HOME=H and the project <H>/workspaces/<W>/project; reuses a daemon already holding H"
            :requires ([ide-run])
            :task (apply ide-run/-main *command-line-args*)}
