@@ -9,6 +9,7 @@
             [clojure.test :refer [deftest is testing]]
             
             [deliberator.daemon-test :refer [logs-fixture! ok! with-client with-daemon write-file]]
+            [deliberator.env]
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.test-client :as tc]
@@ -177,3 +178,18 @@
         (is (= :stopped outcome) (str "stop! threw " outcome))
         (is (= :cancelled (:status (read-run-edn run-dir))))
         (is (.isFile (io/file run-dir "result.txt")))))))
+
+(deftest a-local-environment-with-a-profile-is-a-typed-error-through-the-protocol
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [c h]
+      (ok! c "session.start" {:key "T-1"})
+      (store/write-edn! (store/path "default" "environments" "local.edn")
+                        (assoc deliberator.env/default-local
+                               :aws {:endpoint "http://localhost:1" :region "eu-central-1" :account "000000000000"
+                                     :profile "some-sso" :access-key "x" :secret-key "y"}))
+      (let [path (write-file "p.scn" "### wait one\n# @for 10ms\n")]
+        (doseq [[op args] [["env.describe" {:name "local"}] ["env.check" {:name "local"}]
+                           ["scenario.run" {:path path :env "local"}]]]
+          (let [e (:error (:terminal (tc/request c op args)))]
+            (is (= "env/invalid" (:type e)) (str op ": " (pr-str e)))
+            (is (some #(str/includes? (str %) "profile") (:problems e)) (str op ": " (pr-str e)))))))))
