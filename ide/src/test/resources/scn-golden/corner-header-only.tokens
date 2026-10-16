@@ -1,0 +1,8 @@
+DIR_MARK '#'
+WHITE_SPACE ' '
+DIR_NAME '@env'
+WHITE_SPACE ' '
+DIR_VALUE 'local'
+EOL '\n'
+COMMENT '# only a header'
+EOL '\n'

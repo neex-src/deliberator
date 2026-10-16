@@ -1,0 +1,247 @@
+package com.neex.deliberator.scn
+
+import com.intellij.lexer.LexerBase
+import com.intellij.psi.TokenType
+import com.intellij.psi.tree.IElementType
+import java.util.regex.Pattern
+
+class ScnTokenType(debugName: String) : IElementType(debugName, ScnLanguage)
+
+object ScnTokens {
+    /** `###` at column 0 that starts a step. */
+    val HEAD_MARK = ScnTokenType("HEAD_MARK")
+    val KIND = ScnTokenType("KIND")
+    /** A word of the step line after the kind that is not target-like (verb or name: told apart with the registry). */
+    val WORD = ScnTokenType("WORD")
+    /** A word that has `/` or starts with `{{`. */
+    val TARGET = ScnTokenType("TARGET")
+    val VARIABLE = ScnTokenType("VARIABLE")
+    /** `#` and `//` lines before the first step. */
+    val COMMENT = ScnTokenType("COMMENT")
+    val DIR_MARK = ScnTokenType("DIR_MARK")
+    val DIR_NAME = ScnTokenType("DIR_NAME")
+    val DIR_VALUE = ScnTokenType("DIR_VALUE")
+    /** A line of a step's body (every `#` line after the directives is body too: the engine sends it). */
+    val BODY = ScnTokenType("BODY")
+    val EOL = ScnTokenType("EOL")
+    /** Text before the first step that is neither blank nor a comment nor a directive. */
+    val BAD = ScnTokenType("BAD")
+}
+
+/**
+ * Lexer of `.scn`, a port of the line rules of `core/src/deliberator/scenario/parse.clj` (`find-heads`,
+ * `parse-header`, the directive zone of `parse-step`): the step headers decide the structure, so they are found
+ * first over the whole text (a `### x` line inside an open JSON string of the body is body; an unclosed string
+ * drops that rule from its first line on), then every line is tokenised by its role.
+ *
+ * It tokenises the whole range in [start] and reports state 0 only for the first token, so the platform
+ * always relexes from offset 0 after an edit: the JSON rule needs the text before. Cost is linear in the
+ * file (decision 35 has the measured number).
+ */
+class ScnLexer : LexerBase() {
+    private var buf: CharSequence = ""
+    private var endOff = 0
+    private var startOff = 0
+    private var from = IntArray(0)
+    private var to = IntArray(0)
+    private var types = arrayOfNulls<IElementType>(0)
+    private var n = 0
+    private var idx = 0
+
+    override fun start(buffer: CharSequence, startOffset: Int, endOffset: Int, initialState: Int) {
+        buf = buffer; startOff = startOffset; endOff = endOffset
+        n = 0; idx = 0
+        from = IntArray(64); to = IntArray(64); types = arrayOfNulls(64)
+        tokenize()
+    }
+
+    override fun getState(): Int = if (idx == 0) 0 else 1
+    override fun getTokenType(): IElementType? = if (idx < n) types[idx] else null
+    override fun getTokenStart(): Int = if (idx < n) from[idx] else endOff
+    override fun getTokenEnd(): Int = if (idx < n) to[idx] else endOff
+    override fun advance() { if (idx < n) idx++ }
+    override fun getBufferSequence(): CharSequence = buf
+    override fun getBufferEnd(): Int = endOff
+
+    // ---------------------------------------------------------------------------------------------
+
+    private class Line(val start: Int, val end: Int, val next: Int, val text: String)
+
+    private fun emit(type: IElementType, f: Int, t: Int) {
+        if (t <= f) return
+        if (n == from.size) {
+            from = from.copyOf(n * 2); to = to.copyOf(n * 2); types = types.copyOf(n * 2)
+        }
+        from[n] = f; to[n] = t; types[n] = type; n++
+    }
+
+    private fun lines(): List<Line> {
+        val out = ArrayList<Line>()
+        var s = startOff
+        while (s < endOff) {
+            var e = s
+            while (e < endOff && buf[e] != '\n') e++
+            val next = if (e < endOff) e + 1 else e
+            var te = e
+            if (te > s && buf[te - 1] == '\r') te--
+            out += Line(s, te, next, buf.subSequence(s, te).toString())
+            s = next
+        }
+        return out
+    }
+
+    private fun tokenize() {
+        val ls = lines()
+        val heads = findHeads(ls)
+        var inHeader = true
+        var zone = false
+        for ((i, l) in ls.withIndex()) {
+            if (i in heads) {
+                inHeader = false
+                zone = true
+                head(l)
+            } else if (inHeader) {
+                headerLine(l)
+            } else if (l.text.isBlank()) {
+                blank(l)
+            } else if (zone) {
+                val m = DIRECTIVE.matcher(l.text)
+                if (m.matches()) directive(l, m) else { zone = false; body(l) }
+            } else body(l)
+            emit(ScnTokens.EOL, l.end, l.next)
+        }
+    }
+
+    private fun blank(l: Line) { emit(TokenType.WHITE_SPACE, l.start, l.end) }
+
+    private fun headerLine(l: Line) {
+        val t = l.text
+        when {
+            t.isBlank() -> blank(l)
+            t.startsWith("#") -> {
+                val m = DIRECTIVE.matcher(t)
+                if (m.matches()) directive(l, m) else emit(ScnTokens.COMMENT, l.start, l.end)
+            }
+            t.startsWith("//") -> emit(ScnTokens.COMMENT, l.start, l.end)
+            else -> emit(ScnTokens.BAD, l.start, l.end)
+        }
+    }
+
+    private fun directive(l: Line, m: java.util.regex.Matcher) {
+        val nameFrom = m.start(1) - 1 // the @
+        var p = l.start
+        emit(ScnTokens.DIR_MARK, p, l.start + 1); p = l.start + 1
+        emit(TokenType.WHITE_SPACE, p, l.start + nameFrom); p = l.start + nameFrom
+        emit(ScnTokens.DIR_NAME, p, l.start + m.end(1)); p = l.start + m.end(1)
+        if (m.start(2) >= 0) {
+            emit(TokenType.WHITE_SPACE, p, l.start + m.start(2))
+            text(ScnTokens.DIR_VALUE, l.start + m.start(2), l.start + m.end(2))
+            p = l.start + m.end(2)
+        }
+        emit(TokenType.WHITE_SPACE, p, l.end)
+    }
+
+    private fun head(l: Line) {
+        val m = STEP.matcher(l.text)
+        check(m.matches())
+        emit(ScnTokens.HEAD_MARK, l.start, l.start + 3)
+        emit(TokenType.WHITE_SPACE, l.start + 3, l.start + m.start(1))
+        emit(ScnTokens.KIND, l.start + m.start(1), l.start + m.end(1))
+        var p = l.start + m.end(1)
+        if (m.start(2) >= 0) {
+            emit(TokenType.WHITE_SPACE, p, l.start + m.start(2))
+            val rest = l.text.substring(m.start(2), m.end(2))
+            val w = WORD_RE.matcher(rest)
+            var q = 0
+            while (w.find()) {
+                emit(TokenType.WHITE_SPACE, l.start + m.start(2) + q, l.start + m.start(2) + w.start())
+                val word = w.group()
+                emit(if (ScnRoles.targetLike(word)) ScnTokens.TARGET else ScnTokens.WORD, l.start + m.start(2) + w.start(), l.start + m.start(2) + w.end())
+                q = w.end()
+            }
+            p = l.start + m.start(2) + q
+        }
+        emit(TokenType.WHITE_SPACE, p, l.end)
+    }
+
+    private fun body(l: Line) { text(ScnTokens.BODY, l.start, l.end) }
+
+    /** [type] over [f, t) with each `{{...}}` on it as a VARIABLE token. */
+    private fun text(type: IElementType, f: Int, t: Int) {
+        var p = f
+        val m = VAR.matcher(buf.subSequence(f, t))
+        while (m.find()) {
+            emit(type, p, f + m.start())
+            emit(ScnTokens.VARIABLE, f + m.start(), f + m.end())
+            p = f + m.end()
+        }
+        emit(type, p, t)
+    }
+
+    // find-heads -------------------------------------------------------------------------------------
+
+    private class Json(val depth: Int, val inStr: Boolean)
+
+    private fun scanJson(st: Json, text: String): Json {
+        var depth = st.depth
+        var inStr = st.inStr
+        var i = 0
+        val len = text.length
+        while (i < len) {
+            val c = text[i]
+            when {
+                inStr -> when (c) {
+                    '\\' -> { i += 2; continue }
+                    '"' -> inStr = false
+                }
+                depth == 0 -> if ((c == '{' || c == '[') && text.substring(0, i).isBlank()) depth = 1
+                c == '"' -> inStr = true
+                c == '{' || c == '[' -> depth++
+                c == '}' || c == ']' -> depth--
+            }
+            i++
+        }
+        return Json(depth, inStr)
+    }
+
+    /** Indexes of the step header lines (`find-heads`). */
+    private fun findHeads(ls: List<Line>): Set<Int> {
+        val out = LinkedHashSet<Int>()
+        var i = 0
+        var st = Json(0, false)
+        var skipped = -1
+        while (true) {
+            if (i >= ls.size) {
+                if (st.inStr && skipped >= 0) {
+                    out += skipped
+                    i = skipped + 1
+                    st = Json(0, false)
+                    skipped = -1
+                    continue
+                }
+                return out
+            }
+            val text = ls[i].text
+            val head = STEP.matcher(text).matches()
+            when {
+                head && st.inStr -> { if (skipped < 0) skipped = i }
+                head -> { st = Json(0, false); skipped = -1; out += i }
+                text.startsWith("#") -> {}
+                else -> {
+                    st = scanJson(st, text)
+                    if (!st.inStr) skipped = -1
+                }
+            }
+            i++
+        }
+    }
+
+    companion object {
+        /** `step-re` of parse.clj. */
+        val STEP: Pattern = Pattern.compile("### +([A-Za-z][A-Za-z0-9_-]*)(?:\\s+(.*?))?\\s*")
+        /** `directive-re` of parse.clj. */
+        val DIRECTIVE: Pattern = Pattern.compile("#\\s*@([A-Za-z][A-Za-z0-9._-]*)(?:\\s+(.*?))?\\s*")
+        private val WORD_RE = Pattern.compile("\\S+")
+        private val VAR = Pattern.compile("\\{\\{[^{}\\r\\n]*}}")
+    }
+}
