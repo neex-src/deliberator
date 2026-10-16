@@ -131,6 +131,9 @@ class LogMatcher(private val project: Project) : Disposable {
         return FileEditorManager.getInstance(project).openTextEditor(OpenFileDescriptor(project, vf, maxOf(0, line - 1), 0), true)
     }
 
+    /** Forgets the latest run and every match (the light test project outlives a test). */
+    fun reset() { latestRun = null; matches.clear() }
+
     fun forget(editor: Editor) { editor.getUserData(KEY)?.let { s -> s.seq.incrementAndGet(); s.highlighters.clear() } }
 
     private fun stateOf(editor: Editor): EditorHighlights =

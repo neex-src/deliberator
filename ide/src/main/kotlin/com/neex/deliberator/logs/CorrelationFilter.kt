@@ -8,7 +8,7 @@ import com.intellij.openapi.wm.WindowManager
 
 /** What a filter left: [kept] of [total] entries match [id]; [hiddenLines] lines sit in [regions] fold regions. */
 data class FilterState(val id: String, val kept: Int, val total: Int, val hiddenLines: Int, val regions: Int) {
-    val status: String get() = "Deliberator: $kept of $total log entries match $id ($hiddenLines lines folded)"
+    val status: String get() = "Deliberator: $kept of $total log entries match $id ($hiddenLines folded line" + (if (hiddenLines == 1) "" else "s") + ")"
 }
 
 /**
@@ -65,10 +65,10 @@ object CorrelationFilter {
         status(project, "")
     }
 
-    /** The lines that are not hidden by a collapsed region of the filter, 1-based (what the user sees). */
+    /** The lines not covered by a collapsed region, 1-based (what the user sees as themselves, not as a placeholder). */
     fun visibleLines(editor: Editor): List<Int> {
         val doc = editor.document
-        return (0 until doc.lineCount).filter { !editor.foldingModel.isOffsetCollapsed(doc.getLineStartOffset(it)) }.map { it + 1 }
+        return (0 until doc.lineCount).filter { editor.foldingModel.getCollapsedRegionAtOffset(doc.getLineStartOffset(it)) == null }.map { it + 1 }
     }
 
     private fun status(project: Project?, text: String) {
