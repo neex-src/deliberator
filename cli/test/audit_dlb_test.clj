@@ -132,3 +132,25 @@
     (let [r (apply dlb *home* args)]
       (is (= 2 (:exit r)) (pr-str args r))
       (is (not (str/includes? (:err r) "Exception")) (:err r)))))
+
+(defn- lock-pid-of [home]
+  (let [f (fs/file home "daemon" "lock")] (when (fs/exists? f) (parse-long (str/trim (slurp f))))))
+
+(deftest autostart-uses-the-jar-named-by-deliberator-jar
+  ;; the plan: "dlb starts the daemon when none is running (DELIBERATOR_JAR set) and reuses it"; dlb-test
+  ;; only checks the failure cases of the variable.
+  (let [h (t/new-home)
+        jar (str (fs/path t/root "cli" "target" "audit" "copy" "deliberatord-copy.jar"))
+        env {"DELIBERATOR_HOME" h "DELIBERATOR_JAR" jar "DLB_DAEMON_ARGS" "--idle-minutes 0.5"}
+        hello #(p/shell {:out :string :err :string :continue true :extra-env env} t/dlb-bin "hello" "--json")]
+    (try
+      (fs/create-dirs (fs/parent jar))
+      (fs/copy (str (fs/path t/root "core" "target" "deliberatord.jar")) jar {:replace-existing true})
+      (let [a (hello) b (hello)
+            pid (lock-pid-of h)]
+        (is (zero? (:exit a)) (:err a))
+        (is (= (get-in (json-out a) [:result :pid]) (get-in (json-out b) [:result :pid])) "second call reuses it")
+        (is (= pid (get-in (json-out a) [:result :pid])))
+        (is (str/includes? (str/replace (slurp (str "/proc/" pid "/cmdline")) "\u0000" " ") "deliberatord-copy.jar")
+            "the daemon runs the jar that DELIBERATOR_JAR names"))
+      (finally (t/stop-daemon! h) (fs/delete-tree h)))))
