@@ -1,6 +1,6 @@
-(ns user
-  "REPL entry for `cljdev`: `(start!)` runs the daemon in this JVM on the home's normal socket (so the
-  CLI and the IDE connect to it), `(stop!)` stops it. Options as `deliberator.daemon/start!`:
+(ns dev
+  "REPL entry for `cljdev` (its classpath has `test/`, so it lives here): `(dev/start!)` runs the daemon in this JVM on the home's normal socket (so the
+  CLI and the IDE connect to it), `(dev/stop!)` stops it. Options as `deliberator.daemon/start!`:
   `(start! {:home \"…\" :tcp true :idle-minutes 0})`; the idle shutdown is off by default here."
   (:require [clojure.java.io]))
 
