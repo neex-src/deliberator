@@ -102,11 +102,11 @@ class AuditEditorTest : BasePlatformTestCase() {
         assertNull("a workspace nobody created is shown empty, not as an error: ${m.error}", m.error)
         assertTrue(m.sessions.isEmpty())
         assertNull(m.currentSession)
-        val made = daemon.home.resolve("workspaces").resolve("no-such-ws")
+        val made = Path.of(bg { svc.call("workspace.show").resultObject().get("path").asString })
         println("AUDIT-GHOST-WS: after refreshNow the directory exists=${Files.exists(made)} " + (if (Files.exists(made)) Files.walk(made).use { s -> s.map { made.relativize(it).toString() }.toList() } else ""))
         // audit finding (rough edge): a typo in .idea/deliberator.xml silently makes a new workspace on the first refresh (env.list writes the
         // default environment), the same lazy creation `dlb --ws typo` has; the model shows it as an empty, healthy workspace
-        assertTrue("env.list materialises the workspace", Files.exists(made.resolve("environments/local.edn")))
+        assertTrue("env.list materialises the workspace", Files.isDirectory(made.resolve("environments")))
         assertNotNull(DeliberatorPanel.headerText(m))
     }
 

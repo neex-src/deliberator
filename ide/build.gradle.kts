@@ -76,6 +76,15 @@ fun Test.configureDeliberatorTests() {
     // second net: a daemon home that is not the real one even if the guard were bypassed (the guard refuses it as well)
     environment("DELIBERATOR_HOME", layout.buildDirectory.dir("never-use-home").get().asFile.absolutePath)
     systemProperty("java.io.tmpdir", tmp.absolutePath)
+    // the platform's test JVM writes an (empty) java.util.prefs node for its licence check and a JetBrains/discovery directory under the
+    // user's home (audit finding): fence both into build/
+    val prefs = layout.buildDirectory.dir("test-prefs").get().asFile
+    doFirst { prefs.mkdirs() }
+    systemProperty("java.util.prefs.userRoot", prefs.absolutePath)
+    systemProperty("java.util.prefs.systemRoot", prefs.absolutePath)
+    environment("XDG_DATA_HOME", layout.buildDirectory.dir("test-xdg/data").get().asFile.absolutePath)
+    environment("XDG_CONFIG_HOME", layout.buildDirectory.dir("test-xdg/config").get().asFile.absolutePath)
+    environment("XDG_CACHE_HOME", layout.buildDirectory.dir("test-xdg/cache").get().asFile.absolutePath)
     systemProperty("deliberator.testdata", layout.projectDirectory.dir("src/test/testData").asFile.absolutePath)
     systemProperty("idea.suppressed.plugins.id", "com.intellij.modules.ultimate")
     systemProperty("deliberator.jar", daemonJar.asFile.absolutePath)

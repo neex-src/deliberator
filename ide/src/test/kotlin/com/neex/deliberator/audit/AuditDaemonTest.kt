@@ -2,6 +2,7 @@ package com.neex.deliberator.audit
 
 import com.google.gson.JsonObject
 import com.neex.deliberator.daemon.DaemonException
+import com.neex.deliberator.daemon.DaemonLauncher
 import com.neex.deliberator.testing.TempDaemon
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -110,5 +111,48 @@ class AuditDaemonTest {
         assertNotNull("the error carries a hint a user can act on", e.hint)
         assertTrue(e.hint!!, e.hint!!.contains("dlb daemon stop"))
         assertTrue(ProcessHandle.of(running.hello.pid).get().isAlive)
+    }
+
+    @Test fun aKilledDaemonLeavesAStaleEndpointAndTheNextConnectStartsAFreshOne() {
+        val d = home()
+        val first = d.connect()
+        ProcessHandle.of(first.hello.pid).get().also { it.destroyForcibly() }.onExit().get(10, TimeUnit.SECONDS)
+        assertTrue("the endpoint file of the dead daemon is still there", Files.exists(d.launcher.endpointFile(d.home)))
+        val second = d.connect()
+        assertTrue(second.started)
+        assertTrue(second.hello.pid != first.hello.pid)
+        assertEquals(1, TempDaemon.survivors(d.home).size)
+    }
+
+    @Test fun sixConnectsRacingOnAColdHomeEndWithOneDaemon() {
+        val d = home()
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(6)
+        try {
+            val results = (1..6).map { pool.submit<Long> { d.connect().hello.pid } }.map { it.get(90, TimeUnit.SECONDS) }
+            assertEquals("all callers talk to the same daemon: $results", 1, results.toSet().size)
+            // every caller started its own JVM (nothing was up yet); the losers of the lock must leave on their own
+            val t0 = System.nanoTime()
+            val seen = ArrayList<Int>()
+            while (TempDaemon.survivors(d.home).size > 1 && System.nanoTime() - t0 < 60_000_000_000L) { seen += TempDaemon.survivors(d.home).size; Thread.sleep(500) }
+            println("AUDIT-RACE: losers gone after ${(System.nanoTime() - t0) / 1_000_000} ms (survivor counts seen: $seen)")
+            assertEquals(1, TempDaemon.survivors(d.home).size)
+            assertEquals(results.first(), d.lockPid())
+        } finally { pool.shutdownNow() }
+    }
+
+    @Test fun aJavaHomeWithoutJavaIsATypedErrorWithTheDaemonOutput() {
+        val d = home()
+        val l = DaemonLauncher("/nonexistent/java-home", TempDaemon.shippedJar(), emptyList(), startTimeoutMs = 3_000)
+        val e = try { l.connectCompatible(d.home); null } catch (x: DaemonException) { x }
+        assertEquals("daemon/unreachable", e!!.type)
+    }
+
+    @Test fun aJarThatIsNotAJarIsATypedError() {
+        val d = home()
+        val bad = d.home.resolve("not-a.jar").also { Files.writeString(it, "this is not a zip") }
+        val l = DaemonLauncher(System.getProperty("java.home"), bad, emptyList(), startTimeoutMs = 4_000)
+        val e = try { l.connectCompatible(d.home); null } catch (x: DaemonException) { x }
+        assertEquals("daemon/unreachable", e!!.type)
+        assertTrue(e.message!!, e.message!!.contains("corrupt") || e.message!!.contains("jarfile") || e.message!!.contains("did not come up"))
     }
 }

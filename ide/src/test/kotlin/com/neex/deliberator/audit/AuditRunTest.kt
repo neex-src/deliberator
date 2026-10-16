@@ -77,7 +77,7 @@ class AuditRunTest : BasePlatformTestCase() {
         PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
         val s = runner.state(vf.path).snapshot!!
         assertEquals(snap.runId, s.runId)
-        assertEquals("the daemon's run.edn still says how it ended", "ok", s.status)
+        assertEquals("the daemon's run record still says how it ended", "ok", s.status)
         assertEquals("no result.txt for this run", s.problem)
         assertTrue(s.sections.isEmpty())
         val banner = again.inlayInfos().first { it.step == null }.lines.single()

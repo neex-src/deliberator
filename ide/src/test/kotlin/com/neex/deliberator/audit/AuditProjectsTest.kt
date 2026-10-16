@@ -154,4 +154,25 @@ class AuditProjectsTest : HeavyPlatformTestCase() {
         bg { ReattachOnOpen.reattach(project) } // restarts the daemon through ensure(), still no exception
         bg { RepositoryAttacher.getInstance(project).detach("recorded") }
     }
+
+    /** Layer 3, first point: a project OPENED at `<workspace dir>/project` is bound by the convention, with nothing persisted and no setting. */
+    fun testAProjectOpenedAtTheWorkspaceProjectDirectoryResolvesItsWorkspaceByTheDaemonsWord() {
+        val shown = bg { daemon.client.call("workspace.show", JsonObject().apply { addProperty("ws", "w9") }) }.resultObject().get("path").asString
+        val projectDir = Files.createDirectories(Path.of(shown).resolve("project"))
+        val p = PlatformTestUtil.loadAndOpenProject(projectDir, testRootDisposable)
+        try {
+            val svc = WorkspaceService.getInstance(p)
+            // the startup activity (ReattachOnOpen) resolves the convention on its own; asking again gives the same answer
+            PlatformTestUtil.waitWithEventsDispatching("the opened project to bind itself", { svc.ws == "w9" }, 60)
+            assertEquals("w9", bg { svc.resolve() })
+            // the model of that project is the workspace's: a session started through it is that workspace's
+            bg { svc.startSession("OPEN-1", null) }
+            assertEquals("OPEN-1", bg { svc.refreshNow() }.currentSession)
+            // a neighbour directory that merely looks the same is not bound
+            val other = PlatformTestUtil.loadAndOpenProject(Files.createDirectories(work.resolve("w9").resolve("project")), testRootDisposable)
+            try { assertNull(bg { WorkspaceService.getInstance(other).resolve() }) } finally { PlatformTestUtil.forceCloseProjectWithoutSaving(other) }
+        } finally {
+            PlatformTestUtil.forceCloseProjectWithoutSaving(p)
+        }
+    }
 }
