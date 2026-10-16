@@ -83,8 +83,19 @@ class ServiceRunConfiguration(project: Project, factory: ConfigurationFactory, n
     /** The environment the log is read in: the configured one, else the project's selected one. */
     fun effectiveEnv(): String = envName.ifBlank { WorkspaceService.getInstance(project).selectedEnv }
 
-    /** The args of `service.start` beyond the name. Piece 08b adds `secrets-from` / `confirm` here (never persisted). */
-    fun startArgs(): JsonObject = JsonObject()
+    /**
+     * The environment whose REAL secret values the container should get, or null (the default). Deliberately not in [ServiceRunOptions]: never written
+     * to the configuration file, gone when the IDE closes; every start with it asks the daemon's two confirmations again.
+     */
+    @Volatile var secretsFrom: String? = null
+
+    override fun doCopyOptionsFrom(source: RunConfigurationBase<ServiceRunOptions>) {
+        super.doCopyOptionsFrom(source)
+        (source as? ServiceRunConfiguration)?.let { secretsFrom = it.secretsFrom }
+    }
+
+    /** The args of `service.start` beyond the name: `secrets-from` while the checkbox is on (`confirm` is [ServiceOps.start]'s business). */
+    fun startArgs(): JsonObject = JsonObject().apply { secretsFrom?.takeIf { it.isNotBlank() }?.let { addProperty("secrets-from", it) } }
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> = ServiceRunEditor(project)
 
@@ -103,18 +114,33 @@ class ServiceRunEditor(private val project: Project) : SettingsEditor<ServiceRun
     /** Rows under the two settings; piece 08b puts the "take secret values from" checkbox here. Empty on purpose. */
     val extraRows = JPanel(java.awt.BorderLayout())
 
+    private val secrets = com.intellij.ui.components.JBCheckBox("Take secret values from environment:")
+    private val secretsEnv = com.intellij.openapi.ui.ComboBox<String>()
+
     init {
-        WorkspaceService.getInstance(project).model.services.forEach { service.addItem(it.name) }
+        val model = WorkspaceService.getInstance(project).model
+        model.services.forEach { service.addItem(it.name) }
+        model.envs.forEach { secretsEnv.addItem(it.name) }
+        secretsEnv.isEnabled = false
+        secrets.addActionListener { secretsEnv.isEnabled = secrets.isSelected }
+        extraRows.add(javax.swing.JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0)).apply {
+            add(secrets); add(javax.swing.Box.createHorizontalStrut(6)); add(secretsEnv)
+        }, java.awt.BorderLayout.NORTH)
+        extraRows.add(com.intellij.ui.components.JBLabel("<html><small>Real values, fetched when the service starts: two confirmations every time. Never saved.</small></html>"), java.awt.BorderLayout.SOUTH)
     }
 
     override fun resetEditorFrom(s: ServiceRunConfiguration) {
         service.selectedItem = s.serviceName
         env.text = s.envName
+        secrets.isSelected = s.secretsFrom != null
+        secretsEnv.isEnabled = secrets.isSelected
+        s.secretsFrom?.let { secretsEnv.selectedItem = it }
     }
 
     override fun applyEditorTo(s: ServiceRunConfiguration) {
         s.serviceName = (service.editor.item ?: service.selectedItem)?.toString()?.trim() ?: ""
         s.envName = env.text.trim()
+        s.secretsFrom = if (secrets.isSelected) secretsEnv.selectedItem?.toString()?.trim()?.takeIf { it.isNotEmpty() } else null
     }
 
     override fun createEditor(): JComponent = panel {
@@ -124,6 +150,15 @@ class ServiceRunEditor(private val project: Project) : SettingsEditor<ServiceRun
     }
 
     internal fun setService(n: String) { service.selectedItem = n }
+
+    /** Tests: tick the sandbox and pick the environment as a user would. */
+    internal fun setSecrets(envName: String?) {
+        secrets.isSelected = envName != null
+        secretsEnv.isEnabled = envName != null
+        if (envName != null) { secretsEnv.isEditable = true; secretsEnv.selectedItem = envName }
+    }
+
+    internal fun secretsEnabled() = secretsEnv.isEnabled
 }
 
 /** The started service's console of each running configuration, so the Reload action can write into it. */
@@ -195,8 +230,10 @@ class ServiceProcessHandler(
                 val s = ops.start(service, startArgs) { ev -> print("  ${ev.name}${summary(ev.json)}") }
                 started = s
                 print("service $service ${s.status}" + (s.container?.let { ", container $it" } ?: "") + (s.port?.let { ", port $it" } ?: "") + (s.jdwp?.let { ", JDWP $it" } ?: ""))
+                startArgs.get("secrets-from")?.takeIf { it.isJsonPrimitive }?.asString?.let { printSecretsNote(it) }
             } else {
                 print("service $service started by the debug session (JDWP ${prestarted.jdwp ?: "-"})")
+                startArgs.get("secrets-from")?.takeIf { it.isJsonPrimitive }?.asString?.let { printSecretsNote(it) }
             }
         } catch (e: DaemonException) {
             print("service.start failed - " + e.readable())
@@ -210,6 +247,9 @@ class ServiceProcessHandler(
         if (stopped.get()) return
         tail()
     }
+
+    private fun printSecretsNote(env: String) = print("!! the container got the REAL secret values of environment $env (both confirmations given); " +
+        "the next plain start recreates it with the local ones")
 
     private fun summary(j: JsonObject): String {
         val parts = j.entrySet().filter { it.key != "id" && it.key != "event" && it.value.isJsonPrimitive }.joinToString(" ") { "${it.key}=${it.value.asString}" }

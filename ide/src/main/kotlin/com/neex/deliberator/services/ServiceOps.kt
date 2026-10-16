@@ -1,6 +1,8 @@
 package com.neex.deliberator.services
 
 import com.google.gson.JsonObject
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.neex.deliberator.daemon.DaemonEvent
@@ -30,13 +32,50 @@ class ServiceOps(private val project: Project) {
 
     private fun refreshed(f: () -> JsonObject): JsonObject = try { f() } finally { svc.refreshNow() }
 
-    /** `service.start`; [extra] is merged into the args (piece 08b's `secrets-from`/`confirm` arrive through the run configuration's `startArgs`). */
+    /** A `confirm-required` answer of a secrets start: [token] repeated as `confirm` is the yes; [summary] is the daemon's text, shown verbatim. */
+    data class SecretsConfirmation(val token: String, val summary: String, val step: Int, val of: Int, val env: String?)
+
+    /**
+     * Asked for each confirmation of a secrets start; true repeats the start with the token. The default is a modal [SecretsConfirmDialog].
+     * Replaced by tests. Called on a background thread.
+     */
+    @Volatile var confirmer: (SecretsConfirmation) -> Boolean = { c ->
+        var yes = false
+        ApplicationManager.getApplication().invokeAndWait({ yes = SecretsConfirmDialog(project, c).showAndGet() }, ModalityState.nonModal())
+        yes
+    }
+
+    /**
+     * `service.start`; [extra] is merged into the args (the run configuration's `startArgs()`, with `secrets-from` when its checkbox is on). With
+     * `secrets-from` the daemon answers `confirm-required` twice: each is put to [confirmer] and, when confirmed, the start is repeated with `confirm` set to the
+     * token (token 1, token 2, start). Declining ends it with `service/cancelled`: nothing was started, no value fetched.
+     */
     fun start(name: String, extra: JsonObject = JsonObject(), onEvent: (DaemonEvent) -> Unit = {}): Started {
         val a = args(name)
         extra.entrySet().forEach { a.add(it.key, it.value) }
-        val r = refreshed { svc.call("service.start", a, onEvent).resultObject() }
-        return started(r, name)
+        val secrets = a.has("secrets-from")
+        try {
+            repeat(MAX_CONFIRMATIONS + 1) {
+                val t = svc.start("service.start", a, true, onEvent).await()
+                if (t.ok) return started(t.resultObject(), name)
+                val e = t.error
+                if (secrets && t.errorType == "confirm-required" && e != null) {
+                    val c = SecretsConfirmation(e.str("token") ?: throw DaemonException("confirm-required without a token", "service/confirm-malformed"),
+                        e.str("summary") ?: t.errorMessage ?: "", e.get("step")?.takeIf { it.isJsonPrimitive }?.asInt ?: 1,
+                        e.get("of")?.takeIf { it.isJsonPrimitive }?.asInt ?: 2, e.str("env"))
+                    if (!confirmer(c)) throw DaemonException("start of $name cancelled at confirmation ${c.step} of ${c.of}: nothing was started and no secret value was fetched", "service/cancelled")
+                    a.addProperty("confirm", c.token)
+                } else {
+                    throw DaemonException(t.errorMessage ?: "service.start failed", t.errorType ?: "daemon/error", e?.str("hint"))
+                }
+            }
+            throw DaemonException("the daemon kept asking for confirmation of $name", "service/confirm-loop")
+        } finally {
+            svc.refreshNow()
+        }
     }
+
+    private fun JsonObject.str(k: String) = get(k)?.takeIf { it.isJsonPrimitive }?.asString
 
     fun restart(name: String, onEvent: (DaemonEvent) -> Unit = {}): Started =
         started(refreshed { svc.call("service.restart", args(name), onEvent).resultObject() }, name)
@@ -87,6 +126,9 @@ class ServiceOps(private val project: Project) {
     }
 
     companion object {
+        /** Two confirmations plus a margin. */
+        private const val MAX_CONFIRMATIONS = 3
+
         fun getInstance(project: Project): ServiceOps = project.getService(ServiceOps::class.java)
 
         /** The environment target that stands for the service's container log (`sync-local-env!` writes it; a topology `external` may redirect it). */
