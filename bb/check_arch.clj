@@ -5,6 +5,9 @@
   - core/ never references `com.intellij`.
   - cli/ contains no `deliberator.` namespace (no business logic, nothing of the core).
   - ide/ never references `cognitect.aws`, `software.amazon`, Podman or JDBC.
+  - ide/**/*.kt never names the store layout (`sessions/`, `workspaces/`, `worktrees/`, `repos/`,
+    `runs/`, any `.edn` file but the jar's `version.edn`): the IDE asks the daemon; the discovery
+    contract (`daemon/endpoint`, `daemon/lock`, `daemon/daemon.out`) is the only disk knowledge.
   - nowhere in the repository does a forbidden (employer) name occur. The list is never kept in
     the repository: it is read from the env var DELIBERATOR_FORBIDDEN_NAMES (comma separated) or
     from the gitignored file .scratch/forbidden-names.txt (one per line); without either the check
@@ -20,7 +23,9 @@
   [{:rule "core/ must not reference com.intellij" :dir "core/" :re #"com\.intellij"}
    {:rule "cli/ must not reference deliberator.* namespaces" :dir "cli/" :re #"\bdeliberator\.[a-z]"}
    {:rule "ide/ must not reference AWS, Podman or JDBC" :dir "ide/"
-    :re #"(?i)cognitect\.aws|software\.amazon|podman|java\.sql|jdbc|org\.postgresql"}])
+    :re #"(?i)cognitect\.aws|software\.amazon|podman|java\.sql|jdbc|org\.postgresql"}
+   {:rule "ide/ Kotlin must not name the store layout (ask the daemon)" :dir "ide/" :ext ".kt"
+    :re #"\b(?:sessions|workspaces|worktrees|repos|runs)/|(?<!version)\.edn\b"}])
 
 (defn- repo-files []
   (->> (p/shell {:out :string} "git" "ls-files" "--cached" "--others" "--exclude-standard")
@@ -37,8 +42,8 @@
                 (when (fs/exists? f) (slurp f)))]
     (->> (str/split (or raw "") #"[,\n]") (map str/trim) (remove str/blank?))))
 
-(defn- hits [files {:keys [dir re rule]}]
-  (for [f files :when (str/starts-with? f dir)
+(defn- hits [files {:keys [dir re rule ext]}]
+  (for [f files :when (and (str/starts-with? f dir) (or (nil? ext) (str/ends-with? f ext)))
         :let [t (text f)] :when t
         [i l] (map-indexed vector (str/split-lines t))
         :when (re-find re l)]
