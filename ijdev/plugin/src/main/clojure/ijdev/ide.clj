@@ -47,7 +47,7 @@
 
 (defmacro edt [& body] `(edt* (fn [] ~@body)))
 
-(defn read* [f] (ReadAction/compute (reify ThrowableComputable (compute [_] (f)))))
+(defn read* [f] (ReadAction/computeBlocking (reify ThrowableComputable (compute [_] (f)))))
 
 (defmacro read "Body in a read action (any thread)." [& body] `(read* (fn [] ~@body)))
 
