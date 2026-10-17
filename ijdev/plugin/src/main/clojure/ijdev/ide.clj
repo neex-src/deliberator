@@ -168,7 +168,10 @@
 
 (defn kotlin
   "Evaluates Kotlin script source with the IDE's Kotlin JSR-223 engine (the one the IDE Scripting Console uses); `project` is
-  bound when given. The first call takes several seconds. Returns the script's value."
+  bound when given (bindings[\"project\"]). The first call takes several seconds. Returns the script's value.
+  EXPERIMENTAL. On 262 the only engine is Jsr223KotlincScriptEngineFactory (kotlinc, out of process over RMI): self-contained
+  expressions work, scripts that touch IDE classes fail to compile and the report comes back as
+  NotSerializableException: com.intellij.openapi.diagnostic.Attachment. Prefer Clojure interop for anything that touches the IDE."
   ([code] (kotlin nil code))
   ([project code]
    (let [e (or @kotlin-engine

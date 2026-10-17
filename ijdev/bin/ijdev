@@ -9,7 +9,7 @@
 ;;   ijdev start [-- gradle args] build the REPL plugin when needed, start the IDE, wait for the REPL
 ;;   ijdev stop | restart
 ;;   ijdev eval '<clj>' | -f FILE evaluate Clojure in the IDE (ns user: ide/ hs/ plugins/ aliased)
-;;   ijdev kt '<kotlin>'          evaluate Kotlin script in the IDE (the IDE's own engine; first call is slow)
+;;   ijdev kt '<kotlin>'          Kotlin script via the IDE's engine. EXPERIMENTAL: on 262 only self-contained expressions work
 ;;   ijdev hotswap                compile, then redefine/define the changed classes in the running plugin
 ;;   ijdev reload                 rebuild the sandbox, unload + load the plugin (plugin.xml changes)
 ;;   ijdev shot [name]            PNG of every visible IDE window -> .ijdev/shots/<name>.png (read it with the Read tool)
@@ -111,7 +111,7 @@
 
 (defn print-result! [{:keys [out err values ex]}]
   (when (seq out) (print (str/join out)))
-  (when (seq err) (binding [*out* *err*] (print (str/join err))))
+  (when (seq err) (binding [*out* *err*] (print (str/join err)) (flush)))
   (doseq [v values :when (not (and (= "nil" v) (seq out)))] (println v))
   (flush)
   (when ex (System/exit 1)))
