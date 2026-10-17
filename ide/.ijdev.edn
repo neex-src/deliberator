@@ -1,0 +1,8 @@
+;; ijdev (ijdev/bin/ijdev): the REPL inside the sandbox IDE. The test home keeps the sandbox's daemon off ~/.local/share/deliberator.
+{:plugin "com.neex.deliberator"
+ :run-task "runIdeDev"
+ :sandbox-task "prepareSandbox_runIdeDev"
+ :compile-tasks ["compileKotlin" "compileJava"]
+ :classes ["build/classes/kotlin/main" "build/classes/java/main"]
+ :ijdev-plugin "../ijdev/plugin"
+ :start-args ["-PdlbHome=../.scratch/ijdev-home"]}

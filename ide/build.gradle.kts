@@ -77,6 +77,35 @@ tasks.runIde {
     providers.gradleProperty("dlbProject").orNull?.let { args(it) }
 }
 
+// `ijdev start` runs this: the sandbox IDE with the dev-only ijdev REPL plugin (nREPL inside the IDE, port in ide/.ijdev/nrepl-port),
+// the agent that keeps Instrumentation for `ijdev hotswap`, JBR's enhanced class redefinition, and no auto-reload (`ijdev reload`
+// unloads and loads the plugin itself). Its own sandbox (suffix _runIdeDev), so it never disturbs `bb ide:run`.
+val ijdevDir = repoRoot.dir("ijdev/plugin/build")
+val runIdeDev by intellijPlatformTesting.runIde.registering {
+    plugins { localPlugin(ijdevDir.file("distributions/ijdev-repl-0.1.0.zip").asFile) }
+    prepareSandboxTask {
+        dependsOn(buildDaemonJar)
+        from(daemonJar) { into(pluginName.map { "$it/lib" }) }
+    }
+    task {
+        autoReload = false
+        jvmArgs(
+            "-javaagent:" + ijdevDir.file("agent/ijdev-agent.jar").asFile.absolutePath,
+            "-XX:+AllowEnhancedClassRedefinition",
+            "-Dijdev.dir=" + layout.projectDirectory.dir(".ijdev").asFile.absolutePath,
+            "-Dijdev.plugins=com.neex.deliberator",
+            "-Didea.is.internal=true",
+            "-Didea.trust.all.projects=true",
+            "-Dide.show.tips.on.startup.default.value=false",
+            "-Djb.consents.confirmation.enabled=false",
+            "-Djb.privacy.policy.text=<!--999.999-->",
+            "-Ddeliberator.jar=" + daemonJar.asFile.absolutePath,
+        )
+        providers.gradleProperty("dlbHome").orNull?.let { environment("DELIBERATOR_HOME", file(it).absolutePath) }
+        providers.gradleProperty("dlbProject").orNull?.let { args(file(it).absolutePath) }
+    }
+}
+
 // Everything both test tasks share: fences, test data, the sweep of orphan daemons (see the comments inside).
 fun Test.configureDeliberatorTests() {
     dependsOn(buildDaemonJar)

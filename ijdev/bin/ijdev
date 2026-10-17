@@ -1,0 +1,246 @@
+#!/usr/bin/env bb
+;; ijdev -- the single interface to a REPL inside a running sandbox IDE (cljdev's shape, for IntelliJ plugins).
+;;
+;; The sandbox IDE runs in a tmux window `ide-<name>` (a window in this tmux session when $TMUX is set, else a detached session),
+;; started through the Gradle task that adds the ijdev REPL plugin and the agent (`runIdeDev`). Stopping kills that window. No PID
+;; files, no background `&`, no pkill.
+;;
+;;   ijdev status                 is the IDE up, is its REPL answering, what to do next
+;;   ijdev start [-- gradle args] build the REPL plugin when needed, start the IDE, wait for the REPL
+;;   ijdev stop | restart
+;;   ijdev eval '<clj>' | -f FILE evaluate Clojure in the IDE (ns user: ide/ hs/ plugins/ aliased)
+;;   ijdev kt '<kotlin>'          evaluate Kotlin script in the IDE (the IDE's own engine; first call is slow)
+;;   ijdev hotswap                compile, then redefine/define the changed classes in the running plugin
+;;   ijdev reload                 rebuild the sandbox, unload + load the plugin (plugin.xml changes)
+;;   ijdev shot [name]            PNG of every visible IDE window -> .ijdev/shots/<name>.png (read it with the Read tool)
+;;   ijdev ui                     the visible component tree of the main frame, as text
+;;   ijdev log [N] [regex]        the sandbox idea.log (no REPL needed)
+;;   ijdev logs                   every evaluation so far (.ijdev/evals.log)
+;;   ijdev errors [--clear]       the IDE's error reports ("IDE error occurred"), as text
+;;   ijdev self-reload            load the REPL plugin's own .clj sources from disk into the IDE (no rebuild, no restart)
+;;
+;; The project is the nearest directory upwards with .ijdev.edn (-d/--dir DIR to point elsewhere):
+;;   {:plugin "my.plugin.id" :run-task "runIdeDev" :sandbox-task "prepareSandbox_runIdeDev"
+;;    :compile-tasks ["compileKotlin" "compileJava"] :classes ["build/classes/kotlin/main" "build/classes/java/main"]
+;;    :ijdev-plugin "../ijdev/plugin"   ; where the REPL plugin's Gradle build is, relative to the project
+;;    :start-args []}                   ; extra Gradle args for start
+(require '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[bencode.core :as bencode]
+         '[clojure.edn :as edn]
+         '[clojure.string :as str])
+
+(defn die [& xs] (binding [*out* *err*] (println (str "ijdev: " (str/join " " xs)))) (System/exit 1))
+
+;; ---------------------------------------------------------------- project
+
+(defn find-project [dir]
+  (loop [d (fs/normalize (fs/absolutize dir))]
+    (cond (nil? d) nil
+          (fs/exists? (fs/path d ".ijdev.edn")) (str d)
+          :else (recur (fs/parent d)))))
+
+(defn config [dir]
+  (let [c (edn/read-string (slurp (str (fs/path dir ".ijdev.edn"))))]
+    (merge {:run-task "runIdeDev" :sandbox-task "prepareSandbox_runIdeDev"
+            :compile-tasks ["compileKotlin" "compileJava"]
+            :classes ["build/classes/kotlin/main" "build/classes/java/main"]
+            :start-args []}
+           c)))
+
+(defn state-dir [dir] (doto (fs/path dir ".ijdev") fs/create-dirs))
+(defn window-name [dir] (str "ide-" (fs/file-name (or (some-> (p/sh {:dir dir} "git" "rev-parse" "--show-toplevel") :out str/trim not-empty) dir))))
+
+;; ---------------------------------------------------------------- tmux
+
+(defn tmux [& args] (apply p/sh "tmux" args))
+(defn in-tmux? [] (some? (System/getenv "TMUX")))
+
+(defn window-alive? [w]
+  (if (in-tmux?)
+    (some #{w} (str/split-lines (:out (tmux "list-windows" "-F" "#{window_name}"))))
+    (zero? (:exit (tmux "has-session" "-t" w)))))
+
+(defn kill-window! [w]
+  (if (in-tmux?) (tmux "kill-window" "-t" w) (tmux "kill-session" "-t" w)))
+
+(defn open-window! [w dir cmd]
+  (if (in-tmux?)
+    (tmux "new-window" "-d" "-n" w "-c" dir cmd)
+    (tmux "new-session" "-d" "-s" w "-c" dir cmd)))
+
+;; ---------------------------------------------------------------- nREPL
+
+(defn port [dir] (let [f (fs/file (state-dir dir) "nrepl-port")] (when (fs/exists? f) (parse-long (str/trim (slurp f))))))
+
+(defn nrepl-eval
+  "Evaluates code in a fresh session (ns user). {:out :err :values :ex}."
+  [port code timeout-ms]
+  (with-open [s (doto (java.net.Socket. "127.0.0.1" (int port)) (.setSoTimeout (int timeout-ms)))]
+    (let [out (java.io.BufferedOutputStream. (.getOutputStream s))
+          in (java.io.PushbackInputStream. (.getInputStream s))
+          s-str (fn [x] (if (bytes? x) (String. ^bytes x "UTF-8") x))]
+      (bencode/write-bencode out {"op" "eval" "code" code "id" "ijdev" "ns" "user"})
+      (.flush out)
+      (loop [acc {:out [] :err [] :values []}]
+        (let [m (update-vals (bencode/read-bencode in) #(if (bytes? %) (s-str %) (if (sequential? %) (mapv s-str %) %)))
+              acc (cond-> acc
+                    (m "out") (update :out conj (m "out"))
+                    (m "err") (update :err conj (m "err"))
+                    (m "value") (update :values conj (m "value"))
+                    (m "ex") (assoc :ex (m "ex")))]
+          (if (some #{"done"} (m "status")) acc (recur acc)))))))
+
+(defn up? [dir] (when-let [p (port dir)] (try (= ["2"] (:values (nrepl-eval p "(+ 1 1)" 3000))) (catch Exception _ false))))
+
+(defn log-eval! [dir kind code res]
+  (spit (str (fs/path (state-dir dir) "evals.log"))
+        (str ";; " (java.time.LocalDateTime/now) " " kind "\n" code "\n"
+             (when (seq (:out res)) (str ";; out:\n" (str/join (:out res)) "\n"))
+             (when (seq (:err res)) (str ";; err:\n" (str/join (:err res)) "\n"))
+             ";; => " (str/join " " (:values res)) (when (:ex res) (str " ex " (:ex res))) "\n\n")
+        :append true))
+
+(defn eval! [dir code & {:keys [kind timeout] :or {kind "eval" timeout 120000}}]
+  (let [p (or (port dir) (die "no REPL port: is the IDE up? (ijdev status)"))
+        res (try (nrepl-eval p code timeout)
+                 (catch java.net.ConnectException _ (die "the REPL port" p "does not answer: ijdev status"))
+                 (catch java.net.SocketTimeoutException _ (die "no answer within" (/ timeout 1000) "s (EDT blocked? a modal dialog open? try: ijdev shot)")))]
+    (log-eval! dir kind code res)
+    res))
+
+(defn print-result! [{:keys [out err values ex]}]
+  (when (seq out) (print (str/join out)))
+  (when (seq err) (binding [*out* *err*] (print (str/join err))))
+  (doseq [v values :when (not (and (= "nil" v) (seq out)))] (println v))
+  (flush)
+  (when ex (System/exit 1)))
+
+;; ---------------------------------------------------------------- gradle
+
+(defn gradle!
+  "Runs ./gradlew tasks in dir, output persisted to .ijdev/gradle.log; dies with its tail on failure."
+  [dir tasks]
+  (let [logf (str (fs/path (state-dir dir) "gradle.log"))
+        {:keys [exit out err]} (apply p/sh {:dir dir} "./gradlew" "-q" "--console=plain" tasks)]
+    (spit logf (str "$ ./gradlew " (str/join " " tasks) "\n" out err))
+    (when-not (zero? exit)
+      (println (str/join "\n" (take-last 30 (str/split-lines (str out err)))))
+      (die "gradle" (str/join " " tasks) "failed (full output:" logf ")"))))
+
+(defn ijdev-plugin-dir [dir cfg] (str (fs/normalize (fs/path dir (or (:ijdev-plugin cfg) "../ijdev/plugin")))))
+
+(defn ensure-repl-plugin! [dir cfg]
+  (let [pd (ijdev-plugin-dir dir cfg)
+        zip (first (fs/glob (fs/path pd "build/distributions") "ijdev-repl-*.zip"))
+        agent (fs/path pd "build/agent/ijdev-agent.jar")
+        newest-src (apply max 0 (map #(.toMillis (fs/last-modified-time %)) (fs/glob (fs/path pd "src") "**")))]
+    (when (or (nil? zip) (not (fs/exists? agent)) (> newest-src (.toMillis (fs/last-modified-time zip))))
+      (println "building the ijdev REPL plugin in" pd)
+      (gradle! pd ["buildPlugin"]))))
+
+;; ---------------------------------------------------------------- commands
+
+(defn sandbox-log [dir cfg]
+  (let [suffix (str/replace (:run-task cfg) #"^run" "_run")]
+    (some-> (first (sort-by #(- (.toMillis (fs/last-modified-time %)))
+                            (fs/glob (fs/path dir ".intellijPlatform/sandbox") (str "*/*/log" suffix "/idea.log"))))
+            str)))
+
+(defn cmd-status [dir cfg]
+  (let [w (window-name dir) alive (window-alive? w) p (port dir) ok (up? dir)]
+    (println "project " dir "  plugin" (:plugin cfg))
+    (println "window  " w (if alive "running" "absent"))
+    (println "repl    " (cond ok (str "127.0.0.1:" p " answers")
+                              p (str "port file " p " but no answer" (when alive " (still starting?)"))
+                              :else "no port file"))
+    (when ok
+      (print-result! (eval! dir "(str \"ide \" (.getFullVersion (com.intellij.openapi.application.ApplicationInfo/getInstance))
+                                      \"  projects \" (mapv #(.getName %) (ide/projects))
+                                      \"  hotswap \" (try (hs/instrumentation) \"ready\" (catch Exception e (ex-message e))))"
+                            :kind "status")))
+    (println "log     " (or (sandbox-log dir cfg) "-"))
+    (println "next    " (cond ok "ijdev eval '(ide/projects)'"
+                              alive "wait, or ijdev log 40"
+                              :else "ijdev start"))))
+
+(defn cmd-start [dir cfg extra]
+  (let [w (window-name dir)]
+    (when (window-alive? w) (if (up? dir) (do (println "already up:" w) (System/exit 0)) (die "window" w "exists but the REPL does not answer: ijdev stop, then start")))
+    (ensure-repl-plugin! dir cfg)
+    (doseq [f ["nrepl-port" ".nrepl-port"]] (fs/delete-if-exists (fs/path (state-dir dir) f)))
+    (let [display (or (System/getenv "IJDEV_DISPLAY") (System/getenv "DISPLAY") (when (fs/exists? "/tmp/.X11-unix/X0") ":0")
+                      (die "no display: set DISPLAY or IJDEV_DISPLAY"))
+          xauth (or (System/getenv "XAUTHORITY") (str (fs/path (System/getProperty "user.home") ".Xauthority")))
+          runlog (str (fs/path (state-dir dir) "run.log"))
+          cmd (str "DISPLAY=" display " XAUTHORITY=" xauth " ./gradlew --console=plain " (:run-task cfg) " "
+                   (str/join " " (map #(str "'" % "'") (concat (:start-args cfg) extra)))
+                   " 2>&1 | tee " runlog "; echo; echo '[ijdev] the IDE exited; this window closes on Enter'; read")]
+      (open-window! w dir cmd)
+      (println "started" w "on DISPLAY" display "- waiting for the REPL (log:" runlog ")")
+      (loop [i 0]
+        (cond (up? dir) (do (println "up: 127.0.0.1:" (port dir)) (cmd-status dir cfg))
+              (not (window-alive? w)) (die "the IDE window closed; see" runlog)
+              (and (> i 10) (re-find #"BUILD FAILED|FAILURE:" (slurp runlog))) (die "gradle failed; see" runlog)
+              (> i 150) (die "no REPL after 5 minutes; ijdev log 60")
+              :else (do (Thread/sleep 2000) (recur (inc i))))))))
+
+(defn cmd-stop [dir _cfg]
+  (let [w (window-name dir)]
+    (when (up? dir)
+      (try (nrepl-eval (port dir) "(do (future (Thread/sleep 300) (ide/edt (.exit (ide/app) true true false))) :exiting)" 5000)
+           (catch Exception _ nil))
+      (loop [i 0] (when (and (< i 30) (up? dir)) (Thread/sleep 1000) (recur (inc i)))))
+    (when (window-alive? w) (kill-window! w))
+    (doseq [f ["nrepl-port" ".nrepl-port"]] (fs/delete-if-exists (fs/path (state-dir dir) f)))
+    (println "stopped" w)))
+
+(defn edn-str [x] (pr-str x))
+
+(defn cmd-hotswap [dir cfg]
+  (gradle! dir (:compile-tasks cfg))
+  (let [dirs (mapv #(str (fs/path dir %)) (:classes cfg))]
+    (print-result! (eval! dir (str "(let [r (hs/swap! {:plugin " (edn-str (:plugin cfg)) " :dirs " (edn-str dirs) "})]"
+                                   " (clojure.pprint/pprint r) (if (or (:redefine-failed r) (seq (:skipped r))) :partial :ok))")
+                          :kind "hotswap"))))
+
+(defn cmd-reload [dir cfg]
+  (gradle! dir [(:sandbox-task cfg)])
+  (print-result! (eval! dir (str "(let [r (plugins/reload! " (edn-str (:plugin cfg)) ")] (clojure.pprint/pprint r) (if (:reloaded r) :ok :failed))")
+                        :kind "reload" :timeout 300000)))
+
+(defn -main [& argv]
+  (let [[dir-opt argv] (if (#{"-d" "--dir"} (first argv)) [(second argv) (drop 2 argv)] [nil argv])
+        dir (or (find-project (or dir-opt ".")) (die "no .ijdev.edn here or above (or -d DIR)"))
+        cfg (config dir)
+        [cmd & args] argv]
+    (case cmd
+      "status" (cmd-status dir cfg)
+      "start" (cmd-start dir cfg (rest (drop-while #(not= "--" %) args)))
+      "stop" (cmd-stop dir cfg)
+      "restart" (do (cmd-stop dir cfg) (cmd-start dir cfg (rest (drop-while #(not= "--" %) args))))
+      "eval" (let [code (if (= "-f" (first args)) (slurp (second args)) (str/join " " args))]
+               (when (str/blank? code) (die "nothing to evaluate"))
+               (print-result! (eval! dir code)))
+      "kt" (let [code (if (= "-f" (first args)) (slurp (second args)) (str/join " " args))]
+             (print-result! (eval! dir (str "(ide/kotlin (ide/project) " (pr-str code) ")") :kind "kotlin" :timeout 300000)))
+      "hotswap" (cmd-hotswap dir cfg)
+      "reload" (cmd-reload dir cfg)
+      "shot" (print-result! (eval! dir (str "(clojure.string/join \"\\n\" (ide/shot! " (pr-str (or (first args) (str "shot-" (System/currentTimeMillis)))) "))") :kind "shot"))
+      "ui" (print-result! (eval! dir "(print (ide/ui-tree))" :kind "ui"))
+      "log" (let [f (or (sandbox-log dir cfg) (die "no sandbox idea.log yet"))
+                  n (or (some-> (first args) parse-long) 40)
+                  re (second args)
+                  lines (cond->> (str/split-lines (slurp f)) re (filter #(re-find (re-pattern re) %)))]
+              (println (str/join "\n" (take-last n lines))))
+      "errors" (print-result! (eval! dir (str "(let [e (ide/errors)] (println (if (seq e) e \"no IDE errors\")) "
+                                              (when (= "--clear" (first args)) "(ide/clear-errors!) ") "nil)") :kind "errors"))
+      "self-reload" (let [src (fs/path (ijdev-plugin-dir dir cfg) "src/main/clojure/ijdev")
+                          files (map #(str (fs/path src (str % ".clj"))) ["ide" "hotswap" "plugins" "boot"])]
+                      (print-result! (eval! dir (str "(do " (str/join " " (map #(str "(load-file " (pr-str %) ")") files)) " :reloaded)")
+                                            :kind "self-reload")))
+      "logs" (println (slurp (str (fs/path (state-dir dir) "evals.log"))))
+      (do (println (str/join "\n" (->> (str/split-lines (slurp *file*)) (drop 2) (take-while #(str/starts-with? % ";;")) (map #(subs % (min 3 (count %)))))))
+          (when cmd (System/exit 1))))))
+
+(apply -main *command-line-args*)
