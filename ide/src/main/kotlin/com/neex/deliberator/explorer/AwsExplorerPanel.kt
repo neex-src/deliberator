@@ -1,0 +1,152 @@
+package com.neex.deliberator.explorer
+
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.WriteAction
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.ui.ColoredTreeCellRenderer
+import com.intellij.ui.SimpleTextAttributes
+import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.treeStructure.Tree
+import com.intellij.psi.PsiDocumentManager
+import com.neex.deliberator.run.PrettyJson
+import com.neex.deliberator.run.ResponsePeek
+import com.neex.deliberator.run.RunSnapshot
+import com.neex.deliberator.run.RunView
+import com.neex.deliberator.run.ScnRunListener
+import com.neex.deliberator.run.ScnRunner
+import com.neex.deliberator.scn.AwsResources
+import com.neex.deliberator.scn.LiveResource
+import com.neex.deliberator.scn.ResponsePaths
+import com.neex.deliberator.scn.ScnFile
+import com.neex.deliberator.ui.Ui
+import com.neex.deliberator.workspace.WorkspaceService
+import java.awt.BorderLayout
+import java.awt.event.KeyAdapter
+import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
+import java.nio.file.Path
+import javax.swing.JButton
+import javax.swing.JPanel
+import javax.swing.tree.DefaultMutableTreeNode
+import javax.swing.tree.DefaultTreeModel
+
+/**
+ * The "AWS" tab: what exists in the project's environment (queues, tables, buckets, topics, parameters, ...), from `aws.discover`.
+ * Double-click or Enter on a resource writes the step that reads it into `explore-<env>.scn` of the project, runs it and shows the
+ * response in the peek: browsing the emulator without a console tab, and what you opened stays as a scenario you can edit.
+ */
+class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
+    private val root = DefaultMutableTreeNode("environment")
+    private val model = DefaultTreeModel(root)
+    private val tree = Tree(model)
+    private val status = JBLabel(" ")
+
+    internal class KindNode(val kind: String, val title: String, val count: Int) { override fun toString() = "$title ($count)" }
+    internal class ResNode(val kind: String, val r: LiveResource) { override fun toString() = r.name }
+
+    init {
+        tree.isRootVisible = false
+        tree.cellRenderer = object : ColoredTreeCellRenderer() {
+            override fun customizeCellRenderer(t: javax.swing.JTree, value: Any?, sel: Boolean, exp: Boolean, leaf: Boolean, row: Int, focus: Boolean) {
+                when (val u = (value as? DefaultMutableTreeNode)?.userObject) {
+                    is KindNode -> append(u.toString(), SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                    is ResNode -> { append(u.r.name); u.r.ref?.takeIf { u.kind == "ssm" }?.let { append("  $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) } }
+                    else -> append(u.toString())
+                }
+            }
+        }
+        tree.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) { if (e.clickCount == 2) open() }
+        })
+        tree.addKeyListener(object : KeyAdapter() {
+            override fun keyPressed(e: KeyEvent) { if (e.keyCode == KeyEvent.VK_ENTER) open() }
+        })
+        val refresh = JButton("Refresh").apply { addActionListener { refresh() } }
+        add(JPanel(BorderLayout()).apply { add(status, BorderLayout.CENTER); add(refresh, BorderLayout.EAST) }, BorderLayout.NORTH)
+        add(JBScrollPane(tree), BorderLayout.CENTER)
+        refresh()
+    }
+
+    private fun env() = WorkspaceService.getInstance(project).selectedEnv
+
+    fun refresh() {
+        status.text = "reading ${env()} ..."
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val svc = com.neex.deliberator.scn.ScnRegistry.getInstance()
+            if (svc.knownClient() == null) runCatching { svc.refresh() }
+            val res = AwsResources.getInstance().get(project, ttlMs = 0)
+            ApplicationManager.getApplication().invokeLater({ render(res) }, ModalityState.any())
+        }
+    }
+
+    fun render(res: Map<String, List<LiveResource>>) {
+        root.removeAllChildren()
+        var total = 0
+        for (k in ExplorerSteps.KINDS) {
+            val items = res[k.kind].orEmpty()
+            if (items.isEmpty()) continue
+            total += items.size
+            DefaultMutableTreeNode(KindNode(k.kind, k.title, items.size)).also { n -> items.forEach { n.add(DefaultMutableTreeNode(ResNode(k.kind, it))) }; root.add(n) }
+        }
+        model.reload()
+        for (i in 0 until tree.rowCount) tree.expandRow(i)
+        status.text = if (total == 0) "${env()}: nothing found (is the runtime up?)" else "${env()}: $total resources  ·  double-click opens one as a step"
+    }
+
+    /** Text of the tree as lines `kind: name` (for tests). */
+    fun lines(): List<String> = (0 until root.childCount).flatMap { k ->
+        val kn = root.getChildAt(k) as DefaultMutableTreeNode
+        (0 until kn.childCount).map { "${(kn.userObject as KindNode).kind}: ${((kn.getChildAt(it) as DefaultMutableTreeNode).userObject as ResNode).r.name}" }
+    }
+
+    private fun open() {
+        val n = (tree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject as? ResNode ?: return
+        val step = ExplorerSteps.step(n.kind, n.r) ?: return
+        openStep(project, env(), step)
+    }
+
+    override fun dispose() {}
+
+    companion object {
+        /** Appends [step] to `explore-<env>.scn` (created with a header), opens it, runs that step and peeks at the response when it ends. EDT. */
+        fun openStep(project: Project, env: String, step: String) {
+            val base = project.basePath ?: return
+            val name = ExplorerSteps.fileName(env)
+            val vf = WriteAction.compute<com.intellij.openapi.vfs.VirtualFile?, Exception> {
+                val dir = VfsUtil.createDirectoryIfMissing(Path.of(base, "explore").toString()) ?: return@compute null
+                dir.findChild(name) ?: dir.createChildData(this, name).also { VfsUtil.saveText(it, ExplorerSteps.header(env)) }
+            } ?: return
+            val editor = Ui.openEditor(project, vf) ?: return
+            val d = editor.document
+            val before = (PsiDocumentManager.getInstance(project).also { it.commitDocument(d) }.getPsiFile(d) as? ScnFile)?.steps?.size ?: 0
+            val text = (if (d.textLength > 0 && !d.text.endsWith("\n")) "\n" else "") + "\n" + step
+            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) { d.insertString(d.textLength, text) }
+            FileDocumentManager.getInstance().saveDocument(d)
+            PsiDocumentManager.getInstance(project).commitDocument(d)
+            editor.caretModel.moveToOffset(d.textLength - 1)
+            editor.scrollingModel.scrollToCaret(com.intellij.openapi.editor.ScrollType.MAKE_VISIBLE)
+            val index = before + 1
+            val conn = project.messageBus.connect()
+            conn.subscribe(ScnRunListener.TOPIC, object : ScnRunListener {
+                override fun runFinished(path: String, snapshot: RunSnapshot) {
+                    if (path != vf.path) return
+                    conn.disconnect()
+                    val resp = ResponsePaths.response(snapshot.sections[index])
+                    ApplicationManager.getApplication().invokeLater({
+                        val psi = PsiDocumentManager.getInstance(project).getPsiFile(editor.document) as? ScnFile
+                        val s = psi?.steps?.getOrNull(index - 1)
+                        if (resp != null && s != null) ResponsePeek.show(editor, s, PrettyJson.render(resp))
+                    }, ModalityState.nonModal())
+                }
+            })
+            ScnRunner.getInstance(project).run(vf, listOf(index))
+        }
+    }
+}

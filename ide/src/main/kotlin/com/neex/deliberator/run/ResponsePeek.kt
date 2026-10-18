@@ -49,8 +49,12 @@ class PeekResponseAction : ScnEditorAction() {
 }
 
 object ResponsePeek {
+    /** One peek at a time: opening another closes this one. */
+    @Volatile private var current: JBPopup? = null
+
     fun show(scn: Editor, step: ScnStep, lines: List<PrettyLine>) {
         val project = scn.project ?: return
+        current?.cancel()
         val doc = EditorFactory.getInstance().createDocument(lines.joinToString("\n") { it.text })
         val viewer = EditorFactory.getInstance().createViewer(doc, project) as EditorEx
         val json = FileTypeManager.getInstance().getFileTypeByExtension("json")
@@ -74,6 +78,7 @@ object ResponsePeek {
                 addAssert(scn, step, text)
             }
         }.registerCustomShortcutSet(CustomShortcutSet(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0)), viewer.contentComponent, popup)
+        current = popup
         popup.showInBestPositionFor(scn)
     }
 

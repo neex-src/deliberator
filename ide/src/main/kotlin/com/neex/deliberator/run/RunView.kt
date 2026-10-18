@@ -188,8 +188,8 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
                 inlay.update()
             }
         }, this)
-        refresh()
-        loadLatest()
+        // the editor is created in a context where committing a document is not allowed ("Write-unsafe context"): the first paint waits for a plain event
+        ApplicationManager.getApplication().invokeLater({ refresh(); loadLatest() }, com.intellij.openapi.application.ModalityState.nonModal(), { disposed || editor.isDisposed })
     }
 
     // loading the run of an earlier session of the IDE -----------------------------------------------
