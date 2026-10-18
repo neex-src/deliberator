@@ -60,22 +60,25 @@ object ScnProposals {
     fun forContext(
         ctx: ScnContext, kinds: ScnKinds?, targets: List<String>, file: ScnFile?, offset: Int,
         response: List<ResponsePath> = emptyList(),
+        live: Map<String, List<LiveResource>> = emptyMap(),
     ): List<Item> = when (ctx) {
         is ScnContext.StepStart -> kinds?.kinds?.map { Item("### ${it.kind}", "kind") } ?: emptyList()
-        is ScnContext.StepLine -> stepLine(ctx, kinds, targets)
+        is ScnContext.StepLine -> stepLine(ctx, kinds, targets, live)
         is ScnContext.DirectiveName -> directiveNames(kinds, file, offset)
         is ScnContext.DirectiveValue -> directiveValue(ctx, kinds, file, offset, response)
         is ScnContext.Variable -> variables(file, offset, targets)
         ScnContext.None -> emptyList()
     }
 
-    private fun stepLine(ctx: ScnContext.StepLine, kinds: ScnKinds?, targets: List<String>): List<Item> {
+    private fun stepLine(ctx: ScnContext.StepLine, kinds: ScnKinds?, targets: List<String>, live: Map<String, List<LiveResource>>): List<Item> {
         if (kinds == null) return emptyList()
         if (ctx.done.isEmpty()) return kinds.kinds.map { Item(it.kind, "kind", tail = it.verbs.takeIf { v -> v.isNotEmpty() }?.joinToString(" | ", " ")) }
         val kind = kinds[ctx.done[0]] ?: return emptyList()
         val after = ctx.done.drop(1)
         val verbs = kind.verbs.map { Item(it, "verb of ${kind.kind}") }
-        val tgs = if (kind.target == "none") emptyList() else targets.map { Item(it, "target") }
+        val liveNames = AwsResources.TARGET_KIND[kind.kind]?.let { live[it] }.orEmpty()
+            .filter { r -> r.name !in targets }.map { Item(it.name, "live ${kind.kind}") }
+        val tgs = if (kind.target == "none") emptyList() else targets.map { Item(it, "target") } + liveNames
         return when {
             after.isEmpty() -> verbs + (if (kind.verbOptional) tgs else emptyList())
             after.size == 1 && after[0] in kind.verbs -> tgs
@@ -163,7 +166,8 @@ class ScnCompletionContributor : CompletionContributor() {
                 }
                 val set = result.withPrefixMatcher(prefix)
                 val response = if (ctx is ScnContext.DirectiveValue) latestResponse(file, offset) else emptyList()
-                for (i in ScnProposals.forContext(ctx, registry.kinds(), targets, file, offset, response)) set.addElement(element(i, ctx))
+                val live = if (ctx is ScnContext.StepLine && ctx.done.size >= 1) AwsResources.getInstance().get(project) else emptyMap()
+                for (i in ScnProposals.forContext(ctx, registry.kinds(), targets, file, offset, response, live)) set.addElement(element(i, ctx))
                 set.stopHere()
             }
         })

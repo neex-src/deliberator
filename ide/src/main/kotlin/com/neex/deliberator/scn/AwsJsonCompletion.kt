@@ -37,6 +37,12 @@ class AwsJsonCompletion : CompletionContributor() {
                 if (isValue) {
                     val node = root.at(pathOf(prop!!)) ?: return
                     node.enum.forEach { result.addElement(LookupElementBuilder.create(it).withTypeText("enum", true)) }
+                    AwsResources.forMember(verb.substringBefore('.'), prop.name)?.let { (kind, byRef) ->
+                        AwsResources.getInstance().get(project)[kind].orEmpty().forEach { r ->
+                            val text = if (byRef) r.ref ?: r.name else r.name
+                            result.addElement(LookupElementBuilder.create(text).withTypeText("live $kind", true))
+                        }
+                    }
                     result.stopHere()
                     return
                 }

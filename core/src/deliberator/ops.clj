@@ -51,6 +51,7 @@
                                                       [run.started step.started line confirm.required step.finished run.finished]
     scenario.cancel run-id*                        -> {run-id cancelled}
     scenario.kinds                                 -> [{kind verbs verb-optional target directives facts capture-roots concurrent default-timeout-ms}]
+    aws.discover env ws                            -> {env resources{kind [{name ref}]} errors}
     aws.describe service* op*                      -> {service op class input}   (input = shape tree: type required members member enum)
     scenario.parse path text ws                    -> {header steps errors}   (a syntax error is data in errors, not an op error)
     runs.list ws session scenario limit            -> {session runs}
@@ -79,6 +80,7 @@
             [deliberator.config :as config]
             [deliberator.env :as env]
             [deliberator.logfetch :as logfetch]
+            [deliberator.awsdiscover :as awsdiscover]
             [deliberator.awsmodel :as awsmodel]
             [deliberator.markers :as markers]
             [deliberator.repo :as repo]
@@ -502,6 +504,9 @@
 
 (defn- scenario-kinds [_ _] (kinds/describe-kinds))
 
+(defn- aws-discover [_ {:keys [env] :as args}]
+  (awsdiscover/discover! (ws-of args) (or env "local")))
+
 (defn- aws-describe [_ {:keys [service op]}]
   (or (awsmodel/input service op)
       (fail :aws/unknown-operation (str "no operation " service "." op)
@@ -730,6 +735,9 @@
                       :args {:run-id {:type :string :required true :doc "run id from the run.started event"}}}
    "scenario.kinds" {:fn scenario-kinds :class :read :args {}
                      :doc "The registered step kinds as data: verbs, target rule, directives (engine-owned ones marked), facts, capture roots, concurrency. Completion and documentation are generated from it."}
+   "aws.discover" {:fn aws-discover :class :read
+                   :doc "What exists in an environment (queues, tables, buses, functions, buckets, topics, parameters, secrets, streams, state machines): names for completion. Read calls only; a failing section is listed in errors."
+                   :args (ws-schema :env {:type :string :doc "environment name (default local)"})}
    "aws.describe" {:fn aws-describe :class :read
                    :doc "The request shape of an AWS operation from the bundled service models (members, required, enums, nesting), for completion in step bodies of the aws kind."
                    :args {:service {:type :string :required true :positional true :doc "aws-api service name, e.g. ssm, s3, sns"}
