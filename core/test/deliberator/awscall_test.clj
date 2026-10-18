@@ -1,5 +1,6 @@
 (ns deliberator.awscall-test
   (:require [clojure.test :refer [deftest is testing]]
+            [deliberator.awsmodel]
             [deliberator.env.ops :as ops]
             [deliberator.steps.awscall :as awscall]))
 
@@ -18,3 +19,13 @@
   (is (= :mutate (ops/op-class :s3 "DeleteBucket")))
   (testing "the table still wins"
     (is (= :read (ops/op-class :sqs "ReceiveMessage")))))
+
+(deftest operation-input-shapes-for-the-editor
+  (let [{:keys [input class]} (deliberator.awsmodel/input "ssm" "PutParameter")]
+    (is (= "mutate" class))
+    (is (= ["Name" "Value"] (take 2 (:order input))))
+    (is (= ["Standard" "Advanced" "Intelligent-Tiering"] (get-in input [:members "Tier" :enum])))
+    (is (= "list" (get-in input [:members "Tags" :type]))))
+  (is (nil? (deliberator.awsmodel/input "ssm" "NoSuchThing")))
+  (testing "a recursive shape is cut, not followed forever"
+    (is (some? (deliberator.awsmodel/input "states" "CreateStateMachine")))))

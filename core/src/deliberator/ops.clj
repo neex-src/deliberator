@@ -51,6 +51,7 @@
                                                       [run.started step.started line confirm.required step.finished run.finished]
     scenario.cancel run-id*                        -> {run-id cancelled}
     scenario.kinds                                 -> [{kind verbs verb-optional target directives facts capture-roots concurrent default-timeout-ms}]
+    aws.describe service* op*                      -> {service op class input}   (input = shape tree: type required members member enum)
     scenario.parse path text ws                    -> {header steps errors}   (a syntax error is data in errors, not an op error)
     runs.list ws session scenario limit            -> {session runs}
     repo.attach path* kind ws                      -> {name path kind attached-at}
@@ -78,6 +79,7 @@
             [deliberator.config :as config]
             [deliberator.env :as env]
             [deliberator.logfetch :as logfetch]
+            [deliberator.awsmodel :as awsmodel]
             [deliberator.markers :as markers]
             [deliberator.repo :as repo]
             [deliberator.runtime :as runtime]
@@ -500,6 +502,11 @@
 
 (defn- scenario-kinds [_ _] (kinds/describe-kinds))
 
+(defn- aws-describe [_ {:keys [service op]}]
+  (or (awsmodel/input service op)
+      (fail :aws/unknown-operation (str "no operation " service "." op)
+            :hint "the aws kind's verbs are service.Operation, listed by scenario.kinds")))
+
 (defn- scenario-parse [_ {:keys [path text] :as args}]
   (when-not (or path text)
     (fail :bad-args "scenario.parse needs path or text" :hint "pass a scenario file path, or text for an unsaved buffer"))
@@ -723,6 +730,10 @@
                       :args {:run-id {:type :string :required true :doc "run id from the run.started event"}}}
    "scenario.kinds" {:fn scenario-kinds :class :read :args {}
                      :doc "The registered step kinds as data: verbs, target rule, directives (engine-owned ones marked), facts, capture roots, concurrency. Completion and documentation are generated from it."}
+   "aws.describe" {:fn aws-describe :class :read
+                   :doc "The request shape of an AWS operation from the bundled service models (members, required, enums, nesting), for completion in step bodies of the aws kind."
+                   :args {:service {:type :string :required true :positional true :doc "aws-api service name, e.g. ssm, s3, sns"}
+                          :op {:type :string :required true :positional true :doc "operation, e.g. GetParameter"}}}
    "scenario.parse" {:fn scenario-parse :class :read
                      :doc "Parses a scenario with the daemon's parser: header, steps (kind, verb, target, name, lines, directives, body size) and errors. A syntax error is returned in errors (steps empty), not raised. With text, an unsaved buffer is parsed; path then only resolves # @body."
                      :args (ws-schema :path {:type :string :positional true :doc "scenario file (or use text); relative paths are looked up in the session's scenarios/"}
