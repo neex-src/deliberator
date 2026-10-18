@@ -33,6 +33,7 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.nio.file.Path
 import javax.swing.JButton
+import javax.swing.JComboBox
 import javax.swing.JPanel
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
@@ -47,9 +48,13 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     private val model = DefaultTreeModel(root)
     private val tree = Tree(model)
     private val status = JBLabel(" ")
+    private val envBox = JComboBox<String>()
+    private var loadingEnvs = false
+    @Volatile private var drift: Drift? = null
 
     internal class KindNode(val kind: String, val title: String, val count: Int) { override fun toString() = "$title ($count)" }
-    internal class ResNode(val kind: String, val r: LiveResource) { override fun toString() = r.name }
+    internal class ResNode(val kind: String, val r: LiveResource, val undeclared: Boolean = false) { override fun toString() = r.name }
+    internal class MissingNode(val name: String, val address: String?) { override fun toString() = name }
 
     init {
         tree.isRootVisible = false
@@ -57,7 +62,11 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
             override fun customizeCellRenderer(t: javax.swing.JTree, value: Any?, sel: Boolean, exp: Boolean, leaf: Boolean, row: Int, focus: Boolean) {
                 when (val u = (value as? DefaultMutableTreeNode)?.userObject) {
                     is KindNode -> append(u.toString(), SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
-                    is ResNode -> { append(u.r.name); u.r.ref?.takeIf { u.kind == "ssm" }?.let { append("  $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) } }
+                    is ResNode -> {
+                        append(u.r.name); u.r.ref?.takeIf { u.kind == "ssm" }?.let { append("  $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
+                        if (u.undeclared) append("   not in Terraform", SimpleTextAttributes.ERROR_ATTRIBUTES)
+                    }
+                    is MissingNode -> { append(u.name, SimpleTextAttributes(SimpleTextAttributes.STYLE_STRIKEOUT, java.awt.Color.GRAY)); append("   declared, not in the environment" + (u.address?.let { "  ($it)" } ?: ""), SimpleTextAttributes.ERROR_ATTRIBUTES) }
                     else -> append(u.toString())
                 }
             }
@@ -69,41 +78,111 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
             override fun keyPressed(e: KeyEvent) { if (e.keyCode == KeyEvent.VK_ENTER) open() }
         })
         val refresh = JButton("Refresh").apply { addActionListener { refresh() } }
-        add(JPanel(BorderLayout()).apply { add(status, BorderLayout.CENTER); add(refresh, BorderLayout.EAST) }, BorderLayout.NORTH)
+        val driftButton = JButton("Terraform drift…").apply { toolTipText = "Compare a Terraform root (terraform show -json, read only) with this environment"; addActionListener { drift() } }
+        envBox.addActionListener { if (!loadingEnvs) (envBox.selectedItem as? String)?.let { pick -> WorkspaceService.getInstance(project).selectEnv(pick.substringBefore("  ")); refresh() } }
+        add(JPanel(BorderLayout()).apply {
+            add(JPanel(BorderLayout()).apply { add(envBox, BorderLayout.WEST); add(status, BorderLayout.CENTER) }, BorderLayout.CENTER)
+            add(JPanel().apply { add(driftButton); add(refresh) }, BorderLayout.EAST)
+        }, BorderLayout.NORTH)
         add(JBScrollPane(tree), BorderLayout.CENTER)
         refresh()
     }
 
     private fun env() = WorkspaceService.getInstance(project).selectedEnv
 
+    private fun fillEnvs() {
+        val m = WorkspaceService.getInstance(project).model
+        val names = m.envs.map { if (it.kind == "remote") "${it.name}  (remote)" else it.name }.ifEmpty { listOf(env()) }
+        loadingEnvs = true
+        try {
+            envBox.removeAllItems(); names.forEach(envBox::addItem)
+            envBox.selectedItem = names.firstOrNull { it.substringBefore("  ") == env() }
+        } finally { loadingEnvs = false }
+    }
+
+    /** Asks for a Terraform root (remembered per project), compares it with the environment, annotates the tree and writes `explore/drift-<env>.txt`. */
+    private fun drift() {
+        val props = com.intellij.ide.util.PropertiesComponent.getInstance(project)
+        val last = props.getValue("deliberator.tf.dir")
+        val vf = com.intellij.openapi.fileChooser.FileChooser.chooseFile(
+            com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFolderDescriptor().withTitle("Terraform Root to Compare"),
+            project, last?.let { LocalFileSystem.getInstance().findFileByPath(it) }) ?: return
+        props.setValue("deliberator.tf.dir", vf.path)
+        runDrift(vf.path)
+    }
+
+    fun runDrift(dir: String) {
+        status.text = "comparing $dir with ${env()} ..."
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val client = com.neex.deliberator.scn.ScnRegistry.getInstance().knownClient()
+            try {
+                val r = com.neex.deliberator.scn.ScnDaemon.call(client ?: throw IllegalStateException("no daemon connection"), project, "terraform.drift",
+                    com.google.gson.JsonObject().apply { addProperty("env", env()); addProperty("dir", dir) }).asJsonObject
+                val d = Drift.parse(r)
+                drift = d
+                ApplicationManager.getApplication().invokeLater({
+                    render(AwsResources.getInstance().get(project))
+                    status.text = "${env()}: ${d.matching}/${d.declared} declared present, ${d.missing.size} missing, ${d.undeclared.size} undeclared"
+                }, ModalityState.any())
+                ApplicationManager.getApplication().invokeLater({ writeReport(d) }, ModalityState.nonModal())
+            } catch (e: Exception) {
+                ApplicationManager.getApplication().invokeLater({ status.text = "drift failed"; Ui.notify(project, "Terraform drift", e.message ?: e.toString(), com.intellij.notification.NotificationType.ERROR) }, ModalityState.any())
+            }
+        }
+    }
+
+    private fun writeReport(d: Drift) {
+        val base = project.basePath ?: return
+        val vf = WriteAction.compute<com.intellij.openapi.vfs.VirtualFile?, Exception> {
+            val dir = VfsUtil.createDirectoryIfMissing(Path.of(base, "explore").toString()) ?: return@compute null
+            val name = "drift-${env()}.txt"
+            (dir.findChild(name) ?: dir.createChildData(this, name)).also { VfsUtil.saveText(it, d.text()) }
+        } ?: return
+        Ui.openEditor(project, vf)
+    }
+
     fun refresh() {
         status.text = "reading ${env()} ..."
         ApplicationManager.getApplication().executeOnPooledThread {
             val svc = com.neex.deliberator.scn.ScnRegistry.getInstance()
             if (svc.knownClient() == null) runCatching { svc.refresh() }
+            if (WorkspaceService.getInstance(project).model.envs.isEmpty()) runCatching { WorkspaceService.getInstance(project).refreshNow() }
             val res = AwsResources.getInstance().get(project, ttlMs = 0)
             ApplicationManager.getApplication().invokeLater({ render(res) }, ModalityState.any())
         }
     }
 
     fun render(res: Map<String, List<LiveResource>>) {
+        fillEnvs()
         root.removeAllChildren()
         var total = 0
+        val dr = drift?.takeIf { it.env == env() }
         for (k in ExplorerSteps.KINDS) {
             val items = res[k.kind].orEmpty()
             if (items.isEmpty()) continue
             total += items.size
-            DefaultMutableTreeNode(KindNode(k.kind, k.title, items.size)).also { n -> items.forEach { n.add(DefaultMutableTreeNode(ResNode(k.kind, it))) }; root.add(n) }
+            DefaultMutableTreeNode(KindNode(k.kind, k.title, items.size)).also { n ->
+                items.forEach { n.add(DefaultMutableTreeNode(ResNode(k.kind, it, dr?.isUndeclared(k.kind, it.name) == true))) }
+                dr?.missing?.filter { it.kind == k.kind }?.forEach { n.add(DefaultMutableTreeNode(MissingNode(it.name, it.address))) }
+                root.add(n)
+            }
         }
         model.reload()
         for (i in 0 until tree.rowCount) tree.expandRow(i)
-        status.text = if (total == 0) "${env()}: nothing found (is the runtime up?)" else "${env()}: $total resources  ·  double-click opens one as a step"
+        if (dr == null) status.text = if (total == 0) "${env()}: nothing found (is the runtime up?)" else "${env()}: $total resources  ·  double-click opens one as a step"
     }
 
-    /** Text of the tree as lines `kind: name` (for tests). */
+    /** Text of the tree as lines `kind: name` (for tests); drift marks as ` [undeclared]` / ` [missing]`. */
     fun lines(): List<String> = (0 until root.childCount).flatMap { k ->
         val kn = root.getChildAt(k) as DefaultMutableTreeNode
-        (0 until kn.childCount).map { "${(kn.userObject as KindNode).kind}: ${((kn.getChildAt(it) as DefaultMutableTreeNode).userObject as ResNode).r.name}" }
+        val kind = (kn.userObject as KindNode).kind
+        (0 until kn.childCount).map {
+            when (val u = (kn.getChildAt(it) as DefaultMutableTreeNode).userObject) {
+                is ResNode -> "$kind: ${u.r.name}" + if (u.undeclared) " [undeclared]" else ""
+                is MissingNode -> "$kind: ${u.name} [missing]"
+                else -> "$kind: $u"
+            }
+        }
     }
 
     private fun open() {

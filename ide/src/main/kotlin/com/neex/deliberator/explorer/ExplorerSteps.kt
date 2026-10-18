@@ -31,6 +31,9 @@ object ExplorerSteps {
         KindInfo("ssm", "Parameters", "ssm.GetParameter") { obj("Name" to it.name, "WithDecryption" to false) },
         KindInfo("secretsmanager", "Secrets (metadata)", "secretsmanager.DescribeSecret") { obj("SecretId" to it.name) },
         KindInfo("kinesis", "Streams", "kinesis.DescribeStream") { obj("StreamName" to it.name) },
+        KindInfo("logs", "Log groups", "logs.DescribeLogStreams") { obj("logGroupName" to it.name, "orderBy" to "LastEventTime", "descending" to true, "limit" to 10) },
+        KindInfo("ecs", "ECS clusters", "ecs.DescribeClusters") { obj("clusters" to listOf(it.ref ?: it.name)) },
+        KindInfo("iam", "Roles", "iam.GetRole") { obj("RoleName" to it.name) },
         KindInfo("states", "State machines", "states.ListExecutions") { obj("stateMachineArn" to (it.ref ?: it.name)) },
     )
 

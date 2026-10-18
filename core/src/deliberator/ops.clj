@@ -52,6 +52,7 @@
     scenario.cancel run-id*                        -> {run-id cancelled}
     scenario.kinds                                 -> [{kind verbs verb-optional target directives facts capture-roots concurrent default-timeout-ms}]
     aws.discover env ws                            -> {env resources{kind [{name ref}]} errors}
+    terraform.drift env file dir plan ws           -> {env source region declared matching missing[] undeclared[] errors}
     aws.describe service* op*                      -> {service op class input}   (input = shape tree: type required members member enum)
     scenario.parse path text ws                    -> {header steps errors}   (a syntax error is data in errors, not an op error)
     runs.list ws session scenario limit            -> {session runs}
@@ -81,6 +82,7 @@
             [deliberator.env :as env]
             [deliberator.logfetch :as logfetch]
             [deliberator.awsdiscover :as awsdiscover]
+            [deliberator.tfdrift :as tfdrift]
             [deliberator.awsmodel :as awsmodel]
             [deliberator.markers :as markers]
             [deliberator.repo :as repo]
@@ -507,6 +509,9 @@
 (defn- aws-discover [_ {:keys [env] :as args}]
   (awsdiscover/discover! (ws-of args) (or env "local")))
 
+(defn- terraform-drift [_ {:keys [env file dir plan] :as args}]
+  (tfdrift/drift! (ws-of args) (or env "local") (cond-> {} file (assoc :file file) dir (assoc :dir dir) plan (assoc :plan plan))))
+
 (defn- aws-describe [_ {:keys [service op]}]
   (or (awsmodel/input service op)
       (fail :aws/unknown-operation (str "no operation " service "." op)
@@ -738,6 +743,12 @@
    "aws.discover" {:fn aws-discover :class :read
                    :doc "What exists in an environment (queues, tables, buses, functions, buckets, topics, parameters, secrets, streams, state machines): names for completion. Read calls only; a failing section is listed in errors."
                    :args (ws-schema :env {:type :string :doc "environment name (default local)"})}
+   "terraform.drift" {:fn terraform-drift :class :read
+                      :doc "Terraform against an environment, reads only: the declared resources of a `terraform show -json` document (file, or run in dir, optionally for a saved plan) compared with what exists in env (aws.discover): missing, undeclared, matching. The document is persisted raw first."
+                      :args (ws-schema :env {:type :string :doc "environment name (default local)"}
+                                       :file {:type :string :doc "terraform show -json output file"}
+                                       :dir {:type :string :doc "a Terraform root directory (terraform show -json runs there, no apply)"}
+                                       :plan {:type :string :doc "saved plan file in dir"})}
    "aws.describe" {:fn aws-describe :class :read
                    :doc "The request shape of an AWS operation from the bundled service models (members, required, enums, nesting), for completion in step bodies of the aws kind."
                    :args {:service {:type :string :required true :positional true :doc "aws-api service name, e.g. ssm, s3, sns"}

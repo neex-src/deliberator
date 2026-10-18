@@ -19,6 +19,9 @@
    "ssm" [:ssm :DescribeParameters {:MaxResults 50} #(for [p (:Parameters %)] {:name (:Name p) :ref (:Type p)})]
    "secretsmanager" [:secretsmanager :ListSecrets {:MaxResults 50} #(for [s (:SecretList %)] {:name (:Name s) :ref (:ARN s)})]
    "kinesis" [:kinesis :ListStreams {} #(for [s (:StreamNames %)] {:name s})]
+   "logs" [:logs :DescribeLogGroups {:limit 50} #(for [g (:logGroups %)] {:name (:logGroupName g) :ref (:arn g)})]
+   "ecs" [:ecs :ListClusters {} #(for [a (:clusterArns %)] {:name (last-seg a) :ref a})]
+   "iam" [:iam :ListRoles {} #(for [r (:Roles %)] {:name (:RoleName r) :ref (:Arn r)})]
    "states" [:states :ListStateMachines {} #(for [s (:stateMachines %)] {:name (:name s) :ref (:stateMachineArn s)})]})
 
 (defn discover!
