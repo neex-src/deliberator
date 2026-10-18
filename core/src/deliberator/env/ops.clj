@@ -68,7 +68,8 @@
 (defn op-class
   "`:read` or `:mutate` for `service`/`op`; `:mutate` when the pair is unknown."
   [service op]
-  (get-in table [(api-name service) (name op)] :mutate))
+  (get-in table [(api-name service) (name op)]
+          (if (re-find #"^(Get|List|Describe|Head)" (name op)) :read :mutate)))
 
 (defn known?
   "True when `service`/`op` is in the table."
