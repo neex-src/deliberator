@@ -63,6 +63,23 @@ class FillAwsBodyAction : ScnEditorAction() {
     }
 }
 
+/** `deliberator.scenario.copyAsCli`: the aws step at the caret as an `aws ...` command on the clipboard (with `--endpoint-url` of the environment when it has one). */
+class CopyStepAsCliAction : ScnEditorAction() {
+    override fun actionPerformed(e: AnActionEvent) {
+        val v = viewOf(e) ?: return
+        val editor = e.getData(CommonDataKeys.EDITOR) ?: return
+        val psi = e.getData(CommonDataKeys.PSI_FILE) as? ScnFile ?: return
+        val step = psi.stepAt(editor.caretModel.offset)
+        val verb = step?.verb
+        if (step == null || step.kind != "aws" || verb == null) { Ui.notify(v.project, "Copy as CLI", "The caret is not in a `### aws service.Operation` step.", NotificationType.INFORMATION); return }
+        val body = step.body?.text.orEmpty()
+        val cli = AwsStepTools.toCli(verb, body)
+        if (cli == null) { Ui.notify(v.project, "Copy as CLI", "The body is not a JSON object.", NotificationType.WARNING); return }
+        CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(cli))
+        Ui.notify(v.project, "Copy as CLI", cli.take(300), NotificationType.INFORMATION)
+    }
+}
+
 internal object AwsStepEdits {
     /** [step] (`### ...\nbody\n`) after the step at the caret, or at the end of the file; blank line before. */
     fun appendStep(editor: Editor, step: String) {

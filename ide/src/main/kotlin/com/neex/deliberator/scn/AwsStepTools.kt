@@ -103,4 +103,27 @@ object AwsStepTools {
             else -> if (v == "null") JsonNull.INSTANCE else JsonPrimitive(v)
         }
     }
+
+    private val CLI_NAME = mapOf("eventbridge" to "events", "states" to "stepfunctions", "monitoring" to "cloudwatch")
+
+    private fun kebab(pascal: String) = pascal.replace(Regex("(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"), "-").lowercase()
+
+    private fun shell(v: String) = if (v.isNotEmpty() && v.all { it.isLetterOrDigit() || it in "_-./:=@%+," }) v else "'" + v.replace("'", "'\\''") + "'"
+
+    /** `aws sqs send-message --queue-url U ...` for [verb] with request [body] (JSON), null when the body is not a JSON object. [endpoint] adds `--endpoint-url`. */
+    fun toCli(verb: String, body: String, endpoint: String? = null): String? {
+        val req = if (body.isBlank()) JsonObject() else runCatching { JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject }.getOrNull() ?: return null
+        val (service, op) = verb.split('.', limit = 2).takeIf { it.size == 2 } ?: return null
+        val parts = arrayListOf("aws", CLI_NAME[service] ?: service, kebab(op))
+        for ((k, v) in req.entrySet()) {
+            parts += "--" + kebab(k)
+            parts += when {
+                v.isJsonPrimitive && v.asJsonPrimitive.isString -> shell(v.asString)
+                v.isJsonPrimitive -> v.asString
+                else -> shell(v.toString())
+            }
+        }
+        if (endpoint != null) { parts += "--endpoint-url"; parts += shell(endpoint) }
+        return parts.joinToString(" ")
+    }
 }

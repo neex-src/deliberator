@@ -120,6 +120,8 @@
             </action>
             <action id="deliberator.scenario.pasteAwsCli" class="com.neex.deliberator.run.PasteAwsCliAction"
                     text="Paste aws CLI Command as Step" description="The clipboard holds an `aws service operation --flag value` command: it becomes an aws step"/>
+            <action id="deliberator.scenario.copyAsCli" class="com.neex.deliberator.run.CopyStepAsCliAction"
+                    text="Copy Step as aws CLI Command" description="The aws step at the caret as an aws CLI command on the clipboard"/>
             <action id="deliberator.scenario.fillBody" class="com.neex.deliberator.run.FillAwsBodyAction"
                     text="Fill Request Body" description="Put the required members of the aws operation at the caret into the step body"/>
             <action id="deliberator.scenario.runs" class="com.neex.deliberator.run.RunHistoryAction"

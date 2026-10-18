@@ -44,4 +44,19 @@ class AwsStepToolsTest {
         assertEquals(listOf("aws", "a b", "c\"d", "e"), AwsStepTools.split("aws 'a b' \"c\\\"d\" e"))
         assertEquals(listOf("aws", "x", "y"), AwsStepTools.split("aws x \\\n y"))
     }
+
+    @Test fun step_back_to_a_cli_command() {
+        assertEquals("aws sqs send-message --queue-url http://x/q --message-body 'hello world' --delay-seconds 5 --endpoint-url http://localhost:4566",
+            AwsStepTools.toCli("sqs.SendMessage", """{"QueueUrl":"http://x/q","MessageBody":"hello world","DelaySeconds":5}""", "http://localhost:4566"))
+        assertEquals("aws events list-rules", AwsStepTools.toCli("eventbridge.ListRules", ""))
+        assertEquals("aws dynamodb get-item --key '{\"id\":{\"S\":\"1\"}}'", AwsStepTools.toCli("dynamodb.GetItem", """{"Key":{"id":{"S":"1"}}}"""))
+        assertNull(AwsStepTools.toCli("ssm.GetParameter", "[1]"))
+    }
+
+    @Test fun cli_round_trip() {
+        val n = node("""{"type":"structure","required":["QueueUrl"],"order":["QueueUrl","MessageBody"],"members":{"QueueUrl":{"type":"string"},"MessageBody":{"type":"string"}}}""")
+        val cli = AwsStepTools.toCli("sqs.SendMessage", """{"QueueUrl":"u","MessageBody":"it's"}""")!!
+        val back = AwsStepTools.fromCli(cli, verbs) { n }
+        assertEquals("it's", back.request!!.get("MessageBody").asString)
+    }
 }
