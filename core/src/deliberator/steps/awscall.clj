@@ -5,7 +5,7 @@
   not decoded (use a purpose-built kind). The verbs are `service.Operation` for every operation of the services below, so
   completion in the editor lists them all. `$` is the response as JSON (the raw response when the service speaks JSON, else the
   parsed response data); the raw bytes are persisted as for every AWS call. Facts: `elapsed`. Reads and mutations are
-  classified by `env.ops` (a name that is not in its table counts as a mutation, except `Get*`/`List*`/`Describe*`/`Head*`)."
+  classified by `env.ops` (a name that is not in its table counts as a mutation; for s3 sns states kms kinesis monitoring cloudformation iam `Get*`/`List*`/`Describe*`/`Head*` count as reads)."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [cognitect.aws.service :as service]

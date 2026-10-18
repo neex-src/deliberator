@@ -11,7 +11,7 @@ import com.intellij.psi.PsiLanguageInjectionHost
 import com.intellij.psi.AbstractElementManipulator
 import com.intellij.psi.PsiDocumentManager
 
-/** Kinds whose body is the request document as JSON (the others: http carries a request line, sql is SQL). */
+/** Kinds whose body is the request document as JSON (http carries a request line and is left alone). */
 private val JSON_KINDS = setOf("aws", "sqs", "dynamodb", "eventbridge", "lambda", "scheduler")
 
 /**
@@ -25,9 +25,10 @@ class ScnJsonInjector : MultiHostInjector {
         val body = context as? ScnBody ?: return
         if (!body.isValidHost) return
         val kind = (body.parent as? ScnStep)?.kind ?: return
-        if (kind !in JSON_KINDS) return
-        val json = Language.findLanguageByID("JSON") ?: return
-        val parts = split(body.text) ?: return
+        val sql = kind == "sql"
+        if (kind !in JSON_KINDS && !sql) return
+        val json = Language.findLanguageByID(if (sql) "SQL" else "JSON") ?: return
+        val parts = (if (sql) split(body.text, json = false) else split(body.text)) ?: return
         registrar.startInjecting(json)
         parts.forEachIndexed { i, r -> registrar.addPlace(if (i == 0) null else "0", null, body, r) }
         registrar.doneInjecting()
@@ -37,9 +38,9 @@ class ScnJsonInjector : MultiHostInjector {
         private val TEMPLATE = Regex("\\{\\{[^}\\n]*}}")
 
         /** The ranges of [text] outside its `{{...}}` variables; null when the text is not a JSON document (no `{` or `[` first). */
-        fun split(text: String): List<TextRange>? {
+        fun split(text: String, json: Boolean = true): List<TextRange>? {
             val first = text.firstOrNull { !it.isWhitespace() } ?: return null
-            if (first != '{' && first != '[') return null
+            if (json && first != '{' && first != '[') return null
             val out = ArrayList<TextRange>()
             var at = 0
             for (m in TEMPLATE.findAll(text)) {
