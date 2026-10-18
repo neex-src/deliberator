@@ -17,6 +17,9 @@
   (is (= :read (ops/op-class :iam "GetUser")))
   (is (= :mutate (ops/op-class :sns "Publish")))
   (is (= :mutate (ops/op-class :s3 "DeleteBucket")))
+  (testing "the read prefixes count only for the services the generic kind added"
+    (is (= :mutate (ops/op-class :sqs "GetThing")))
+    (is (= :mutate (ops/op-class :nosuchservice "GetThing"))))
   (testing "the table still wins"
     (is (= :read (ops/op-class :sqs "ReceiveMessage")))))
 
