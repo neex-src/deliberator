@@ -79,10 +79,12 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
         })
         val refresh = JButton("Refresh").apply { addActionListener { refresh() } }
         val driftButton = JButton("Terraform drift…").apply { toolTipText = "Compare a Terraform root (terraform show -json, read only) with this environment"; addActionListener { drift() } }
+        val planButton = JButton("Plan").apply { toolTipText = "terraform plan of the chosen root onto this (local) environment"; addActionListener { terraform("plan") } }
+        val applyButton = JButton("Apply").apply { toolTipText = "terraform apply of the chosen root onto this (local) environment; refused for a remote one"; addActionListener { terraform("apply") } }
         envBox.addActionListener { if (!loadingEnvs) (envBox.selectedItem as? String)?.let { pick -> WorkspaceService.getInstance(project).selectEnv(pick.substringBefore("  ")); refresh() } }
         add(JPanel(BorderLayout()).apply {
             add(JPanel(BorderLayout()).apply { add(envBox, BorderLayout.WEST); add(status, BorderLayout.CENTER) }, BorderLayout.CENTER)
-            add(JPanel().apply { add(driftButton); add(refresh) }, BorderLayout.EAST)
+            add(JPanel().apply { add(driftButton); add(planButton); add(applyButton); add(refresh) }, BorderLayout.EAST)
         }, BorderLayout.NORTH)
         add(JBScrollPane(tree), BorderLayout.CENTER)
         refresh()
@@ -111,13 +113,56 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
         runDrift(vf.path)
     }
 
+    private fun chooseRoot(): String? {
+        val props = com.intellij.ide.util.PropertiesComponent.getInstance(project)
+        val vf = com.intellij.openapi.fileChooser.FileChooser.chooseFile(
+            com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFolderDescriptor().withTitle("Terraform Root"),
+            project, props.getValue("deliberator.tf.dir")?.let { LocalFileSystem.getInstance().findFileByPath(it) }) ?: return null
+        props.setValue("deliberator.tf.dir", vf.path)
+        return vf.path
+    }
+
+    /** `terraform.local` plan/apply of a root onto the selected local environment; the output is a file in the project (`explore/terraform-<action>-<env>.txt`), the tree and drift refresh after. */
+    fun terraform(action: String, dir: String? = null) {
+        val root = dir ?: chooseRoot() ?: return
+        if (action == "apply" && com.intellij.openapi.ui.Messages.showYesNoDialog(project, "terraform apply of\n$root\nonto environment ${env()}?", "Apply Terraform", "Apply", "Cancel", com.intellij.openapi.ui.Messages.getQuestionIcon()) != com.intellij.openapi.ui.Messages.YES) return
+        status.text = "terraform $action ..."
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val a = com.google.gson.JsonObject().apply { addProperty("env", env()); addProperty("dir", root); addProperty("action", action) }
+                var n = 0
+                val t = WorkspaceService.getInstance(project).call("terraform.local", a) { ev -> if (ev.name == "tf.line" && ++n % 20 == 0) ApplicationManager.getApplication().invokeLater({ status.text = "terraform $action: ${ev.json.get("line")?.asString?.take(80)}" }, ModalityState.any()) }
+                val r = t.result!!.asJsonObject
+                val text = r.get("output").asString
+                val summary = r.get("summary")?.asString.orEmpty()
+                ApplicationManager.getApplication().invokeLater({
+                    status.text = "terraform $action: $summary"
+                    writeText("terraform-$action-${env()}.txt", "# terraform $action of $root on ${env()}\n# ${summary}\n\n$text\n")
+                    AwsResources.getInstance().invalidate()
+                    if (action == "apply") { runDrift(root) } else refresh()
+                }, ModalityState.nonModal())
+            } catch (e: Exception) {
+                com.intellij.openapi.diagnostic.Logger.getInstance(AwsExplorerPanel::class.java).warn("terraform $action failed", e)
+                ApplicationManager.getApplication().invokeLater({ status.text = "terraform failed"; Ui.notify(project, "Terraform", e.message ?: e.toString(), com.intellij.notification.NotificationType.ERROR) }, ModalityState.any())
+            }
+        }
+    }
+
+    private fun writeText(name: String, content: String) {
+        val base = project.basePath ?: return
+        val vf = WriteAction.compute<com.intellij.openapi.vfs.VirtualFile?, Exception> {
+            val dir = VfsUtil.createDirectoryIfMissing(Path.of(base, "explore").toString()) ?: return@compute null
+            (dir.findChild(name) ?: dir.createChildData(this, name)).also { VfsUtil.saveText(it, content) }
+        } ?: return
+        Ui.openEditor(project, vf)
+    }
+
     fun runDrift(dir: String) {
         status.text = "comparing $dir with ${env()} ..."
         ApplicationManager.getApplication().executeOnPooledThread {
-            val client = com.neex.deliberator.scn.ScnRegistry.getInstance().knownClient()
             try {
-                val r = com.neex.deliberator.scn.ScnDaemon.call(client ?: throw IllegalStateException("no daemon connection"), project, "terraform.drift",
-                    com.google.gson.JsonObject().apply { addProperty("env", env()); addProperty("dir", dir) }).asJsonObject
+                val r = WorkspaceService.getInstance(project).call("terraform.drift",
+                    com.google.gson.JsonObject().apply { addProperty("env", env()); addProperty("dir", dir) }).result!!.asJsonObject
                 val d = Drift.parse(r)
                 drift = d
                 ApplicationManager.getApplication().invokeLater({
@@ -131,15 +176,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
         }
     }
 
-    private fun writeReport(d: Drift) {
-        val base = project.basePath ?: return
-        val vf = WriteAction.compute<com.intellij.openapi.vfs.VirtualFile?, Exception> {
-            val dir = VfsUtil.createDirectoryIfMissing(Path.of(base, "explore").toString()) ?: return@compute null
-            val name = "drift-${env()}.txt"
-            (dir.findChild(name) ?: dir.createChildData(this, name)).also { VfsUtil.saveText(it, d.text()) }
-        } ?: return
-        Ui.openEditor(project, vf)
-    }
+    private fun writeReport(d: Drift) = writeText("drift-${env()}.txt", d.text())
 
     fun refresh() {
         status.text = "reading ${env()} ..."
