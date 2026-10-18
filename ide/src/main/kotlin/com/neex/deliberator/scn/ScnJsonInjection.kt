@@ -12,7 +12,7 @@ import com.intellij.psi.AbstractElementManipulator
 import com.intellij.psi.PsiDocumentManager
 
 /** Kinds whose body is the request document as JSON (the others: http carries a request line, sql is SQL). */
-private val JSON_KINDS = setOf("sqs", "dynamodb", "eventbridge", "lambda", "scheduler")
+private val JSON_KINDS = setOf("aws", "sqs", "dynamodb", "eventbridge", "lambda", "scheduler")
 
 /**
  * JSON in the body of the AWS steps: colours, brace matching, folding, the JSON plugin's own checks. A `{{var}}` is not part

@@ -13,6 +13,7 @@
     <depends optional="true" config-file="deliberator-maven.xml">org.jetbrains.idea.maven</depends>
     <depends optional="true" config-file="deliberator-properties.xml">com.intellij.properties</depends>
     <depends optional="true" config-file="deliberator-yaml.xml">org.jetbrains.plugins.yaml</depends>
+    <depends optional="true" config-file="deliberator-json.xml">com.intellij.modules.json</depends>
 
     <extensionPoints>
         <extensionPoint name="repositoryKind" interface="com.neex.deliberator.repo.RepositoryKind" dynamic="true"/>

@@ -23,6 +23,7 @@ dependencies {
         bundledPlugin("org.jetbrains.idea.maven")
         bundledPlugin("com.intellij.properties")
         bundledPlugin("org.jetbrains.plugins.yaml")
+        bundledPlugin("com.intellij.modules.json")
         testFramework(TestFrameworkType.Platform)
         pluginVerifier()
     }
