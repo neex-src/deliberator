@@ -59,11 +59,12 @@ object ScnProposals {
 
     fun forContext(
         ctx: ScnContext, kinds: ScnKinds?, targets: List<String>, file: ScnFile?, offset: Int,
+        response: List<ResponsePath> = emptyList(),
     ): List<Item> = when (ctx) {
         is ScnContext.StepStart -> kinds?.kinds?.map { Item("### ${it.kind}", "kind") } ?: emptyList()
         is ScnContext.StepLine -> stepLine(ctx, kinds, targets)
         is ScnContext.DirectiveName -> directiveNames(kinds, file, offset)
-        is ScnContext.DirectiveValue -> directiveValue(ctx, kinds, file, offset)
+        is ScnContext.DirectiveValue -> directiveValue(ctx, kinds, file, offset, response)
         is ScnContext.Variable -> variables(file, offset, targets)
         ScnContext.None -> emptyList()
     }
@@ -101,16 +102,17 @@ object ScnProposals {
             .map { Item(it.name, if (it.engine) "engine" else kind?.kind ?: "header", tail = it.hint?.let { h -> " $h" }, suffix = " ") }
     }
 
-    private fun directiveValue(ctx: ScnContext.DirectiveValue, kinds: ScnKinds?, file: ScnFile?, offset: Int): List<Item> {
+    private fun directiveValue(ctx: ScnContext.DirectiveValue, kinds: ScnKinds?, file: ScnFile?, offset: Int, response: List<ResponsePath>): List<Item> {
         val (step, kind) = kindAt(file, offset, kinds)
         val facts = kind?.facts?.map { Item(it.name.removeSuffix("*"), "fact (${it.type})") } ?: emptyList()
         val roots = kind?.captureRoots?.map { Item(it, "path root") } ?: emptyList()
+        val paths = response.map { Item(it.path, "= ${it.preview}") }
         val spec = (kind?.directives ?: ScnKinds.ENGINE_DIRECTIVES).firstOrNull { it.name == ctx.name }
             ?: ScnKinds.HEADER_DIRECTIVES.firstOrNull { step == null && it.name == ctx.name }
         val firstWord = ctx.args.isBlank()
         return when (ctx.name) {
-            "assert", "until" -> if (firstWord) facts + roots else if (ctx.args.trim().split(Regex("\\s+")).size == 1) (spec?.values ?: emptyList()).map { Item(it, "operator") } else emptyList()
-            "capture" -> if (ctx.args.trimEnd().endsWith("=")) facts + roots else emptyList()
+            "assert", "until" -> if (firstWord) facts + paths + roots else if (ctx.args.trim().split(Regex("\\s+")).size == 1) (spec?.values ?: emptyList()).map { Item(it, "operator") } else emptyList()
+            "capture" -> if (ctx.args.trimEnd().endsWith("=")) facts + paths + roots else emptyList()
             else -> if (firstWord) (spec?.values ?: emptyList()).map { Item(it, "value") } else emptyList()
         }
     }
@@ -160,10 +162,19 @@ class ScnCompletionContributor : CompletionContributor() {
                     ScnContext.None -> ""
                 }
                 val set = result.withPrefixMatcher(prefix)
-                for (i in ScnProposals.forContext(ctx, registry.kinds(), targets, file, offset)) set.addElement(element(i, ctx))
+                val response = if (ctx is ScnContext.DirectiveValue) latestResponse(file, offset) else emptyList()
+                for (i in ScnProposals.forContext(ctx, registry.kinds(), targets, file, offset, response)) set.addElement(element(i, ctx))
                 set.stopHere()
             }
         })
+    }
+
+    /** The paths of the response the step under the caret got in the latest run of this file (in memory only, never a daemon call). */
+    private fun latestResponse(file: ScnFile, offset: Int): List<ResponsePath> {
+        val step = file.stepAt(offset) ?: return emptyList()
+        val path = file.virtualFile?.path ?: file.originalFile.virtualFile?.path ?: return emptyList()
+        val snap = com.neex.deliberator.run.ScnRunner.getInstance(file.project).state(path).snapshot ?: return emptyList()
+        return ResponsePaths.of(ResponsePaths.response(snap.sections[step.index]))
     }
 
     private fun element(i: ScnProposals.Item, ctx: ScnContext): LookupElement {
