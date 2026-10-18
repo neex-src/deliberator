@@ -19,7 +19,7 @@ class ResponsePathsTest {
     @Test fun long_arrays_show_three_elements_and_limit_holds() {
         val j = JsonParser.parseString("""{"L":[1,2,3,4,5]}""")
         assertEquals(listOf("$.L", "$.L[0]", "$.L[1]", "$.L[2]"), ResponsePaths.of(j).map { it.path })
-        assertEquals(5, ResponsePaths.of(j, limit = 5).size.coerceAtMost(5))
+        assertEquals(1, ResponsePaths.of(j, limit = 2).size) // the root is walked but not offered
     }
 
     @Test fun response_is_the_first_json_line_before_the_checks() {
