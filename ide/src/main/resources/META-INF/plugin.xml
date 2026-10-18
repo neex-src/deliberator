@@ -45,6 +45,8 @@
         <completion.contributor language="Deliberator.Scn" implementationClass="com.neex.deliberator.scn.ScnCompletionContributor"/>
         <editorFactoryListener implementation="com.neex.deliberator.scn.ScnEditorListener"/>
         <typedHandler implementation="com.neex.deliberator.scn.ScnAutoPopup"/>
+        <multiHostInjector implementation="com.neex.deliberator.scn.ScnJsonInjector"/>
+        <lang.elementManipulator forClass="com.neex.deliberator.scn.ScnBody" implementationClass="com.neex.deliberator.scn.ScnBodyManipulator"/>
 
         <!-- running from the editor (piece 06) -->
         <projectService serviceImplementation="com.neex.deliberator.run.ScnRunner"/>
