@@ -50,12 +50,20 @@ class ResultRenderer(
     fun lines(): List<String> = when {
         bannerText != null -> listOf(bannerText)
         section != null && expanded -> {
-            val all = section.text.split("\n")
+            val all = prettySection(section)
             if (all.size <= MAX_LINES) all else all.take(MAX_LINES) + "... ${all.size - MAX_LINES} more lines (click the banner to open result.txt)"
         }
         section != null -> listOf(section.summary())
         live != null -> listOf(if (live.status == "running") "▶ running..." else "${live.status}" + (live.elapsedMs?.let { " · $it ms" } ?: ""))
         else -> emptyList()
+    }
+
+    /** The section's lines with the JSON response laid out one value per line. */
+    private fun prettySection(s: StepSection): List<String> {
+        val i = s.lines.indexOfFirst { it.trim().startsWith("{") || it.trim().startsWith("[") }
+        val pretty = if (i >= 0 && s.lines.take(i).none { it.startsWith("✓ ") || it.startsWith("✗ ") }) PrettyJson.of(s.lines[i].trim()) else null
+        if (pretty == null) return s.text.split("\n")
+        return listOf(s.head) + s.lines.take(i) + pretty.map { it.text } + s.lines.drop(i + 1)
     }
 
     private fun color(): Color {

@@ -114,6 +114,10 @@
             </action>
             <action id="deliberator.scenario.toggleResults" class="com.neex.deliberator.run.ToggleResultsAction"
                     text="Expand/Collapse Inline Results" description="Show or hide the full text of every inline step result"/>
+            <action id="deliberator.scenario.peekResponse" class="com.neex.deliberator.run.PeekResponseAction"
+                    text="Peek Response" description="The response of the step at the caret, readable; Enter adds an @assert for the line">
+                <keyboard-shortcut keymap="$default" first-keystroke="control alt ENTER"/>
+            </action>
             <action id="deliberator.scenario.runs" class="com.neex.deliberator.run.RunHistoryAction"
                     text="Runs of This Scenario..." description="History of this scenario: open result.txt, show inline, diff two runs"/>
         </group>

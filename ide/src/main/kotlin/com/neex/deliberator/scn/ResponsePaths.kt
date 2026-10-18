@@ -38,6 +38,9 @@ object ResponsePaths {
         return out.drop(1) // `$` itself is a root the kind already offers
     }
 
+    /** [path] extended by member [k]. */
+    fun child(path: String, k: String) = path + member(k)
+
     private fun member(k: String) = if (Regex("[A-Za-z_][A-Za-z0-9_]*").matches(k)) ".$k" else "['$k']"
 
     private fun preview(e: JsonElement): String = when {
