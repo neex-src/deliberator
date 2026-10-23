@@ -155,6 +155,8 @@ class ScnRunner(private val project: Project) : Disposable {
             addProperty("path", path)
             if (svc.envChosen) addProperty("env", svc.selectedEnv)
             if (steps.isNotEmpty()) add("steps", JsonArray().also { a -> steps.forEach { a.add(it) } })
+            // a step (or "from here") after the first continues the story of the latest run: its variables and captures
+            if (continues(steps)) addProperty("continue", true)
             if (confirm != null) addProperty("confirm", confirm)
         }
         st.asked = steps
@@ -325,5 +327,8 @@ class ScnRunner(private val project: Project) : Disposable {
 
     companion object {
         fun getInstance(project: Project): ScnRunner = project.getService(ScnRunner::class.java)
+
+        /** A run of [steps] continues the latest run of its file unless it runs everything or starts at step 1. */
+        fun continues(steps: List<Int>): Boolean = steps.isNotEmpty() && 1 !in steps
     }
 }

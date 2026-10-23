@@ -171,6 +171,18 @@ class RunFromEditorTest : BasePlatformTestCase() {
         assertEquals(listOf("Run This Step", "Run From Here", "Run All"), view.runActionsFor(3).map { it.templatePresentation.text })
     }
 
+    fun testAStepAfterTheFirstContinuesTheStoryOfTheLatestRun() {
+        val story = "### shell first\n# @capture id = out\necho -n \"id-{{uuid}}\"\n\n### shell second\n# @assert out == {{id}}\necho -n \"{{id}}\"\n"
+        val (vf, view) = open(story, "story.scn")
+        assertEquals("ok", runAndWait(view, vf, null).status)
+        val one = runAndWait(view, vf, listOf(2))
+        assertEquals("step 2 alone sees the capture of step 1 (continue)", "ok", one.sections.getValue(2).status)
+        assertTrue(ScnRunner.continues(listOf(2)))
+        assertTrue(ScnRunner.continues(listOf(3, 4)))
+        assertFalse("from step 1 is a new story", ScnRunner.continues(listOf(1, 2)))
+        assertFalse("run all is a new story", ScnRunner.continues(emptyList()))
+    }
+
     fun testEscCancelsALongWaitAndTheInlineViewSaysCancelled() {
         val (vf, view) = open("### wait long\n# @for 60s\n\n### wait after\n# @for 1s\n")
         val st = runner.state(vf.path)
