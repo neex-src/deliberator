@@ -390,11 +390,10 @@ class ServicesTest : BasePlatformTestCase() {
             wait("reload lines in the console") { text.contains("reload: FAILED (service/") }
             assertTrue(text.toString(), text.contains("> service.reload stub"))
 
-            // Debug: what service.start answered is where the platform attaches
+            // Debug: what service.start answered is where the platform attaches; the platform asks environment.state again (a new state)
             val dbgEnv = ExecutionEnvironmentBuilder.create(DefaultDebugExecutor.getDebugExecutorInstance(), cfg).build()
-            val dbg = cfg.getState(DefaultDebugExecutor.getDebugExecutorInstance(), dbgEnv) as ServiceRunState
-            dbg.prestarted = bg { ops().start("stub") }
-            val conn = dbg.remoteConnection
+            (dbgEnv.state as ServiceRunState).prestarted = bg { ops().start("stub") }
+            val conn = (dbgEnv.state as ServiceRunState).remoteConnection
             assertEquals("localhost", conn.hostName)
             assertEquals("19185", conn.address)
             assertFalse(conn.isServerMode)

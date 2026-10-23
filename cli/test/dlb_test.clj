@@ -8,7 +8,9 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
-            [dlb.args :as args]))
+            [dlb.args :as args]
+            [dlb.main]
+            [dlb.render :as render]))
 
 (def root (str (fs/absolutize ".")))
 (def dlb-bin (str root "/cli/dlb"))
@@ -89,12 +91,27 @@
   (is (thrown? clojure.lang.ExceptionInfo (args/parse fake ["--n" "x"])))
   (is (thrown? clojure.lang.ExceptionInfo (args/parse fake ["A" "B" "C"]))))
 
+(deftest service-results-are-not-run-summaries
+  (let [exit-code #'dlb.main/exit-code]
+    (is (= 0 (exit-code {:ok true :result {:name "a" :status "running" :port 8081}})) "a started service is a success")
+    (is (= 0 (exit-code {:ok true :result {:name "a" :status "stopped"}})))
+    (is (= 0 (exit-code {:ok true :result {:status "ok" :steps 9}})))
+    (is (= 1 (exit-code {:ok true :result {:status "failed" :steps 9}})) "a failed run still exits 1")))
+
+(deftest to-approve-names-steps-only-for-scenario-runs
+  (let [err {:type "confirm-required" :summary "S" :token "T" :step 1}
+        approve (fn [op argv] (->> (with-out-str (render/print-error op err argv))
+                                   str/split-lines (filter #(str/starts-with? % "to approve:")) first))]
+    (is (= "to approve: dlb service start a --secrets-from local2 --confirm T"
+           (approve "service.start" ["service" "start" "a" "--secrets-from" "local2"])))
+    (is (= "to approve: dlb run x.scn --confirm T --steps 1" (approve "scenario.run" ["run" "x.scn"])))))
+
 ;; help --------------------------------------------------------------------------------------------
 
 (deftest help-names-every-op
   (let [table (json/parse-string (:out (dlb *home* "help" "--json")) true)
         txt (:out (dlb *home* "help"))]
-    (is (= 49 (count table)))
+    (is (= 53 (count table)))
     (doseq [{:keys [op]} table]
       (is (str/includes? txt (str/replace op "." " ")) (str op " is in the help")))
     (is (= txt (:out (dlb *home*))) "no args = help")
