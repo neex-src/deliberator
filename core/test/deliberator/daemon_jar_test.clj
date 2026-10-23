@@ -30,7 +30,7 @@
   (is (.isFile jar) "run `bb core:build` before the jar test")
   (when (.isFile jar)
     (let [v (spawn "--version")]
-      (is (= "deliberatord 0.1.0-m1" (next-line v 60000)))
+      (is (re-matches #"deliberatord 0\.1\.0-m1\+\d{14}" (str (next-line v 60000))) "a jar build stamps its version")
       (is (zero? (.waitFor ^Process (:proc v)))))
     (let [home (tu/short-home)
           d (spawn "--home" (str home) "--idle-minutes" "0.1")
@@ -45,7 +45,7 @@
             (let [c (tc/connect ep)]
               (try
                 (let [r (:result (:terminal (tc/request c "hello" {:client "jar-test"})))]
-                  (is (= "0.1.0-m1" (:version r)))
+                  (is (re-matches #"0\.1\.0-m1\+\d{14}" (str (:version r))))
                   (is (= (.pid ^Process (:proc d)) (:pid r))))
                 (is (= 53 (count (:result (:terminal (tc/request c "op.describe" {}))))))
                 (tc/request c "session.start" {:key "J-1"})

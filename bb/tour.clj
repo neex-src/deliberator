@@ -11,6 +11,7 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.java.io :as io]
+            [core-build]
             [clojure.string :as str]
             [dlb.client]
             [dlb.endpoint :as endpoint]
@@ -63,9 +64,7 @@
         pre-existing? (boolean (when-let [c (endpoint/connect-existing home)] (dlb.client/close! (:channel c)) true))
         t0 (System/nanoTime)]
     (when (empty? files) (println "no chapter matches" (str/join " " args)) (System/exit 2))
-    (when-not (fs/exists? "core/target/deliberatord.jar")
-      (println "core/target/deliberatord.jar missing: building it")
-      (p/shell "bb" "core:build"))
+    (core-build/ensure-jar!)
     (try
       (let [env {"DELIBERATOR_HOME" home
                  "DELIBERATOR_JAR" (or (System/getenv "DELIBERATOR_JAR") (str (fs/absolutize "core/target/deliberatord.jar")))

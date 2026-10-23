@@ -21,6 +21,7 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.string :as str]
+            [core-build]
             [daemon-client]
             [dlb.client]
             [dlb.endpoint :as endpoint]
@@ -101,9 +102,7 @@
         dlb (str (fs/absolutize "cli/dlb"))
         pre-existing? (boolean (when-let [c (endpoint/connect-existing home)] (dlb.client/close! (:channel c)) true))
         t0 (System/nanoTime)]
-    (when-not (fs/exists? "core/target/deliberatord.jar")
-      (println "core/target/deliberatord.jar missing: building it")
-      (p/shell "bb" "core:build"))
+    (core-build/ensure-jar!)
     (try
       (if (and (healthy? 8081) (healthy? 8082))
         (println "estate already up (service A and B healthy)")

@@ -199,11 +199,19 @@
 
 ;; handlers: hello, workspace, sessions --------------------------------------------------------
 
+(defn compatible?
+  "Does a client that ships `want` speak to a daemon of version `have`? Equal versions do. A jar build stamps its version
+  (`0.1.0-m1+<yyyyMMddHHmmss>`, core/build.clj), so a daemon of another build is not compatible and the client replaces it when
+  its own is newer. An unstamped daemon runs from source (cljdev, `dev/start!`): it serves any build of its base version."
+  [want have]
+  (or (= want have)
+      (and (not (str/includes? (str have) "+")) (= (first (str/split (str want) #"\+")) have))))
+
 (defn- hello [ctx {:keys [version]}]
   (let [d (:daemon ctx)]
     (cond-> {:version (:version d) :pid (:pid d) :home (str (:home d)) :endpoint (:endpoint d) :protocol 1
              :runs (count @(:runs d))}
-      version (assoc :compatible (= version (:version d))))))
+      version (assoc :compatible (compatible? version (:version d))))))
 
 (declare table)
 
