@@ -8,7 +8,8 @@
   -> value, throws `{:type :env/unknown-target}`; the daemon passes an adapter that makes the key
   a keyword); `:steps` runs only those step numbers (captures of the others are then missing:
   seed them with `:vars`); `:confirm` is a confirmation token for remote mutating calls, handed to kinds
-  in ctx. A step's `:error` rides on its `:step.finished` event.
+  in ctx; `:host` is an opaque value of the caller handed to kinds as `ctx :host` (the daemon passes its
+  request context, the `op` kind calls operations with it). A step's `:error` rides on its `:step.finished` event.
 
   `(plan ws env path & opts)` is the static half and throws before anything is created or sent:
   parse errors (`:scenario/parse`), undeclared directives and facts, assertion/capture/duration
@@ -17,7 +18,7 @@
   directory with `session/run-dir!`.
 
   Run directory: `run.edn` (scenario path and sha256, `:env`, `:session`, vars snapshot, `:volatile`
-  var names, `:thread-model`, `:owner` (`{:pid :process-start}` of the JVM running it), `:status`
+  var names, `:selected` (the step numbers of a partial run, nil for all), `:seeded` (true when `:vars` seeded it), `:thread-model`, `:owner` (`{:pid :process-start}` of the JVM running it), `:status`
   (`:running`, then `:ok :failed :cancelled :error`, or `:interrupted` when `mark-orphans!` or a daemon
   stop closed a run nobody finished), `:started`/`:finished`, `:summary`, and per step the
   summary `{:n :kind :verb :target :name :label :status :elapsed :facts :fact-types :checks :captures
@@ -335,6 +336,7 @@
              :correlation (:run-id st) :step-correlation corr
              :resolve-target (:resolve-target st) :attempt 0
              :confirm (:confirm (:opts st))
+             :host (:host (:opts st)) :scenario-dir (:scenario-dir st)
              :cancelled? (fn [] @(:cancelled st))}
         armed (when (and (:concurrent? kmap) (:arm kmap)) ((:arm kmap) ctx rstep))]
     {:rstep rstep :ctx (assoc ctx :armed armed) :corr corr :step-dir step-dir :timeout-ms timeout-ms}))
@@ -516,6 +518,8 @@
           :session (:session st)
           :vars (:snapshot st)
           :volatile (vec (sort (vars/volatile-names (:header plan'))))
+          :selected (some-> (:selected plan') sort vec)
+          :seeded (boolean (seq (:vars (:opts st))))
           :thread-model thread-model
           :status status :started started :finished finished
           :summary (summarise recs)
@@ -546,7 +550,8 @@
                       (swap! recs conj rec)
                       (progress!))
                     (emit-finished! st rec)))
-        st (assoc st :finish! finish!)]
+        st (assoc st :finish! finish!
+                  :scenario-dir (some-> ^Path (:path plan') .getParent str))]
     (try
       (let [pick (:selected plan')
             steps (filter #(or (nil? pick) (contains? pick (:n %))) (:steps plan'))
