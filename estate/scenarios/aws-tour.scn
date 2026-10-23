@@ -1,0 +1,22 @@
+# Any AWS operation as a step: ### aws <service>.<Operation>, the body is the request JSON, $ is the response.
+# @env local
+# @var topic = tour-{{uuid}}
+
+### aws ssm.GetParameter table-name
+# @assert $.Parameter.Value == estate-messages
+{"Name": "/estate/common/table-name"}
+
+### aws sns.CreateTopic create-topic
+# @capture arn = $.TopicArn
+{"Name": "{{topic}}"}
+
+### aws sns.Publish publish
+# @assert $.MessageId matches /^[0-9a-f-]{36}$/
+{"TopicArn": "{{arn}}", "Message": "hello from the tour"}
+
+### aws s3.CreateBucket bucket
+{"Bucket": "{{topic}}", "CreateBucketConfiguration": {"LocationConstraint": "eu-central-1"}}
+
+### aws s3.GetBucketLocation where
+# @assert $.LocationConstraint == eu-central-1
+{"Bucket": "{{topic}}"}
