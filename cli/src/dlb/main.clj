@@ -38,7 +38,7 @@
 
 (defn- exit-code [{:keys [ok result error]}]
   (cond
-    (and ok (map? result) (contains? result :status)) (if (= "ok" (:status result)) 0 1)
+    (and ok (map? result) (contains? result :status) (contains? result :steps)) (if (= "ok" (:status result)) 0 1)
     (and ok (map? result) (false? (:equal result))) 1
     ok 0
     (= "confirm-required" (:type error)) 1

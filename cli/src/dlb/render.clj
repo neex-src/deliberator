@@ -166,7 +166,7 @@
     (do (when result (print-result op result))
         (println (str "confirmation required" (when step (str " (step " step ")")) ": " summary))
         (println (str "to approve: dlb " (str/join " " argv) " --confirm " token
-                      (when step (str " --steps " step)))))
+                      (when (and step (= op "scenario.run")) (str " --steps " step)))))
     (binding [*out* *err*]
       (println (str "error: " type ": " message))
       (when hint (println (str "hint: " hint))))))
