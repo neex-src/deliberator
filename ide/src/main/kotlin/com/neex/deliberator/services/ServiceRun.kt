@@ -339,9 +339,16 @@ class ServiceProcessHandler(
 
 /** The state of one run: console + handler; [getRemoteConnection] answers once the service is started (the debug runner starts it first). */
 class ServiceRunState(private val env: ExecutionEnvironment, private val config: ServiceRunConfiguration) : RemoteState {
-    /** Set by the debug runner after its own `service.start`. */
-    @Volatile var prestarted: Started? = null
-    @Volatile var debug = false
+    /**
+     * Set by the debug runner after its own `service.start`. Kept on the environment, not in this object: the platform's debug start asks
+     * `environment.state` again and gets a new [ServiceRunState].
+     */
+    var prestarted: Started?
+        get() = env.getUserData(PRESTARTED)
+        set(v) = env.putUserData(PRESTARTED, v)
+    var debug: Boolean
+        get() = env.getUserData(DEBUG) == true
+        set(v) = env.putUserData(DEBUG, v)
     @Volatile var handler: ServiceProcessHandler? = null; private set
 
     fun startArgs(): JsonObject = config.startArgs()
@@ -361,6 +368,11 @@ class ServiceRunState(private val env: ExecutionEnvironment, private val config:
         val s = prestarted ?: throw ExecutionException("the service ${config.serviceName} is not started yet")
         val port = s.jdwp ?: throw ExecutionException("service ${config.serviceName} has no JDWP port: add :jdwp to the description of ${config.serviceName} and restart it")
         return RemoteConnection(true, "localhost", port, false)
+    }
+
+    private companion object {
+        val PRESTARTED = com.intellij.openapi.util.Key.create<Started>("deliberator.service.prestarted")
+        val DEBUG = com.intellij.openapi.util.Key.create<Boolean>("deliberator.service.debug")
     }
 }
 

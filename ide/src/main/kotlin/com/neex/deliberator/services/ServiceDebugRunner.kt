@@ -1,6 +1,8 @@
 package com.neex.deliberator.services
 
 import com.intellij.debugger.impl.GenericDebuggerRunner
+import com.intellij.debugger.impl.GenericDebuggerRunnerSettings
+import com.intellij.debugger.settings.DebuggerSettings
 import com.intellij.execution.ExecutionException
 import com.intellij.execution.configurations.RunProfile
 import com.intellij.execution.executors.DefaultDebugExecutor
@@ -27,7 +29,12 @@ class ServiceDebugRunner : GenericDebuggerRunner() {
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 state.prestarted = ServiceOps.getInstance(environment.project).start(config.serviceName, state.startArgs())
-                state.getRemoteConnection() // a service without a JDWP port fails here, before a debug session is created
+                val conn = state.getRemoteConnection() // a service without a JDWP port fails here, before a debug session is created
+                // the platform sets the connection's debugger address from these runner settings (an empty port by default)
+                (environment.runnerSettings as? GenericDebuggerRunnerSettings)?.apply {
+                    debugPort = conn.debuggerAddress
+                    transport = DebuggerSettings.SOCKET_TRANSPORT
+                }
                 ApplicationManager.getApplication().invokeLater({ super.execute(environment) }, ModalityState.any())
             } catch (e: DaemonException) {
                 fail(environment, e.readable())
