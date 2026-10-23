@@ -5,8 +5,8 @@
 # the editor, and as files under $DELIBERATOR_HOME/workspaces/<ws>/sessions/<session>/runs/.
 #
 # How to run (in the IDE): right-click → Deliberator Scenario → Run Scenario runs every step; Ctrl+Enter runs the step at the
-# caret only; the green ▷ in the gutter of a `###` line offers "this step / from here / all". In a terminal:
-# `dlb run tour/01-estate.scn --ws <ws>`. `bb tour` runs every chapter in order: the tour is also the integration test.
+# caret only; the green ▷ in the gutter of a `###` line offers "this step / from here / all". `bb tour:ide` opened you here;
+# `bb tour` runs every chapter in order in a terminal (`--only 3` one chapter): the tour is also the integration test.
 #
 # The estate is the small AWS system Deliberator is built against, all on this machine: an SQS inbox -> service A (Spring
 # Boot, DynamoDB) -> an EventBridge bus -> service B (acks A over HTTP, writes a row in Postgres) and a Lambda logger. AWS is

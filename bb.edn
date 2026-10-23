@@ -40,6 +40,9 @@
   estate:down {:doc "Remove the workspace's containers and the Floci root's Terraform state; args: --ws W"
                :requires ([estate])
                :task (estate/down *command-line-args*)}
+  tour:ide {:doc "Open the tour in the sandbox IDE, nothing to set first: home $DELIBERATOR_HOME else .scratch/tour-home, workspace tour (created), this checkout attached, tour/01-estate.scn open"
+            :requires ([ide-run])
+            :task (ide-run/tour-ide)}
   tour {:doc "The tour as an integration test: every tour/NN-*.scn in order, one session TOUR-<date>; chapter 01 brings the estate up; args: [--ws W (default tour)] [--only N] [--from N] [--down]"
         :requires ([tour])
         :task (apply tour/-main *command-line-args*)}
@@ -51,7 +54,7 @@
   ide:test {:doc "Fixture tests of the plugin (JUnit on the platform test framework; real daemon on temp homes under ide/build/th); --known-bugs runs only the audit's @Category(KnownBug) tests (./gradlew knownBugs); extra args go to Gradle"
             :requires ([ide-test])
             :task (apply ide-test/-main *command-line-args*)}
-  ide:run {:doc "Open the sandbox IDE with the plugin (a GUI: needs a display); args: [--ws W] [--home H] -> DELIBERATOR_HOME=H and the project <H>/workspaces/<W>/project; reuses a daemon already holding H"
+  ide:run {:doc "Open the sandbox IDE with the plugin (a GUI: needs a display); args: [--ws W] [--home H] [--open FILE] -> DELIBERATOR_HOME=H and the project <H>/workspaces/<W>/project (created when missing); reuses a daemon already holding H"
            :requires ([ide-run])
            :task (apply ide-run/-main *command-line-args*)}
   ide:verify {:doc "Run the plugin verifier against the recommended IDEs"
