@@ -13,6 +13,7 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.string :as str]
+            [core-build]
             [dlb.client :as client]
             [dlb.endpoint :as endpoint]
             [dlb.render :as render]))
@@ -35,6 +36,7 @@
 (defn- request
   "Sends `op` with `args` to the (started, compatible) daemon; -> the terminal map."
   [op args]
+  (core-build/ensure-jar!)
   (let [home (endpoint/home nil)
         {:keys [channel]} (endpoint/connect-compatible! home (endpoint/jar nil))
         steps (atom {})]

@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [deliberator.daemon :as daemon]
+            [deliberator.ops :as ops]
             [deliberator.store :as store]
             [deliberator.test-client :as tc]
             [deliberator.test-util :as tu]))
@@ -133,3 +134,11 @@
                 r (run! c "s.scn" text :steps [2] :continue true)]
             (is (not= msg (get-in full2 [:steps 1 :facts "out"])))
             (is (= (get-in full2 [:steps 1 :facts "out"]) (get-in r [:steps 2 :facts "out"])))))))))
+
+(deftest a-daemon-of-another-build-is-not-compatible
+  ;; A tour failed on a daemon from a 5-day-old jar: every build said 0.1.0-m1
+  (is (ops/compatible? "0.1.0-m1+20261023150000" "0.1.0-m1+20261023150000"))
+  (is (not (ops/compatible? "0.1.0-m1+20261023150000" "0.1.0-m1+20261018062000")) "another build")
+  (is (ops/compatible? "0.1.0-m1+20261023150000" "0.1.0-m1") "a daemon from source (cljdev) serves any build of its version")
+  (is (not (ops/compatible? "0.1.0-m2+20261023150000" "0.1.0-m1")) "but not another version")
+  (is (ops/compatible? "0.1.0-m1" "0.1.0-m1")))

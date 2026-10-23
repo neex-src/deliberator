@@ -10,6 +10,7 @@
   (the one `bb tour` uses; running a chapter never asks for one), `tour/01-estate.scn` open."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
+            [core-build]
             [dlb.client :as client]
             [dlb.endpoint :as endpoint]))
 
@@ -23,9 +24,7 @@
       (when (fs/directory? d) (str d)))))
 
 (defn- jar []
-  (when-not (fs/exists? "core/target/deliberatord.jar")
-    (println "core/target/deliberatord.jar missing: building it")
-    (p/shell "bb" "core:build"))
+  (core-build/ensure-jar!)
   (str (fs/absolutize "core/target/deliberatord.jar")))
 
 (defn- call!
@@ -55,6 +54,7 @@
 (defn launch!
   "Runs the sandbox IDE (Gradle runIde) for `home`, opened on the project of `ws` (created when missing) and `open` (a file)."
   [home ws open attach]
+  (core-build/ensure-jar!)
   (when ws (ensure-workspace! home ws attach))
   (let [proj (project-dir home ws)
         open (some-> open fs/absolutize str)]
