@@ -36,6 +36,27 @@
 (defn- arn-region [arn]
   (when (string? arn) (let [p (str/split arn #":")] (when (> (count p) 3) (not-empty (nth p 3))))))
 
+(def ^:private kept-values
+  "The only resource attributes that leave `terraform show -json` (B1): what `declared` reads, and nothing that can hold a secret."
+  [:name :arn :id :bucket :function_name])
+
+(defn- keep-module [m]
+  (cond-> {:resources (mapv (fn [r] (-> (select-keys r [:address :mode :type :name :index :provider_name])
+                                        (assoc :values (select-keys (:values r) kept-values))))
+                            (:resources m))
+           :child_modules (mapv keep-module (:child_modules m))}
+    (:address m) (assoc :address (:address m))))
+
+(defn extract
+  "What of a Terraform JSON document is persisted (decision 54, B1): the versions and, per resource of the root and child modules
+  (`values`, or `planned_values` of a plan, kept under the same key), address, mode, type, name, index, provider and the values
+  `name arn id bucket function_name`. Secret strings, generated passwords, sensitive outputs and variables never get here;
+  `declared` of the extract equals `declared` of the document."
+  [doc]
+  (let [k (if (get-in doc [:values :root_module]) :values :planned_values)]
+    (cond-> (select-keys doc [:format_version :terraform_version])
+      (values-root doc) (assoc k {:root_module (keep-module (values-root doc))}))))
+
 (defn declared
   "`[{:kind :name :address :region}]` of the resources of a Terraform JSON document that the explorer knows kinds of.
   `region` (the environment's) keeps only resources whose ARN is in that region (several providers/regions in one root)."
@@ -85,12 +106,13 @@
 
 (defn drift!
   "`{:env :source :region :declared n :matching n :missing [..] :undeclared [..] :errors {..}}`. The environment's resources come
-  from `awsdiscover` (read calls, raw-persisted). The Terraform document is persisted next to the other raw data first."
+  from `awsdiscover` (read calls, raw-persisted). Of the Terraform document only `extract` is persisted, first, and drift is
+  computed from that extract: the full document holds the state's secret values (B1)."
   [ws env-name {:keys [file dir plan] :as src}]
   (let [e (env/load ws env-name)
-        doc (read-doc src)
+        doc (extract (read-doc src))
         _ (store/raw-put! ws (.getBytes (json/write-str doc) "UTF-8")
-                          {:source :file :op "terraform.show" :env (:name e) :at (java.time.Instant/now)
+                          {:source :file :op "terraform.show" :extract :tf-declared :env (:name e) :at (java.time.Instant/now)
                            :content-type "application/json" :path (str (or file dir))})
         region (get-in e [:aws :region])
         d (declared doc region)
