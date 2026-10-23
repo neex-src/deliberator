@@ -39,6 +39,8 @@
             [deliberator.steps.sql]
             [deliberator.steps.sqs]
             [deliberator.steps.wait]
+            [deliberator.steps.shell]
+            [deliberator.steps.op]
             [deliberator.logfetch :as logfetch]
             [deliberator.store :as store]
             [deliberator.tunnel :as tunnel])

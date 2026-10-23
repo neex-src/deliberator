@@ -31,6 +31,8 @@
   `:step-correlation` (`<run id>-NNN`) `:deadline` (Instant, the attempt's timeout) `:resolve-target`
   (`(f \"service/a\")` -> value, throws `:env/unknown-target`) `:armed` `:attempt` (1-based; >1 under
   `@until`) `:cancelled?` (fn)
+  `:scenario-dir` (string, the directory of the scenario file) `:host` (opaque, from the run's caller; the daemon's
+  request context when the daemon runs the scenario, nil in plain engine runs)
   `:attempt-deadline` (Instant: `:deadline`, or the end of the step's `@until` window when that comes first;
   waits of polling kinds are bounded by it, see `attempt-remaining-ms`) `:attempt-cancelled?` (fn, true once
   the engine gave up on this attempt, by timeout or interrupt: a late reply must not act). Blocking calls should be interruptible: cancel and timeout interrupt

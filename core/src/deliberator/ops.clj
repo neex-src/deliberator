@@ -404,7 +404,31 @@
                         :hint "log in to the right account (aws sso login) or fix the record")))))))
 
 
-(defn- scenario-run [ctx {:keys [path env session steps confirm] :as args}]
+(declare runs-dir run-edn)
+
+(defn- continue-vars
+  "The variables a `continue` run starts from: the latest run of `file` in the session that started at step
+  1, then every later `continue` (seeded) run of it, oldest first: their variable snapshots and step captures merged in that
+  order. Partial runs that were not continued are ignored (their fresh `{{uuid}}` belongs to another story). nil when no run
+  of the file started at step 1."
+  [ws sess file]
+  (let [want (str (.toAbsolutePath (.toPath (io/file file))))
+        dir (runs-dir ws sess)
+        runs (sort-by #(str (:run-id %))
+                      (when (exists? dir)
+                        (for [^java.io.File d (.listFiles (.toFile dir))
+                              :when (.isDirectory d)
+                              :let [r (try (run-edn (.toPath d)) (catch Exception _ nil))]
+                              :when (and r (= want (get-in r [:scenario :path])) (not= :running (:status r)))]
+                          r)))
+        fresh? #(let [sel (:selected %)] (or (empty? sel) (some #{1} sel)))
+        start (last (keep-indexed (fn [i r] (when (and (fresh? r) (not (:seeded r))) i)) runs))]
+    (when start
+      (let [chain (cons (nth runs start) (filter :seeded (drop (inc start) runs)))]
+        (-> (reduce (fn [acc r] (apply merge acc (:vars r) (keep :captures (:steps r)))) {} chain)
+            (dissoc "step.correlation"))))))
+
+(defn- scenario-run [ctx {:keys [path env session steps confirm continue] :as args}]
   (let [ws (ws-of args)
         d (:daemon ctx)
         sess (session-key ws args)
@@ -426,9 +450,11 @@
                                                   (swap! (:runs d) assoc (:run-id run) run)
                                                   ((:on-cancel! ctx) (fn [] (engine/cancel! run))))
                                     :resolve-target (fn [k] (env/target e (keyword k)))
-                                    :topology (topology/snapshot ws e)}
+                                    :topology (topology/snapshot ws e)
+                                    :host ctx}
                              (seq steps) (assoc :steps (set steps))
-                             confirm (assoc :confirm confirm))))]
+                             confirm (assoc :confirm confirm)
+                             continue (assoc :vars (continue-vars ws sess file)))))]
     (try
       (let [res (assoc @run :session sess :env env-name)
             cs @confirmations]
@@ -739,7 +765,8 @@
                                     :env {:type :string :doc "environment name; default the scenario's @env, else local"}
                                     :session {:type :string :doc "session key; default the current session"}
                                     :steps {:type :ints :doc "run only these step numbers"}
-                                    :confirm {:type :string :doc "confirmation token from a confirm-required error"})}
+                                    :confirm {:type :string :doc "confirmation token from a confirm-required error"}
+                                    :continue {:type :bool :doc "start from the variables and captures of the latest run of this file in the session (step by step)"})}
    "scenario.cancel" {:fn scenario-cancel :class :mutate
                       :doc "Cancels a running scenario by run id; the scenario.run request ends with status cancelled."
                       :args {:run-id {:type :string :required true :doc "run id from the run.started event"}}}

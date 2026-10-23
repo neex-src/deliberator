@@ -45,6 +45,7 @@
   ["hello" "op.describe" "daemon.stop" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "session.note" "session.start" "session.end" "session.list" "session.current"
    "config.chain" "config.refresh"
    "env.list" "env.describe" "env.check" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs"
+   "aws.describe" "aws.discover" "terraform.drift" "terraform.local"
    "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "repo.attach" "repo.detach" "repo.list" "logs.fetch" "logs.match" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
 
 ;; --- lifecycle ----------------------------------------------------------------------------------
@@ -159,7 +160,7 @@
           (is (= ["key" "title" "ws"] (get-in by ["session.start" :order])))
           (is (= ["a" "b" "session" "ws"] (get-in by ["runs.diff" :order])))
           (is (= ["role" "since" "follow" "tail" "ws"] (get-in by ["runtime.logs" :order])))
-          (is (= ["path" "env" "session" "steps" "confirm" "ws"] (get-in by ["scenario.run" :order])))
+          (is (= ["path" "env" "session" "steps" "confirm" "continue" "ws"] (get-in by ["scenario.run" :order])))
           (is (= ["client" "version" "ws"] (get-in by ["hello" :order])) "ws is accepted (and ignored) by ops without one"))))))
 
 (deftest daemon-stop-finalises-runs-and-exits
