@@ -1,0 +1,52 @@
+# Chapter 4: logs and markers
+#
+# A marker says "I care about this line of code". Deliberator then finds, in any fetched log, the lines that line of code
+# wrote (logback's `logger:line`, or a stack frame), and the IDE highlights them and draws the marker in the gutter.
+# This chapter marks the line of service A that logs "stored message", sends an order, fetches A's log and matches it.
+# @env local
+# @var corr = {{correlation}}
+# @var msg = ord-{{uuid}}
+
+### shell source-file
+# Markers name files by absolute path; this checkout's path is whatever it is on your machine, so ask the shell.
+# @cwd ..
+# @capture inbox = out
+realpath estate/services/service-a/src/main/java/estate/a/Inbox.java | tr -d '\n'
+
+### op marker.add mark-inbox
+# Line 58 of Inbox.java is `log.info("stored message id={} ...")`. Adding the same marker twice changes nothing.
+# In the IDE: open Inbox.java, right-click the gutter of a line → Add Deliberator Marker does the same.
+# @assert $[0].line > 0
+{"file": "{{inbox}}", "line": 58, "logger": "estate.a.Inbox"}
+
+### sqs send queue/inbox send-order
+# @attr id={{msg}}
+# @attr correlation={{corr}}
+# @body ../estate/payloads/01-simple-order.json
+
+### dynamodb get table/messages stored
+# A stored it, so line 58 has just written a log line.
+# @until $.status.S == RECEIVED within 20s
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### op logs.fetch a-log
+# The whole of A's recent log, persisted as a read-only file of the session and hard-linked from the raw store.
+# In the IDE: tool window → Services → select a → Log does this and opens the file with the marked lines highlighted.
+# @assert $.lines > 0
+# @capture log = $.path
+{"target": "log/service-a", "since": "10m"}
+
+### op logs.match matched
+# Which lines of that file were written by a marked line of code: `n` is the line number in the file.
+# In the IDE: in the log, select this run's id and right-click → Filter Log by Correlation to keep only this order's lines.
+# @assert $.lines[0].n > 0
+{"path": "{{log}}"}
+
+### logs log/service-a stored-line
+# The same line, live: a `logs` step with a regex filter. (It was armed before step 1, so it saw the line arrive.)
+# @filter /stored message id={{msg}}/
+# @for 3s
+# @assert lines == 1
+
+# To follow a log live in a terminal: `dlb logs fetch log/service-a --follow --since 1m --ws <ws>`, Ctrl-C to stop; it writes one
+# file for the whole follow. In the IDE, the "Deliberator Service: a" run configuration shows A's log live in its console.

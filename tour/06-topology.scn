@@ -1,0 +1,39 @@
+# Chapter 6: topology - which instance answers for a service
+#
+# In an environment every service is `local` (our container), `off` (nobody serves it) or `external` (someone else's instance
+# at a URL). `topology.set` only changes the environment record; `runtime.ensure` then makes the containers follow, and every
+# service that depends on the changed one (B reads A's URL from SERVICE_A_URL) is recreated with the new address. A scenario
+# that addresses `{{service/a}}` while A is off fails at that step with a hint, before sending anything.
+# In the IDE: tool window → Services → select a → Topology… (local / external… / off), then the balloon's "Apply now".
+# @env local
+
+### op topology.set a-off
+# B is reported as a dependent: it will be recreated.
+# @assert $.services.a.mode == off
+# @assert $.dependents[0].name == b
+{"env": "local", "name": "a", "mode": "off"}
+
+### op runtime.ensure reconcile
+# A's container is stopped ("topology"), B is recreated without A. The events stream in as lines.
+{}
+
+### op service.status a-status
+# @assert $[0].status == off
+{"name": "a"}
+
+### op topology.set a-local
+# @assert $.services.a.mode == local
+{"env": "local", "name": "a", "mode": "local"}
+
+### op runtime.ensure reconcile-again
+# A starts again, B is recreated with A's address.
+{}
+
+### http {{service/a}}/actuator/health a-health
+# A answers again.
+# @until status == 200 within 60s
+GET {{service/a}}/actuator/health
+
+# External: adopt a second copy of A under another name and host ports, switch A off, and declare A external at the copy's URL
+# (`topology.set` with mode external, url, container-url); scenarios do not change, `{{service/a}}` and `log/service-a` follow,
+# and `runs.diff` of a local and an external run differs in one line: TOPOLOGY. docs/walkthrough.md, part 10.4, does it by hand.

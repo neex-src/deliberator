@@ -1,0 +1,84 @@
+# Chapter 2: one order through the estate
+#
+# The story: an order arrives on the SQS inbox; service A stores it in DynamoDB; we ask A to publish it; the EventBridge bus
+# delivers it to service B and to the Lambda logger; B acks it back to A over HTTP and writes a row in Postgres; A marks it
+# ACKED. Every step below checks one link of that chain. Nothing here is special to the tour: estate/scenarios/order.scn is
+# the same story without the explanations.
+#
+# Two variables run through the whole story: `corr`, the correlation id (this run's id), sent along with the order so that
+# every log line it causes can be found again, and `msg`, the order id. `{{uuid}}` and `{{correlation}}` are built in.
+# @env local
+# @var corr = {{correlation}}
+# @var msg = ord-{{uuid}}
+
+### sqs send queue/inbox send-order
+# `queue/inbox` is a target of the `local` environment (chapter 1, env.describe): the step does not know queue URLs. The body
+# comes from a file next to the estate; `@attr` sets message attributes. The response is SQS's, kept as response.json.
+# @attr id={{msg}}
+# @attr correlation={{corr}}
+# @body ../estate/payloads/01-simple-order.json
+# @assert messageId matches /^[0-9a-f-]{36}$/
+
+### dynamodb get table/messages stored
+# Service A polls the inbox. `@until` repeats this read every 500 ms until A has stored the order (or 20 s are up); the other
+# asserts are checked on the last answer. `$` is DynamoDB's JSON.
+# @until $.status.S == RECEIVED within 20s
+# @assert $.id.S == {{msg}}
+# @assert $.correlation.S == {{corr}}
+# @assert $.bytes.N > 0
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### http publish
+# An HTTP request in its raw form. `{{service/a}}` is the environment's address of service A (chapter 6 moves it). The
+# answer's eventId is captured for later steps.
+# In the IDE: put the caret here and press Ctrl+Alt+Enter (Peek Response): the real JSON of the last run, one value per line.
+# @assert status == 200
+# @assert $.id == {{msg}}
+# @assert $.correlation == {{corr}}
+# @capture eventId = $.eventId
+POST {{service/a}}/publish/{{msg}}
+X-Correlation-Id: {{corr}}
+
+### dynamodb get table/messages acked
+# The bus delivers to B, B acks to A, A writes ACKED: give it up to 30 s.
+# @until $.status.S == ACKED within 30s
+# @assert $.ackedAt.S matches /^20/
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### sql db/main ack-row
+# B's side of the ack: a row in Postgres, read with plain SQL through the `db/main` target.
+# @until rows == 1 within 20s
+# @assert col.message_id == {{msg}}
+# @assert col.correlation == {{corr}}
+# @assert col.a_status == 200
+select message_id, correlation, a_status from acks where message_id = '{{msg}}' /* {{corr}} */
+
+### http read-back
+# The order as A sees it now.
+# @assert status == 200
+# @assert $.status == ACKED
+# @assert $.correlation == {{corr}}
+GET {{service/a}}/messages/{{msg}}
+
+### logs log/service-a service-a-log
+# `logs` steps run beside the others from the start (they are armed before step 1) and keep the lines that carry the
+# correlation id: A's own account of this order. The lines are persisted as response.log of the step.
+# @filter {{corr}}
+# @for 3s
+# @assert lines >= 2
+
+### logs log/service-b service-b-log
+# @filter {{corr}}
+# @for 3s
+# @assert lines >= 1
+
+### logs log/logger lambda-log
+# The Lambda logger writes to CloudWatch Logs (in Floci); same filter.
+# @filter {{corr}}
+# @for 8s
+# @assert lines >= 1
+
+# After the run: everything above is text under sessions/<session>/runs/<run id>/: result.txt (what you see inline), run.edn,
+# and per step request/response files that are hard links into the raw store (every byte is persisted before it is parsed).
+# In the IDE: right-click → Deliberator Scenario → Runs of This Scenario… lists every run; run this chapter twice and
+# "Diff with previous run" shows two green runs are equal once ids and timestamps are normalised.

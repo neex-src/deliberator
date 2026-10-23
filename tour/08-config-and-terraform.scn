@@ -1,0 +1,79 @@
+# Chapter 8: where a setting comes from, a broken link, Terraform drift and the repair
+#
+# Service A reads `${TABLE_NAME}` in application.properties. Where does the value come from? The ECS task definition maps it
+# to an SSM parameter, declared in Terraform, which exists (or not) in the environment. `config.chain` follows every
+# placeholder through those links, offline, over a snapshot of the environment's parameters that `config.refresh` fetches.
+# This chapter deletes a parameter behind Terraform's back, sees the broken link and the drift, and repairs it with Terraform.
+# In the IDE: open estate/services/service-a/src/main/resources/application.properties and Ctrl+click `${TABLE_NAME}`: the
+# template line, the Terraform declaration and the parameter. After step 5 a refreshed snapshot underlines it as missing.
+# @env local
+
+### shell paths
+# Terraform operations take the root directory; ask the shell where this checkout is, and the workspace's name.
+# @cwd ..
+# @capture root = out
+pwd | tr -d '\n'
+
+### shell workspace
+# @capture ws = out
+printf %s "$DLB_WS"
+
+### op config.refresh snapshot
+# Parameters (never decrypted) and secret metadata (never values) of `local`, into config/local.edn of the workspace.
+# @assert $.parameters > 30
+{"env": "local"}
+
+### op config.chain chain
+# Every placeholder of A with its task definition entry, the template line, the Terraform line and the parameter.
+# @assert $.entries[0].placeholder == TABLE_NAME
+# @assert $.entries[0].taskdef.line == 14
+# @assert $.entries[0].parameter.status == present
+# @assert $.broken == []
+{"name": "a"}
+
+### aws ssm.DeleteParameter delete
+# Any AWS operation is a step (`### aws <service>.<Operation>`, chapter 9): here the break, done behind Terraform's back.
+{"Name": "/estate/common/table-name"}
+
+### op config.refresh snapshot-again
+{"env": "local"}
+
+### op config.chain broken
+# The chain names the missing parameter; `--json` of `dlb config chain` gives the template and Terraform lines of the link.
+# @assert $.broken[0].kind == parameter-missing
+# @assert $.broken[0].reason contains /estate/common/table-name
+{"name": "a"}
+
+### op terraform.drift drift
+# Terraform's declared resources (`terraform show -json`, reads only) against what exists in the environment.
+# In the IDE: tool window → AWS → Terraform drift… marks the missing parameter in the tree.
+# @assert $.missing[0].name == /estate/common/table-name
+{"dir": "{{root}}/estate/terraform/floci"}
+
+### op terraform.local plan
+# `terraform.local` plans or applies a root onto a LOCAL environment only (a remote one is refused). The estate's root needs
+# this workspace's container names as variables (the IDE's Plan/Apply buttons cannot pass them yet: BUGS.md B2).
+# @assert $.summary contains Plan:
+{"dir": "{{root}}/estate/terraform/floci",
+ "vars": {"container_endpoint": "http://deliberator-{{ws}}-floci:4566",
+          "service_a_url": "http://deliberator-{{ws}}-service-a:8081",
+          "db_url": "jdbc:postgresql://deliberator-{{ws}}-postgres:5432/deliberator"}}
+
+### op terraform.local apply
+# @timeout 5m
+# @assert $.summary contains Apply complete
+{"dir": "{{root}}/estate/terraform/floci", "action": "apply",
+ "vars": {"container_endpoint": "http://deliberator-{{ws}}-floci:4566",
+          "service_a_url": "http://deliberator-{{ws}}-service-a:8081",
+          "db_url": "jdbc:postgresql://deliberator-{{ws}}-postgres:5432/deliberator"}}
+
+### op terraform.drift no-drift
+# @assert $.missing == []
+{"dir": "{{root}}/estate/terraform/floci"}
+
+### op config.refresh snapshot-repaired
+{"env": "local"}
+
+### op config.chain repaired
+# @assert $.broken == []
+{"name": "a"}

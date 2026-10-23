@@ -1,0 +1,83 @@
+# Chapter 5: change code in a running container
+#
+# Edit a Java file of service A, reload it into the RUNNING container (no restart, no new container), and see the new code
+# answer. The service image carries HotswapAgent; `service.reload` compiles the module, copies only the changed classes in
+# and waits until the agent has redefined them. Then a compile error, which changes nothing in the container. The chapter
+# starts and ends with Api.java as git has it.
+# @env local
+# @var corr = {{correlation}}
+# @var msg = ord-{{uuid}}
+
+### shell clean-start
+# Make sure Api.java is as committed (a run of this chapter that was interrupted could have left it edited).
+# @cwd ..
+git checkout -- estate/services/service-a/src/main/java/estate/a/Api.java
+
+### shell container-before
+# The id of A's container now, to compare after the reload. (Go templates like {{.Id}} are left alone: not a variable name.)
+# @capture cid = out
+podman inspect "deliberator-$DLB_WS-service-a" --format '{{.Id}}' | tr -d '\n'
+
+### shell edit
+# The edit you would make in the editor: line 57 of Api.java logs every ack.
+# @cwd ..
+# @assert out contains reloaded by the tour
+sed -i 's/ACK received id=/ACK received (reloaded by the tour) id=/' estate/services/service-a/src/main/java/estate/a/Api.java
+git diff -U0 estate/services/service-a/src/main/java/estate/a/Api.java
+
+### op service.reload reload
+# Compile, copy the changed class, redefine it in the running JVM. In the IDE: edit, save, tool window → Services → a → Reload.
+# @assert $.mechanism == hotswap-agent
+# @assert $.redefined contains estate.a.Api
+{"name": "a"}
+
+### sqs send queue/inbox send-order
+# An order, to make A log an ack with the new code.
+# @attr id={{msg}}
+# @attr correlation={{corr}}
+# @body ../estate/payloads/01-simple-order.json
+
+### dynamodb get table/messages stored
+# @until $.status.S == RECEIVED within 20s
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### http publish
+# @assert status == 200
+POST {{service/a}}/publish/{{msg}}
+X-Correlation-Id: {{corr}}
+
+### dynamodb get table/messages acked
+# @until $.status.S == ACKED within 30s
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### op logs.fetch new-line
+# A's log has the ack line of this order, written by the edited code.
+# @assert $.lines == 1
+{"target": "log/service-a", "since": "10m", "filter": "ACK received (reloaded by the tour) id={{msg}}"}
+
+### shell container-after
+# Same container as before the reload.
+# @assert out == {{cid}}
+podman inspect "deliberator-$DLB_WS-service-a" --format '{{.Id}}' | tr -d '\n'
+
+### shell break-it
+# Now a syntax error: the semicolon of line 57 removed.
+# @cwd ..
+sed -i '57s/;$//' estate/services/service-a/src/main/java/estate/a/Api.java
+
+### op service.reload compile-error
+# The compiler's error comes back as a typed error naming the file and line; nothing reached the container. The asserts make
+# that error the expected outcome (without them an operation error fails the step).
+# @assert ok == false
+# @assert error.type == service/compile-failed
+# @assert error.message contains Api.java:57
+{"name": "a"}
+
+### shell restore
+# @cwd ..
+git checkout -- estate/services/service-a/src/main/java/estate/a/Api.java
+
+### op service.reload back
+# The committed class back into the container.
+# @assert $.redefined contains estate.a.Api
+{"name": "a"}

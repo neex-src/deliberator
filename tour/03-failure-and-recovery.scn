@@ -1,0 +1,57 @@
+# Chapter 3: a service goes down, the order waits, the service comes back
+#
+# What happens to an order when service B is down? A publishes, nobody acks, the order stays PUBLISHED. The event is not lost:
+# it waits in B's queue, and when B is back it acks. This chapter stops B with a daemon operation, watches the order wait,
+# starts B again and watches the late ack arrive. It ends with B running, as it found it.
+# @env local
+# @var corr = {{correlation}}
+# @var msg = ord-{{uuid}}
+
+### op service.stop stop-b
+# `service.stop` stops B's container and keeps it (the IDE's Services tab has the same Stop button).
+# @assert $.status == stopped
+{"name": "b"}
+
+### sqs send queue/inbox send-order
+# @attr id={{msg}}
+# @attr correlation={{corr}}
+# @body ../estate/payloads/01-simple-order.json
+
+### dynamodb get table/messages stored
+# @until $.status.S == RECEIVED within 20s
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### http publish
+# @assert status == 200
+POST {{service/a}}/publish/{{msg}}
+X-Correlation-Id: {{corr}}
+
+### wait b-is-down
+# Give B the time it would need to ack (it would take well under a second).
+# @for 5s
+
+### dynamodb get table/messages still-published
+# Nobody acked: the order is still PUBLISHED. (Chapter 2's `acked` step would fail here after 30 s; in a scenario a
+# failed check never stops the run, every later step still runs and the result shows exactly which link broke.)
+# @assert $.status.S == PUBLISHED
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### op service.start start-b
+# B starts again (the same container) and waits until healthy.
+# @assert $.status == running
+{"name": "b"}
+
+### dynamodb get table/messages late-ack
+# B reads the event that waited in its queue and acks: the order becomes ACKED, late.
+# @until $.status.S == ACKED within 120s
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### op logs.fetch a-log
+# A `logs` step listens while the run goes (chapter 2); after the fact, `logs.fetch` reads a log into the session as a file
+# (sessions/<session>/logs/). Filtered by this order's correlation id, A's account of it now ends with the late "ACK received".
+# @assert $.lines >= 3
+{"target": "log/service-a", "since": "10m", "filter": "{{corr}}"}
+
+# In the IDE: Runs of This Scenario… on chapter 2, pick a run, "Diff with..." and a run of this chapter would compare
+# different scenarios; compare instead two runs of estate/scenarios/order.scn, one while B is stopped: the diff shows exactly
+# the steps and log lines that the outage changed.

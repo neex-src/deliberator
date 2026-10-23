@@ -18,9 +18,9 @@
   `:kinds` an unknown kind, a missing verb or an undeclared directive is an error with the line;
   without it nothing is checked against kinds. `# @name x` overrides the name.
 
-  Directives are the lines `# @name value` right after the step line (blank lines between them are
-  skipped). The BODY runs from after the last directive line (right after the step line when there
-  is none) to the next `###` step line or EOF, with trailing blank lines removed but the newline of
+  Directives are the lines `# @name value` right after the step line (blank lines and plain `#` comment
+  lines between them are skipped: prose about the step). The BODY runs from after the last
+  directive or comment line of that block (right after the step line when there is none) to the next `###` step line or EOF, with trailing blank lines removed but the newline of
   the last non-blank line kept: `{...}\\n\\n###` yields `{...}\\n`, `{...}` at EOF without a newline
   yields `{...}`. A separator blank line is layout, not payload (the PoC lost final newlines the
   other way round). Who needs other bytes, trailing blank lines included, uses `# @body <file>`:
@@ -64,6 +64,7 @@
   (re-pattern (str "#\\s*@(" (str/join "|" (sort engine-names)) ")(\\s.*)?\\s*")))
 
 (defn- blank? [{:keys [text]}] (str/blank? text))
+(defn- comment-line? [{:keys [text]}] (and (str/starts-with? text "#") (not (str/starts-with? text "###"))))
 
 (defn- scan-json
   "Advances the JSON scanner `{:depth :in-str}` over one line of body text. A JSON value opens only
@@ -178,6 +179,7 @@
             (cond
               (blank? l) (recur (inc i) dirs last-i)
               (directive l) (recur (inc i) (conj dirs (directive l)) i)
+              (comment-line? l) (recur (inc i) dirs i)   ; prose about the step, among its directives
               :else [dirs last-i])
             [dirs last-i]))
         allowed (when kmap (set (map :name (kinds/directive-specs kmap))))

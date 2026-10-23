@@ -40,6 +40,9 @@
   estate:down {:doc "Remove the workspace's containers and the Floci root's Terraform state; args: --ws W"
                :requires ([estate])
                :task (estate/down *command-line-args*)}
+  tour {:doc "The tour as an integration test: every tour/NN-*.scn in order, one session TOUR-<date>; chapter 01 brings the estate up; args: [--ws W (default tour)] [--only N] [--from N] [--down]"
+        :requires ([tour])
+        :task (apply tour/-main *command-line-args*)}
   acceptance {:doc "M1 acceptance: estate up if needed, session ACCEPT-<date>, run every scenario in estate/scenarios; args: --ws W [--down]"
               :requires ([acceptance])
               :task (apply acceptance/-main *command-line-args*)}
