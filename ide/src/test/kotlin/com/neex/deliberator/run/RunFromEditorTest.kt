@@ -100,6 +100,7 @@ class RunFromEditorTest : BasePlatformTestCase() {
         myFixture.openFileInEditor(vf)
         val view = RunView.of(myFixture.editor)
         assertNotNull("the editor of a .scn file has a run view", view)
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue() // the first paint of the view is a plain event, not part of creating the editor
         return vf to view!!
     }
 

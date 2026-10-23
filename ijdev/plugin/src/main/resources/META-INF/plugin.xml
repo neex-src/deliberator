@@ -1,0 +1,16 @@
+<idea-plugin>
+    <id>ijdev.repl</id>
+    <name>ijdev REPL</name>
+    <vendor>ijdev</vendor>
+    <description><![CDATA[
+        Development only. An nREPL server inside the running IDE (127.0.0.1, port in <code>-Dijdev.dir</code>/nrepl-port),
+        evaluating Clojure against every loaded plugin's classes. Never install it into an IDE you use for work.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <applicationListeners>
+        <listener class="ijdev.StartOnAppStart" topic="com.intellij.ide.AppLifecycleListener"/>
+        <listener class="ijdev.PluginEvents" topic="com.intellij.ide.plugins.DynamicPluginListener"/>
+    </applicationListeners>
+</idea-plugin>

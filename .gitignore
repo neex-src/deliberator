@@ -24,3 +24,6 @@ target/
 *.tfstate
 *.tfstate.*
 .build/
+
+# ijdev: the in-IDE REPL state of a sandbox (port file, eval log, screenshots)
+.ijdev/

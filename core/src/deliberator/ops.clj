@@ -51,6 +51,10 @@
                                                       [run.started step.started line confirm.required step.finished run.finished]
     scenario.cancel run-id*                        -> {run-id cancelled}
     scenario.kinds                                 -> [{kind verbs verb-optional target directives facts capture-roots concurrent default-timeout-ms}]
+    aws.discover env ws                            -> {env resources{kind [{name ref}]} errors}
+    terraform.drift env file dir plan ws           -> {env source region declared matching missing[] undeclared[] errors}
+    terraform.local dir* action env vars ws         -> {action dir env ok exit summary sha path output}   [tf.line]
+    aws.describe service* op*                      -> {service op class input}   (input = shape tree: type required members member enum)
     scenario.parse path text ws                    -> {header steps errors}   (a syntax error is data in errors, not an op error)
     runs.list ws session scenario limit            -> {session runs}
     repo.attach path* kind ws                      -> {name path kind attached-at}
@@ -78,6 +82,10 @@
             [deliberator.config :as config]
             [deliberator.env :as env]
             [deliberator.logfetch :as logfetch]
+            [deliberator.awsdiscover :as awsdiscover]
+            [deliberator.tfdrift :as tfdrift]
+            [deliberator.tflocal :as tflocal]
+            [deliberator.awsmodel :as awsmodel]
             [deliberator.markers :as markers]
             [deliberator.repo :as repo]
             [deliberator.runtime :as runtime]
@@ -500,6 +508,20 @@
 
 (defn- scenario-kinds [_ _] (kinds/describe-kinds))
 
+(defn- aws-discover [_ {:keys [env] :as args}]
+  (awsdiscover/discover! (ws-of args) (or env "local")))
+
+(defn- terraform-drift [_ {:keys [env file dir plan] :as args}]
+  (tfdrift/drift! (ws-of args) (or env "local") (cond-> {} file (assoc :file file) dir (assoc :dir dir) plan (assoc :plan plan))))
+
+(defn- terraform-local [ctx {:keys [env dir action vars] :as args}]
+  (tflocal/run! (ws-of args) (or env "local") {:dir dir :action (or action "plan") :vars vars :sink (:emit! ctx)}))
+
+(defn- aws-describe [_ {:keys [service op]}]
+  (or (awsmodel/input service op)
+      (fail :aws/unknown-operation (str "no operation " service "." op)
+            :hint "the aws kind's verbs are service.Operation, listed by scenario.kinds")))
+
 (defn- scenario-parse [_ {:keys [path text] :as args}]
   (when-not (or path text)
     (fail :bad-args "scenario.parse needs path or text" :hint "pass a scenario file path, or text for an unsaved buffer"))
@@ -723,6 +745,26 @@
                       :args {:run-id {:type :string :required true :doc "run id from the run.started event"}}}
    "scenario.kinds" {:fn scenario-kinds :class :read :args {}
                      :doc "The registered step kinds as data: verbs, target rule, directives (engine-owned ones marked), facts, capture roots, concurrency. Completion and documentation are generated from it."}
+   "aws.discover" {:fn aws-discover :class :read
+                   :doc "What exists in an environment (queues, tables, buses, functions, buckets, topics, parameters, secrets, streams, state machines): names for completion. Read calls only; a failing section is listed in errors."
+                   :args (ws-schema :env {:type :string :doc "environment name (default local)"})}
+   "terraform.drift" {:fn terraform-drift :class :read
+                      :doc "Terraform against an environment, reads only: the declared resources of a `terraform show -json` document (file, or run in dir, optionally for a saved plan) compared with what exists in env (aws.discover): missing, undeclared, matching. The document is persisted raw first."
+                      :args (ws-schema :env {:type :string :doc "environment name (default local)"}
+                                       :file {:type :string :doc "terraform show -json output file"}
+                                       :dir {:type :string :doc "a Terraform root directory (terraform show -json runs there, no apply)"}
+                                       :plan {:type :string :doc "saved plan file in dir"})}
+   "terraform.local" {:fn terraform-local :class :mutate
+                      :doc "terraform plan or apply of a root directory onto a local environment (refused for a remote one): init, then the action, output streamed as tf.line events and persisted raw. A root with an `endpoint` variable gets the environment's endpoint."
+                      :events ["tf.line"]
+                      :args (ws-schema :dir {:type :string :required true :doc "Terraform root directory"}
+                                       :action {:type :string :doc "plan (default) or apply"}
+                                       :env {:type :string :doc "local environment name (default local)"}
+                                       :vars {:type :object :doc "extra -var name value pairs"})}
+   "aws.describe" {:fn aws-describe :class :read
+                   :doc "The request shape of an AWS operation from the bundled service models (members, required, enums, nesting), for completion in step bodies of the aws kind."
+                   :args {:service {:type :string :required true :positional true :doc "aws-api service name, e.g. ssm, s3, sns"}
+                          :op {:type :string :required true :positional true :doc "operation, e.g. GetParameter"}}}
    "scenario.parse" {:fn scenario-parse :class :read
                      :doc "Parses a scenario with the daemon's parser: header, steps (kind, verb, target, name, lines, directives, body size) and errors. A syntax error is returned in errors (steps empty), not raised. With text, an unsaved buffer is parsed; path then only resolves # @body."
                      :args (ws-schema :path {:type :string :positional true :doc "scenario file (or use text); relative paths are looked up in the session's scenarios/"}

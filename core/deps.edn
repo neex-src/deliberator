@@ -13,6 +13,14 @@
         com.cognitect.aws/sts {:mvn/version "871.2.54.18"}
         com.cognitect.aws/ecs {:mvn/version "871.2.55.16"}
         com.cognitect.aws/codedeploy {:mvn/version "871.2.54.18"}
+        com.cognitect.aws/s3 {:mvn/version "871.2.55.11"}
+        com.cognitect.aws/sns {:mvn/version "871.2.55.2"}
+        com.cognitect.aws/states {:mvn/version "871.2.54.13"}
+        com.cognitect.aws/kms {:mvn/version "871.2.44.12"}
+        com.cognitect.aws/kinesis {:mvn/version "871.2.55.7"}
+        com.cognitect.aws/monitoring {:mvn/version "871.2.55.7"}
+        com.cognitect.aws/cloudformation {:mvn/version "871.2.50.3"}
+        com.cognitect.aws/iam {:mvn/version "871.2.53.2"}
         org.clojure/data.json {:mvn/version "2.5.2"}
         com.github.seancorfield/next.jdbc {:mvn/version "1.3.1118"}
         org.postgresql/postgresql {:mvn/version "42.7.7"}}

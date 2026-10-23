@@ -65,10 +65,18 @@
   "`[service op]` pairs whose class differs from what their name suggests, with the reason."
   {["logs" "StartQuery"] "starts a read-only Insights query, changes no resource"})
 
+(def generic-read-services
+  "Services only the generic `aws` step kind reaches (not in `table`): there `Get*`/`List*`/`Describe*`/`Head*` count as reads.
+  Everywhere else an operation that is not in the table is a mutation (a remote one needs confirmation)."
+  #{:s3 :sns :states :kms :kinesis :monitoring :cloudformation :iam})
+
 (defn op-class
   "`:read` or `:mutate` for `service`/`op`; `:mutate` when the pair is unknown."
   [service op]
-  (get-in table [(api-name service) (name op)] :mutate))
+  (get-in table [(api-name service) (name op)]
+          (if (and (contains? generic-read-services (api-name service)) (re-find #"^(Get|List|Describe|Head)" (name op)))
+            :read
+            :mutate)))
 
 (defn known?
   "True when `service`/`op` is in the table."

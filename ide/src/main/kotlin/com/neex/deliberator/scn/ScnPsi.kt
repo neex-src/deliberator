@@ -229,4 +229,10 @@ class ScnDirective(node: ASTNode) : ASTWrapperPsiElement(node) {
     }
 }
 
-class ScnBody(node: ASTNode) : ASTWrapperPsiElement(node)
+class ScnBody(node: ASTNode) : ASTWrapperPsiElement(node), com.intellij.psi.PsiLanguageInjectionHost {
+    override fun isValidHost(): Boolean = true
+    override fun updateText(text: String): com.intellij.psi.PsiLanguageInjectionHost =
+        com.intellij.psi.ElementManipulators.handleContentChange(this, text)
+    override fun createLiteralTextEscaper(): com.intellij.psi.LiteralTextEscaper<out com.intellij.psi.PsiLanguageInjectionHost> =
+        com.intellij.psi.LiteralTextEscaper.createSimple(this)
+}

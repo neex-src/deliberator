@@ -59,6 +59,9 @@ class ScnRegistry : PersistentStateComponent<ScnRegistry.State> {
     /** The registry as last fetched on this connection, else the last copy seen, else null. Never blocks. */
     fun kinds(): ScnKinds? = live?.kinds ?: persisted
 
+    /** The connection last used, null before any (never starts a daemon). */
+    fun knownClient(): DaemonClient? = known
+
     /** True when [kinds] comes from the current daemon connection (not from the saved copy). */
     fun isLive(): Boolean = live != null
 

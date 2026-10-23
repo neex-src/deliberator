@@ -35,6 +35,7 @@
             [deliberator.steps.lambda]
             [deliberator.steps.logs]
             [deliberator.steps.scheduler]
+            [deliberator.steps.awscall]
             [deliberator.steps.sql]
             [deliberator.steps.sqs]
             [deliberator.steps.wait]
