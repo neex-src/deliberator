@@ -150,3 +150,13 @@
   (testing "an unclosed quote does not swallow the rest of the file"
     (let [t "### x\n{\"a\": \"oops\n### y\n### z\n"]
       (is (= ["x" "y" "z"] (map :kind (:steps (parse/parse t))))))))
+
+(deftest prose-among-the-directives-of-a-step
+  ;;: the tour explains every step right under its ### line
+  (let [{:keys [steps]} (parse/parse (str "### op marker.add mark\n# What this step does,\n# over two lines.\n# @assert ok == true\n\n"
+                                          "# More prose after a blank line.\n# @capture id = $[0].id\n{\"line\": 2}\n\n"
+                                          "### shell\n# prose\necho one\n# a bash comment in the script stays script\necho two\n"))
+        [a b] steps]
+    (is (= [["assert" "ok == true"] ["capture" "id = $[0].id"]] (map (juxt :name :value) (:directives a))))
+    (is (= "{\"line\": 2}\n" (body-str a)) "prose is not body")
+    (is (= "echo one\n# a bash comment in the script stays script\necho two\n" (body-str b)) "a # line after the body started is body")))

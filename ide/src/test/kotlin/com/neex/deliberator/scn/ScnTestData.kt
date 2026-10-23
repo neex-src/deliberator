@@ -13,6 +13,18 @@ object ScnTestData {
 
     /** Valid scenarios (the daemon parses them) that stress the step boundaries. */
     val corners: Map<String, String> = linkedMapOf(
+        "prose-among-directives" to """
+            ### wait nap
+            # Waits, and this line explains why.
+            # @for 1s
+
+            # More prose after a blank line.
+            ### sqs send queue/inbox
+            # What this sends.
+            # @attr id=1
+            hello
+            # body: the body had started
+            """.trimIndent() + "\n",
         "json-string-hashes" to """
             ### sql db/main q1
             { "a": "x

@@ -106,7 +106,11 @@ class ScnLexer : LexerBase() {
                 blank(l)
             } else if (zone) {
                 val m = DIRECTIVE.matcher(l.text)
-                if (m.matches()) directive(l, m) else { zone = false; body(l) }
+                when {
+                    m.matches() -> directive(l, m)
+                    l.text.startsWith("#") && !l.text.startsWith("###") -> emit(ScnTokens.COMMENT, l.start, l.end) // prose about the step
+                    else -> { zone = false; body(l) }
+                }
             } else body(l)
             emit(ScnTokens.EOL, l.end, l.next)
         }
