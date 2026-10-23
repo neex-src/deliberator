@@ -11,8 +11,8 @@ import com.intellij.psi.PsiLanguageInjectionHost
 import com.intellij.psi.AbstractElementManipulator
 import com.intellij.psi.PsiDocumentManager
 
-/** Kinds whose body is the request document as JSON (http carries a request line and is left alone). */
-private val JSON_KINDS = setOf("aws", "sqs", "dynamodb", "eventbridge", "lambda", "scheduler")
+/** Kinds whose body is a JSON document: the AWS request, an operation's arguments (http carries a request line and is left alone). */
+private val JSON_KINDS = setOf("aws", "sqs", "dynamodb", "eventbridge", "lambda", "scheduler", "op")
 
 /**
  * JSON in the body of the AWS steps: colours, brace matching, folding, the JSON plugin's own checks. A `{{var}}` is not part
@@ -26,9 +26,11 @@ class ScnJsonInjector : MultiHostInjector {
         if (!body.isValidHost) return
         val kind = (body.parent as? ScnStep)?.kind ?: return
         val sql = kind == "sql"
-        if (kind !in JSON_KINDS && !sql) return
-        val json = Language.findLanguageByID(if (sql) "SQL" else "JSON") ?: return
-        val parts = (if (sql) split(body.text, json = false) else split(body.text)) ?: return
+        val shell = kind == "shell"
+        if (kind !in JSON_KINDS && !sql && !shell) return
+        // Shell Script comes from the bundled sh plugin when it is there; looked up by id, no dependency
+        val json = Language.findLanguageByID(if (sql) "SQL" else if (shell) "Shell Script" else "JSON") ?: return
+        val parts = (if (sql || shell) split(body.text, json = false) else split(body.text)) ?: return
         registrar.startInjecting(json)
         parts.forEachIndexed { i, r -> registrar.addPlace(if (i == 0) null else "0", null, body, r) }
         registrar.doneInjecting()

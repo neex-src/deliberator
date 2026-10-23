@@ -296,4 +296,13 @@ class ScnEditorTest : BasePlatformTestCase() {
         println("SCN-PSI-5000: median ms=${ms[2]} min=${ms[0]} max=${ms[4]}")
         assertTrue("5000 steps: ${ms[2]} ms", ms[2] < 5000)
     }
+
+    fun testOpBodiesAreJsonAndShellBodiesAreLeftAloneWithoutTheShellPlugin() {
+        val text = "### op marker.add\n{\"file\": \"{{f}}\", \"line\": 1}\n\n### shell\necho hi\n"
+        val f = scn(text)
+        val ilm = com.intellij.lang.injection.InjectedLanguageManager.getInstance(project)
+        assertEquals("JSON", ilm.findInjectedElementAt(f, text.indexOf("\"line\"") + 1)?.language?.id)
+        val sh = ilm.findInjectedElementAt(f, text.indexOf("echo") + 1)?.language?.id
+        assertTrue("shell body: Shell Script when the sh plugin is loaded, nothing otherwise, never JSON ($sh)", sh == null || sh == "Shell Script")
+    }
 }
