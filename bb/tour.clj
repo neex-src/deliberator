@@ -5,7 +5,7 @@
   then one line per chapter (ok/FAIL, the result trailer, the run directory) and the exit code: 1 when any chapter was not green.
   The daemon is stopped at the end when this task started it; the estate stays up unless `--down`.
 
-  Environment: `DELIBERATOR_HOME` (refused without one when `DELIBERATOR_NO_DEFAULT_HOME` is set), `DELIBERATOR_JAR` (default
+  Environment, all optional: `DELIBERATOR_HOME` (default `<repo>/.scratch/tour-home`, the home of `bb tour:ide`), `DELIBERATOR_JAR` (default
   core/target/deliberatord.jar, built when missing), `DLB_DAEMON_ARGS` (default `--idle-minutes 15`). Run from the repository
   root, as `bb` does."
   (:require [babashka.fs :as fs]
@@ -18,11 +18,10 @@
 
 (defn- arg [args k] (second (drop-while #(not= k %) args)))
 
-(defn- home []
-  (or (System/getenv "DELIBERATOR_HOME")
-      (when (System/getenv "DELIBERATOR_NO_DEFAULT_HOME")
-        (throw (ex-info "DELIBERATOR_NO_DEFAULT_HOME is set: pass DELIBERATOR_HOME" {:type "no-default-home"})))
-      (str (or (System/getenv "XDG_DATA_HOME") (str (System/getProperty "user.home") "/.local/share")) "/deliberator")))
+(defn- home
+  "$DELIBERATOR_HOME, else `<repo>/.scratch/tour-home`: the same home `bb tour:ide` opens, so the IDE sees what the test ran."
+  []
+  (str (fs/absolutize (or (System/getenv "DELIBERATOR_HOME") ".scratch/tour-home"))))
 
 (defn- today [] (.format (java.time.LocalDate/now java.time.ZoneOffset/UTC) (java.time.format.DateTimeFormatter/BASIC_ISO_DATE)))
 

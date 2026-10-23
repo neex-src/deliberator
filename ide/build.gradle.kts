@@ -76,6 +76,7 @@ tasks.runIde {
     jvmArgs("-Didea.trust.all.projects=true", "-Ddeliberator.jar=" + daemonJar.asFile.absolutePath)
     providers.gradleProperty("dlbHome").orNull?.let { environment("DELIBERATOR_HOME", it) }
     providers.gradleProperty("dlbProject").orNull?.let { args(it) }
+    providers.gradleProperty("dlbOpen").orNull?.let { args(it) }   // a file to open in that project (bb tour:ide: chapter 01)
 }
 
 // `ijdev start` runs this: the sandbox IDE with the dev-only ijdev REPL plugin (nREPL inside the IDE, port in ide/.ijdev/nrepl-port),
