@@ -1,0 +1,44 @@
+# Chapter 1: the estate
+#
+# Deliberator is an IntelliJ plugin plus a daemon (`deliberatord`) that does the work. You are reading a scenario: plain text,
+# one step per `###` line. The comments teach, the steps do it; run them and the result of each step appears under it, here in
+# the editor, and as files under $DELIBERATOR_HOME/workspaces/<ws>/sessions/<session>/runs/.
+#
+# How to run (in the IDE): right-click → Deliberator Scenario → Run Scenario runs every step; Ctrl+Enter runs the step at the
+# caret only; the green ▷ in the gutter of a `###` line offers "this step / from here / all". In a terminal:
+# `dlb run tour/01-estate.scn --ws <ws>`. `bb tour` runs every chapter in order: the tour is also the integration test.
+#
+# The estate is the small AWS system Deliberator is built against, all on this machine: an SQS inbox -> service A (Spring
+# Boot, DynamoDB) -> an EventBridge bus -> service B (acks A over HTTP, writes a row in Postgres) and a Lambda logger. AWS is
+# Floci, an emulator in a container. This chapter brings it all up and looks at what is running.
+
+### shell estate-up
+# A `shell` step runs its body with bash, here from the repository root (`@cwd ..`: relative to this file). The output streams
+# in while it runs (about 2 minutes the first time: the service image, Maven, Terraform; ~1 minute after that). It builds the
+# services, starts Floci and Postgres (`runtime.ensure`), applies Terraform onto Floci (queues, table, bus, Lambda, parameters,
+# secrets, ECS task definitions), adopts service A and B from their task definitions and starts their containers.
+# A non-zero exit fails the step; the whole transcript is kept as response.txt of the step.
+# @cwd ..
+# @timeout 15m
+# @assert out contains estate up in
+bb estate:up --ws "$DLB_WS"
+
+### op service.list services
+# An `op` step calls one operation of the daemon (the same ones `dlb` and the IDE use; `dlb help` lists them all) with the
+# JSON body as arguments; `ws` and `session` default to this run's. `$` is the answer: here one row per adopted service.
+# In the IDE: Ctrl+Alt+Enter on this step (Peek Response) shows that answer as JSON; Enter on a line adds an `@assert` for it.
+# @assert $[0].name == a
+# @assert $[0].status == running
+# @assert $[1].name == b
+# @assert $[1].status == running
+
+### op runtime.status containers
+# The containers of this workspace: Floci, Postgres, service-a, service-b, with health and host ports. The same table is the
+# "Runtime" part of the Deliberator tool window (Workspace tab, right sidebar).
+# @assert $.podman.reachable == true
+
+### op env.describe local
+# The `local` environment: the AWS endpoint (Floci, fake credentials) and the targets scenarios use by name: `queue/inbox`,
+# `table/messages`, `service/a`, `log/service-a`, `db/main` ... Chapter 2 sends an order through them.
+# @assert $.env.name == local
+{"name": "local"}

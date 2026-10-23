@@ -1,0 +1,45 @@
+# Chapter 9: any AWS call as a step
+#
+# Besides the kinds that know a service (sqs, dynamodb, eventbridge, lambda, scheduler), `### aws <service>.<Operation>` calls
+# any operation of the services on the classpath: the body is the request JSON, `$` the response. In a local environment it
+# just runs; against a remote one every mutating call needs a confirmation (that is M4).
+# In the IDE: inside a body, Ctrl+Space completes the request's member names from the AWS model (required ones bold) and values
+# from what exists (topics, queues, tables ...); in `# @assert $.` it completes paths of the step's last real response; tool
+# window → AWS shows everything that exists, double-click writes a read step for it into explore/explore-<env>.scn and runs it.
+# @env local
+# @var topic = tour-{{uuid}}
+
+### op aws.discover what-exists
+# What exists in the environment: the names completion and the AWS tab use.
+# @assert $.resources.dynamodb[0].name == estate-messages
+{}
+
+### op aws.describe what-publish-takes
+# The request shape of SNS Publish from the bundled model: what body completion offers.
+# @assert $.input.required[0] == Message
+{"service": "sns", "op": "Publish"}
+
+### aws ssm.GetParameter table-name
+# @assert $.Parameter.Value == estate-messages
+{"Name": "/estate/common/table-name"}
+
+### aws sns.CreateTopic create-topic
+# @capture arn = $.TopicArn
+{"Name": "{{topic}}"}
+
+### aws sns.Publish publish
+# @assert $.MessageId matches /^[0-9a-f-]{36}$/
+{"TopicArn": "{{arn}}", "Message": "hello from the tour"}
+
+### aws s3.CreateBucket bucket
+{"Bucket": "{{topic}}", "CreateBucketConfiguration": {"LocationConstraint": "eu-central-1"}}
+
+### aws s3.GetBucketLocation where
+# @assert $.LocationConstraint == eu-central-1
+{"Bucket": "{{topic}}"}
+
+### aws s3.DeleteBucket clean-up
+{"Bucket": "{{topic}}"}
+
+### aws sns.DeleteTopic clean-up-topic
+{"TopicArn": "{{arn}}"}
