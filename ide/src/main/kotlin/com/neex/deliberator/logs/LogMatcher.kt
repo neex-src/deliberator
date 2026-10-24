@@ -47,11 +47,17 @@ class LogMatcher(private val project: Project) : Disposable {
     private val clock = java.util.concurrent.atomic.AtomicLong()
     /** The id of the latest finished run, for the correlation filter's default. */
     @Volatile var latestRun: RunSnapshot? = null; private set
+    /** The last few finished runs, newest first: the filter picks the newest one whose id is in the log it filters. */
+    @Volatile var recentRuns: List<RunSnapshot> = emptyList(); private set
 
     init {
         val bus = project.messageBus.connect(this)
         bus.subscribe(ScnRunListener.TOPIC, object : ScnRunListener {
-            override fun runFinished(path: String, snapshot: RunSnapshot) { latestRun = snapshot; annotateAll() }
+            override fun runFinished(path: String, snapshot: RunSnapshot) {
+                latestRun = snapshot
+                recentRuns = (listOf(snapshot) + recentRuns.filter { it.runId != snapshot.runId }).take(RECENT)
+                annotateAll()
+            }
         })
         bus.subscribe(MarkerListener.TOPIC, object : MarkerListener {
             override fun markersChanged() { annotateAll() }
@@ -147,7 +153,7 @@ class LogMatcher(private val project: Project) : Disposable {
     }
 
     /** Forgets the latest run and every match (the light test project outlives a test). */
-    fun reset() { latestRun = null; matches.clear() }
+    fun reset() { latestRun = null; recentRuns = emptyList(); matches.clear() }
 
     fun forget(editor: Editor) { editor.getUserData(KEY)?.let { s -> s.seq.incrementAndGet(); s.highlighters.clear() } }
 
@@ -156,6 +162,10 @@ class LogMatcher(private val project: Project) : Disposable {
 
     companion object {
         private val LOG = logger<LogMatcher>()
+        private const val RECENT = 10
+
+        /** The newest of [runs] (newest first) whose run id occurs in [text], or null. */
+        fun runIn(runs: List<RunSnapshot>, text: CharSequence): RunSnapshot? = runs.firstOrNull { it.runId.isNotEmpty() && text.contains(it.runId) }
         private val KEY = Key.create<EditorHighlights>("deliberator.logHighlights")
         val MATCHED: TextAttributesKey = TextAttributesKey.createTextAttributesKey("DELIBERATOR_MARKED_LOG_LINE", EditorColors.SEARCH_RESULT_ATTRIBUTES)
         private val STRIPE = JBColor(java.awt.Color(0xE0A100), java.awt.Color(0xE0A100))

@@ -58,7 +58,7 @@ abstract class LogEditorAction : AnAction(), DumbAware {
     }
 }
 
-/** `deliberator.logs.filter`: fold the entries that lack the correlation id (selection, else the latest run, else a prompt). */
+/** `deliberator.logs.filter`: fold the entries that lack the correlation id (selection, else the latest run whose id is in this log, else a prompt). */
 class FilterByCorrelationAction : LogEditorAction() {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
@@ -68,10 +68,10 @@ class FilterByCorrelationAction : LogEditorAction() {
     }
 
     companion object {
-        /** The selection (one line, trimmed), else the latest run's id, else what the user types (pre-filled with the last choice). */
+        /** The selection (one line, trimmed), else the id of the latest run that occurs in the editor's text, else what the user types (pre-filled with the last choice). */
         fun idFor(project: Project, editor: Editor, ask: (String?) -> String? = { d -> Messages.showInputDialog(project, "Correlation id (or any text an entry must contain):", "Filter Log", null, d, null)?.trim() }): String? {
             editor.selectionModel.selectedText?.trim()?.takeIf { it.isNotEmpty() && !it.contains('\n') && it.length <= 200 }?.let { return it }
-            val run = LogMatcher.getInstance(project).latestRun?.runId
+            val run = LogMatcher.runIn(LogMatcher.getInstance(project).recentRuns, editor.document.charsSequence)?.runId
             if (run != null) return run
             return ask(CorrelationFilter.stateOf(editor)?.id)?.takeIf { it.isNotEmpty() }
         }
