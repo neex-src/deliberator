@@ -118,9 +118,14 @@
 
 (defn- scalars? [v] (and (sequential? v) (seq v) (every? scalar? v)))
 
-(defn- compact [m]
-  (str/join " " (for [[k v] m :when (or (and (scalar? v) (some? v)) (scalars? v))]
-                  (str (name k) "=" (if (scalars? v) (str/join "," v) (tail v))))))
+(defn- compact
+  "One line for a row: scalars and scalar lists as k=v, any other non-empty value as k=<json>, so nothing is dropped."
+  [m]
+  (str/join " " (for [[k v] m :when (or (and (scalar? v) (some? v)) (and (coll? v) (seq v)))]
+                  (str (name k) "="
+                       (cond (scalars? v) (str/join "," v)
+                             (scalar? v) (tail v)
+                             :else (json/generate-string v))))))
 
 (defn run-summary [{:keys [status steps failed checks failed-checks]}]
   (str (str/upper-case (str status)) "  " steps " steps, " failed " failed"
@@ -128,6 +133,25 @@
 
 (defn- print-paths [m]
   (doseq [[k v] (sort-by key m)] (println (str (name k) ": " v))))
+
+(defn- print-entries
+  "Prints the entries of `m` as `key: value` lines under `ind`; nested maps and rows recurse, indented by two."
+  [ind m]
+  (doseq [[k v] (sort-by (comp str key) m)]
+    (cond
+      (scalar? v) (println (str ind (name k) ": " v))
+      (and (map? v) (every? scalar? (vals v)) (#{:paths} k))
+      (doseq [[pk pv] (sort-by (comp str key) v)] (println (str ind (name pk) ": " pv)))
+      (and (sequential? v) (every? map? v))
+      (do (println (str ind (name k) ": " (count v)))
+          (doseq [row v] (println (str ind "  " (compact row)))))
+      (and (map? v) (seq v) (every? map? (vals v)) (every? #(every? (complement coll?) (vals %)) (vals v)))
+      (do (println (str ind (name k) ":"))
+          (doseq [[n m] (sort-by (comp str key) v)] (println (str ind "  " (name n) "  " (compact m)))))
+      (map? v) (do (println (str ind (name k) ":"))
+                   (print-entries (str ind "  ") v))
+      (sequential? v) (println (str ind (name k) ": " (str/join ", " (map #(if (scalar? %) (str %) (json/generate-string %)) v))))
+      :else (println (str ind (name k) ": " (json/generate-string v))))))
 
 (defn print-result
   "Prints an ok result generically: run summaries, `diff`, `label: path` lines, scalars and rows."
@@ -145,19 +169,7 @@
     (do (when (seq (:diff result)) (print (:diff result)) (flush))
         (when (:equal result) (println "runs are equal")))
     :else
-    (doseq [[k v] (sort-by key result)]
-      (cond
-        (scalar? v) (println (str (name k) ": " v))
-        (and (map? v) (every? scalar? (vals v)) (#{:paths} k)) (print-paths v)
-        (and (sequential? v) (every? map? v))
-        (do (println (str (name k) ": " (count v)))
-            (doseq [row v] (println (str "  " (compact row)))))
-        (and (map? v) (seq v) (every? map? (vals v)))
-        (do (println (str (name k) ":"))
-            (doseq [[n m] (sort-by (comp str key) v)] (println (str "  " (name n) "  " (compact m)))))
-        (map? v) (println (str (name k) ": " (compact v)))
-        (sequential? v) (println (str (name k) ": " (str/join ", " (map #(if (scalar? %) (str %) (json/generate-string %)) v))))
-        :else (println (str (name k) ": " (json/generate-string v)))))))
+    (print-entries "" result)))
 
 (defn print-error
   "Prints a terminal error. confirm-required also shows the finished run and how to confirm."
