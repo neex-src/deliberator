@@ -262,8 +262,10 @@ class LogsAndMarkersTest : BasePlatformTestCase() {
         wait("the run ends") { !runner.isRunning(scn.path) && runner.state(scn.path).snapshot != null }
         wait("the open log is annotated after the run") { PlatformTestUtil.dispatchAllEventsInIdeEventQueue(); matcher.highlights(log).size == 5 }
         assertNotNull(matcher.latestRun)
-        // the filter's default id is now the run's
-        assertEquals(matcher.latestRun!!.runId, FilterByCorrelationAction.idFor(project, log) { null })
+        // the run's id is in no line of this log: the filter asks instead of folding everything (B3)
+        val runId = matcher.latestRun!!.runId
+        assertFalse(log.document.text.contains(runId))
+        assertNull(FilterByCorrelationAction.idFor(project, log) { null })
     }
 
     fun testMarkersFollowEditsOnSaveAndADeletedLineLeavesItsMarkerAlone() {
