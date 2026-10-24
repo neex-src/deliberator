@@ -10,12 +10,13 @@ import com.intellij.platform.workspace.jps.entities.ContentRootEntity
 import com.intellij.platform.workspace.jps.entities.InheritedSdkDependency
 import com.intellij.platform.workspace.jps.entities.ModuleEntity
 import com.intellij.platform.workspace.jps.entities.ModuleSourceDependency
-import com.intellij.platform.workspace.storage.EntitySource
+import com.intellij.platform.workspace.jps.entities.ModuleTypeId
+import com.intellij.workspaceModel.ide.NonPersistentEntitySource
 import java.nio.file.Path
 
 /**
  * An attached repository that is neither Gradle nor Maven: a module with one content root, made through the Workspace
- * Model under [RepoEntitySource] (never persisted: no `.iml`, nothing in the repository or in `.idea/modules`; the daemon's
+ * Model under [NonPersistentEntitySource] (never persisted: no `.iml`, nothing in the repository or in `.idea/modules`; the daemon's
  * record is what brings it back on open). The module is named after the repository, with a numeric suffix when the name is taken.
  */
 class PlainKind : RepositoryKind {
@@ -43,11 +44,11 @@ class PlainKind : RepositoryKind {
         val taken = ModuleManager.getInstance(project).modules.map { it.name }.toSet()
         val base = d.fileName?.toString() ?: "repository"
         val name = generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base-$it" }.first { it !in taken }
-        val src = RepoEntitySource(d.toString())
         val url = wm.getVirtualFileUrlManager().getOrCreateFromUrl(VfsUtilCore.pathToUrl(d.toString()))
         runBlockingMaybeCancellable { wm.update("Attach repository $name") { storage ->
-            storage.addEntity(ModuleEntity(name, listOf(InheritedSdkDependency, ModuleSourceDependency), src) {
-                contentRoots = listOf(ContentRootEntity(url, emptyList(), src))
+            storage.addEntity(ModuleEntity(name, listOf(InheritedSdkDependency, ModuleSourceDependency), NonPersistentEntitySource) {
+                type = ModuleTypeId(MODULE_TYPE)
+                contentRoots = listOf(ContentRootEntity(url, emptyList(), NonPersistentEntitySource))
             })
         } }
         return null
@@ -58,16 +59,21 @@ class PlainKind : RepositoryKind {
         val wm = WorkspaceModel.getInstance(project)
         runBlockingMaybeCancellable {
             wm.update("Detach repository ${dir.fileName}") { storage ->
-                storage.entities(ModuleEntity::class.java).filter { (it.entitySource as? RepoEntitySource)?.path == d }.toList()
+                storage.entities(ModuleEntity::class.java).filter { rootOf(it)?.normalize()?.toString() == d }.toList()
                     .forEach { storage.removeEntity(it) }
             }
         }
     }
 
     override fun owned(project: Project): List<Path> =
-        WorkspaceModel.getInstance(project).currentSnapshot.entities(ModuleEntity::class.java)
-            .mapNotNull { (it.entitySource as? RepoEntitySource)?.path }.map { Path.of(it) }.toList()
-}
+        WorkspaceModel.getInstance(project).currentSnapshot.entities(ModuleEntity::class.java).mapNotNull { rootOf(it) }.toList()
 
-/** Entity source of the modules this plugin makes: a class the module serializers do not know, hence never written to disk. */
-data class RepoEntitySource(val path: String) : EntitySource
+    /** The directory of a module this plugin made (module type [MODULE_TYPE], its one content root), or null for any other module. */
+    private fun rootOf(m: ModuleEntity): Path? =
+        if (m.type?.name == MODULE_TYPE) m.contentRoots.firstOrNull()?.let { Path.of(it.url.presentableUrl) } else null
+
+    private companion object {
+        /** Marks our modules: [NonPersistentEntitySource] is the platform's source for what is never written, but it carries no path. */
+        const val MODULE_TYPE = "deliberator-repo"
+    }
+}
