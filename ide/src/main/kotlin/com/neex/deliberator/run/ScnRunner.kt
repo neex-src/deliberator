@@ -50,6 +50,8 @@ class RunState(val path: String) {
     @Volatile var started: Set<Int> = emptySet()
     @Volatile var live: Map<Int, LiveStep> = emptyMap()
     @Volatile var snapshot: RunSnapshot? = null
+    /** The newest section of each step over every run of this file this session (a single-step run adds its step, it does not hide the others). */
+    @Volatile var lastSections: Map<Int, StepSection> = emptyMap()
     @Volatile var cancelRequested = false
     /** The run directory the daemon named in `run.started` (where the progressive `result.txt` is). */
     @Volatile var runDir: String? = null
@@ -219,6 +221,7 @@ class ScnRunner(private val project: Project) : Disposable {
     private fun finished(path: String, snap: RunSnapshot): RunSnapshot {
         val st = state(path)
         st.snapshot = snap
+        st.lastSections = st.lastSections + snap.sections
         st.live = emptyMap()
         st.progress = null
         ApplicationManager.getApplication().invokeLater({

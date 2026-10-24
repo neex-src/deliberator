@@ -26,6 +26,9 @@ import javax.swing.KeyStroke
 /** The line of `# @assert ...` that states the value on a [PrettyLine], null for a container line. */
 fun assertLineFor(l: PrettyLine): String? = l.scalar?.let { v -> "# @assert ${l.path} == ${if (v.contains('\n')) v.replace('\n', ' ') else v}" }
 
+/** The section Peek shows for step [index]: the run on view when it has the step, else the newest run that did ([last]). */
+fun peekSection(shown: RunSnapshot?, last: Map<Int, StepSection>, index: Int): StepSection? = shown?.sections?.get(index) ?: last[index]
+
 /**
  * `deliberator.scenario.peekResponse`: the response of the step under the caret in a viewer you can read, with JSON colours,
  * folding and search. Enter on a line adds `# @assert $.path == value` to the step (above its body), so an assertion is
@@ -37,8 +40,8 @@ class PeekResponseAction : ScnEditorAction() {
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
         val psi = e.getData(CommonDataKeys.PSI_FILE) as? ScnFile ?: return
         val step = psi.stepAt(editor.caretModel.offset)
-        val snap = ScnRunner.getInstance(v.project).state(v.file.path).snapshot
-        val section = step?.let { snap?.sections?.get(it.index) }
+        val st = ScnRunner.getInstance(v.project).state(v.file.path)
+        val section = step?.let { peekSection(st.snapshot, st.lastSections, it.index) }
         val resp = com.neex.deliberator.scn.ResponsePaths.response(section)
         if (step == null || resp == null) {
             Ui.notify(v.project, "Response", "This step has no JSON response in the latest run (run it first: Ctrl+Enter).", NotificationType.INFORMATION)
