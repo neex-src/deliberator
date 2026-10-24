@@ -157,3 +157,21 @@
         (is (= {:a :off :b :local} (into {} (for [[n m] (get-in run [:topology :services])] [(keyword n) (:mode m)]))))
         (is (str/includes? txt "TOPOLOGY a=off b=local"))
         (is (re-matches #"[0-9a-f]{16}" (get-in run [:topology :hash])))))))
+
+(deftest service-port-and-url-follow-the-runtime-host-port
+  (tu/with-temp-home
+    (call "workspace.open" {:ws "w"})
+    (description/write! "w" {:name "a2" :kind :spring-boot :main "m.Main" :port 8081 :jdwp 5005 :module "/m/a2" :build {:artifact "a.jar"}})
+    (env/save! "w" (assoc-in (env/load "w" "local") [:targets :service/a2] "http://localhost:8081"))
+    (let [port #(:port (first (call "service.list" {:ws "w"})))
+          jdwp #(:jdwp (first (call "service.list" {:ws "w"})))
+          url #(get-in (call "topology.show" {:ws "w" :env "local"}) [:services "a2" :url])]
+      (testing "no override: the description's port and the stored url"
+        (is (= 8081 (port)))
+        (is (= 5005 (jdwp)))
+        (is (= "http://localhost:8081" (url))))
+      (testing "runtime.edn :services ports: the host port"
+        (store/write-edn! (runtime/config-path "w") (assoc (runtime/read-config "w") :services {"a2" {:ports {8081 18089}}}))
+        (is (= 18089 (port)))
+        (is (= 5005 (jdwp)) "a port without an override keeps the description's")
+        (is (= "http://localhost:18089" (url)))))))

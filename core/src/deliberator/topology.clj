@@ -21,6 +21,14 @@
 
 (def modes #{"local" "external" "off"})
 
+(defn- host-url
+  "`url` with its port taken through the `runtime.edn :services <n> :ports` override (container port -> host port)."
+  [ws n url]
+  (let [ports (get-in (store/read-edn (store/path ws "runtime.edn")) [:services n :ports])]
+    (if-let [[_ pre cp post] (and (seq ports) (string? url) (re-matches #"(?s)(\w+://[^/:]+:)(\d+)(.*)" url))]
+      (str pre (get ports (Long/parseLong cp) cp) post)
+      url)))
+
 (defn services
   "name -> `{:mode kw [:url]}` for every described service and every service the environment names."
   [ws e]
@@ -32,7 +40,8 @@
                :external (cond-> {:mode :external :url (:url ent)} (:container-url ent) (assoc :container-url (:container-url ent)))
                :off {:mode :off}
                (cond-> {:mode :local}
-                 (get-in e [:targets (keyword "service" n)]) (assoc :url (get-in e [:targets (keyword "service" n)]))))])))
+                 (get-in e [:targets (keyword "service" n)]) (assoc :url (cond->> (get-in e [:targets (keyword "service" n)])
+                                  (= "local" (:name e)) (host-url ws n)))))])))
 
 (defn snapshot
   "What a run records: `{:hash :services {name {:mode [:url]}}}`; the local container URL is left out (it is the
