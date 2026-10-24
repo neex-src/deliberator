@@ -6,8 +6,8 @@
 ;; files, no background `&`, no pkill.
 ;;
 ;;   ijdev status                 is the IDE up, is its REPL answering, what to do next
-;;   ijdev start [-- gradle args] build the REPL plugin when needed, start the IDE, wait for the REPL
-;;   ijdev stop | restart
+;;   ijdev start [gradle args]    build the REPL plugin when needed, start the IDE, wait for the REPL (ijdev start -PdlbHome=H; a leading -- is allowed)
+;;   ijdev stop | restart [gradle args]
 ;;   ijdev eval '<clj>' | -f FILE evaluate Clojure in the IDE (ns user: ide/ hs/ plugins/ aliased)
 ;;   ijdev kt '<kotlin>'          Kotlin script via the IDE's engine. EXPERIMENTAL: on 262 only self-contained expressions work
 ;;   ijdev hotswap                compile, then redefine/define the changed classes in the running plugin
@@ -209,6 +209,11 @@
   (print-result! (eval! dir (str "(let [r (plugins/reload! " (edn-str (:plugin cfg)) ")] (clojure.pprint/pprint r) (if (:reloaded r) :ok :failed))")
                         :kind "reload" :timeout 300000)))
 
+(defn gradle-args
+  "The Gradle arguments of `start`/`restart`: everything after the command; one leading `--` (the old form) is dropped."
+  [args]
+  (vec (if (= "--" (first args)) (rest args) args)))
+
 (defn -main [& argv]
   (let [[dir-opt argv] (if (#{"-d" "--dir"} (first argv)) [(second argv) (drop 2 argv)] [nil argv])
         dir (or (find-project (or dir-opt ".")) (die "no .ijdev.edn here or above (or -d DIR)"))
@@ -216,9 +221,9 @@
         [cmd & args] argv]
     (case cmd
       "status" (cmd-status dir cfg)
-      "start" (cmd-start dir cfg (rest (drop-while #(not= "--" %) args)))
+      "start" (cmd-start dir cfg (gradle-args args))
       "stop" (cmd-stop dir cfg)
-      "restart" (do (cmd-stop dir cfg) (cmd-start dir cfg (rest (drop-while #(not= "--" %) args))))
+      "restart" (do (cmd-stop dir cfg) (cmd-start dir cfg (gradle-args args)))
       "eval" (let [code (if (= "-f" (first args)) (slurp (second args)) (str/join " " args))]
                (when (str/blank? code) (die "nothing to evaluate"))
                (print-result! (eval! dir code)))
@@ -243,4 +248,4 @@
       (do (println (str/join "\n" (->> (str/split-lines (slurp *file*)) (drop 2) (take-while #(str/starts-with? % ";;")) (map #(subs % (min 3 (count %)))))))
           (when cmd (System/exit 1))))))
 
-(apply -main *command-line-args*)
+(when (= *file* (System/getProperty "babashka.file")) (apply -main *command-line-args*))
