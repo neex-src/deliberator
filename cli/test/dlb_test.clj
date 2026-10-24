@@ -106,6 +106,32 @@
            (approve "service.start" ["service" "start" "a" "--secrets-from" "local2"])))
     (is (= "to approve: dlb run x.scn --confirm T --steps 1" (approve "scenario.run" ["run" "x.scn"])))))
 
+(deftest text-output-shows-nested-results
+  (let [out (fn [result] (with-out-str (render/print-result "x" result)))
+        discover (out {:environment "local"
+                       :resources {:sqs [{:name "q1" :url "http://q/1"} {:name "q2" :url "http://q/2"}]
+                                   :s3 [{:name "b1"}]}})
+        chain (out {:extra [{:name "a" :source {:file "x.edn" :line 3}} {:name "b" :source {:file "y.edn"}}]
+                    :hint {:try ["dlb config show" "dlb env list"] :why {:missing "k"}}})]
+    (testing "aws discover: a map of vectors of maps"
+      (is (= ["environment: local"
+              "resources:"
+              "  s3: 1"
+              "    name=b1"
+              "  sqs: 2"
+              "    name=q1 url=http://q/1"
+              "    name=q2 url=http://q/2"]
+             (str/split-lines discover))))
+    (testing "config chain: rows with nested fields and a nested hint"
+      (is (= ["extra: 2"
+              "  name=a source={\"file\":\"x.edn\",\"line\":3}"
+              "  name=b source={\"file\":\"y.edn\"}"
+              "hint:"
+              "  try: dlb config show, dlb env list"
+              "  why:"
+              "    missing: k"]
+             (str/split-lines chain))))))
+
 ;; help --------------------------------------------------------------------------------------------
 
 (deftest help-names-every-op
