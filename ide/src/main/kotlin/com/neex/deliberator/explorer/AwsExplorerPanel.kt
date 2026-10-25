@@ -125,7 +125,12 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     /** `terraform.local` plan/apply of a root onto the selected local environment; the output is a file in the project (`explore/terraform-<action>-<env>.txt`), the tree and drift refresh after. */
     fun terraform(action: String, dir: String? = null) {
         val root = dir ?: chooseRoot() ?: return
-        if (action == "apply" && com.intellij.openapi.ui.Messages.showYesNoDialog(project, "terraform apply of\n$root\nonto environment ${env()}?", "Apply Terraform", "Apply", "Cancel", com.intellij.openapi.ui.Messages.getQuestionIcon()) != com.intellij.openapi.ui.Messages.YES) return
+        if (action == "apply") {
+            val vars = try {
+                TerraformVars.parse(WorkspaceService.getInstance(project).call("terraform.local", com.google.gson.JsonObject().apply { addProperty("env", env()); addProperty("dir", root); addProperty("action", "vars") }).result!!.asJsonObject)
+            } catch (e: Exception) { Ui.notify(project, "Terraform", e.message ?: e.toString(), com.intellij.notification.NotificationType.ERROR); return }
+            if (com.intellij.openapi.ui.Messages.showYesNoDialog(project, TerraformVars.confirmText(root, env(), vars), "Apply Terraform", "Apply", "Cancel", com.intellij.openapi.ui.Messages.getQuestionIcon()) != com.intellij.openapi.ui.Messages.YES) return
+        }
         status.text = "terraform $action ..."
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
