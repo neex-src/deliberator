@@ -340,12 +340,12 @@
   (topology/set! (ws-of args) env name mode url {:log-container log-container :container-url container-url}))
 (defn- service-show [_ {:keys [name] :as args}] (service/show (ws-of args) name))
 (defn- service-status [_ {:keys [name] :as args}] (service/status (ws-of args) name))
-(defn- service-build [ctx {:keys [name] :as args}] (service/build! (ws-of args) name {:sink (:emit! ctx)}))
+(defn- service-build [ctx {:keys [name] :as args}] (service/build! (ws-of args) name {:sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)}))
 (defn- service-start [ctx {:keys [name secrets-from confirm] :as args}]
   (service/start! (ws-of args) name {:sink (:emit! ctx) :secrets-from secrets-from :confirm confirm}))
 (defn- service-stop [ctx {:keys [name] :as args}] (service/stop! (ws-of args) name {:sink (:emit! ctx)}))
 (defn- service-reload [ctx {:keys [name budget-ms] :as args}]
-  (reload/reload! (ws-of args) name (cond-> {:sink (:emit! ctx)} budget-ms (assoc :budget-ms budget-ms))))
+  (reload/reload! (ws-of args) name (cond-> {:sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)} budget-ms (assoc :budget-ms budget-ms))))
 (defn- service-restart [ctx {:keys [name secrets-from confirm] :as args}]
   (service/restart! (ws-of args) name {:sink (:emit! ctx) :secrets-from secrets-from :confirm confirm}))
 
@@ -548,7 +548,7 @@
   (tfdrift/drift! (ws-of args) (or env "local") (cond-> {} file (assoc :file file) dir (assoc :dir dir) plan (assoc :plan plan))))
 
 (defn- terraform-local [ctx {:keys [env dir action vars] :as args}]
-  (tflocal/run! (ws-of args) (or env "local") {:dir dir :action (or action "plan") :vars vars :sink (:emit! ctx)}))
+  (tflocal/run! (ws-of args) (or env "local") {:dir dir :action (or action "plan") :vars vars :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)}))
 
 (defn- aws-describe [_ {:keys [service op]}]
   (or (awsmodel/input service op)
