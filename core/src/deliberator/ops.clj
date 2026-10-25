@@ -53,7 +53,7 @@
     scenario.kinds                                 -> [{kind verbs verb-optional target directives facts capture-roots concurrent default-timeout-ms}]
     aws.discover env ws                            -> {env resources{kind [{name ref}]} errors}
     terraform.drift env file dir plan ws           -> {env source region declared matching missing[] undeclared[] errors}
-    terraform.local dir* action env vars ws         -> {action dir env ok exit summary sha path output}   [tf.line]
+    terraform.local dir* action env vars ws         -> {action dir env ok exit summary sha path output vars}   [tf.line]   (action vars: {action dir env vars} only)
     aws.describe service* op*                      -> {service op class input}   (input = shape tree: type required members member enum)
     scenario.parse path text ws                    -> {header steps errors}   (a syntax error is data in errors, not an op error)
     runs.list ws session scenario limit            -> {session runs}
@@ -790,12 +790,12 @@
                                        :dir {:type :string :doc "a Terraform root directory (terraform show -json runs there, no apply)"}
                                        :plan {:type :string :doc "saved plan file in dir"})}
    "terraform.local" {:fn terraform-local :class :mutate
-                      :doc "terraform plan or apply of a root directory onto a local environment (refused for a remote one): init, then the action, output streamed as tf.line events and persisted raw. A root with an `endpoint` variable gets the environment's endpoint."
+                      :doc "terraform plan or apply of a root directory onto a local environment (refused for a remote one): init, then the action, output streamed as tf.line events and persisted raw. Variables the root declares are filled from the workspace: `endpoint` (the environment's), `container_endpoint`, `service_a_url`, `db_url` (the runtime's container names); `vars` overrides. The result lists the final `vars`."
                       :events ["tf.line"]
                       :args (ws-schema :dir {:type :string :required true :doc "Terraform root directory"}
-                                       :action {:type :string :doc "plan (default) or apply"}
+                                       :action {:type :string :doc "plan (default), apply, or vars (only return the final -var values, run nothing)"}
                                        :env {:type :string :doc "local environment name (default local)"}
-                                       :vars {:type :object :doc "extra -var name value pairs"})}
+                                       :vars {:type :object :doc "explicit -var name value pairs, win over the derived ones"})}
    "aws.describe" {:fn aws-describe :class :read
                    :doc "The request shape of an AWS operation from the bundled service models (members, required, enums, nesting), for completion in step bodies of the aws kind."
                    :args {:service {:type :string :required true :positional true :doc "aws-api service name, e.g. ssm, s3, sns"}

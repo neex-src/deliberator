@@ -2,16 +2,32 @@
   "Terraform onto the local emulator: `plan` or `apply` of a root directory against a `:local` environment. A remote environment is
   refused here, always (real AWS is changed by Terraform where it normally runs, never by this). The process runs with the
   AWS_* variables and the shared config removed (the root's own provider block carries the fake credentials), its output is
-  streamed as `tf.line` events and persisted raw, and the root's `endpoint` variable, when it has one, is set to the environment's endpoint."
+  streamed as `tf.line` events and persisted raw. Variables the root declares are filled from the workspace (no stored state):
+  `endpoint` is the environment's endpoint, `container_endpoint`, `service_a_url` and `db_url` come from the runtime's container
+  names (`store/container-name`); an explicit `vars` map overrides. Action `vars` only returns the final values, nothing runs."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [deliberator.env :as env]
             [deliberator.store :as store])
   (:import (java.io File)))
 
-(defn- declares-endpoint? [^File dir]
-  (boolean (some #(re-find #"(?m)^\s*variable\s+\"endpoint\"" (slurp %))
-                 (filter #(str/ends-with? (.getName ^File %) ".tf") (.listFiles dir)))))
+(defn- declared-vars
+  "The names of the variables the .tf files of `dir` declare."
+  [^File dir]
+  (set (mapcat #(map second (re-seq #"(?m)^\s*variable\s+\"([^\"]+)\"" (slurp %)))
+               (filter #(str/ends-with? (.getName ^File %) ".tf") (.listFiles dir)))))
+
+(defn resolve-vars
+  "The `-var` values of a run, name -> string: every variable the root declares that the workspace can fill (`endpoint`,
+  `container_endpoint`, `service_a_url`, `db_url`), then `vars` (explicit, wins, declared or not)."
+  [ws e ^File dir vars]
+  (let [c #(store/container-name ws %)
+        derived {"endpoint" (get-in e [:aws :endpoint])
+                 "container_endpoint" (str "http://" (c "floci") ":4566")
+                 "service_a_url" (str "http://" (c "service-a") ":8081")
+                 "db_url" (str "jdbc:postgresql://" (c "postgres") ":5432/deliberator")}
+        explicit (into {} (map (fn [[k v]] [(name k) (str v)])) vars)]
+    (into (sorted-map) (merge (select-keys derived (declared-vars dir)) explicit))))
 
 (defn- scrubbed-env [ws]
   (.mkdirs (.toFile (store/path ws "terraform-plugin-cache")))
@@ -31,8 +47,23 @@
         (when sink (sink {:event "tf.line" :line l}))))
     {:exit (.waitFor p) :lines (vec lines)}))
 
+(defn- run-action! [ws e dir ^File d action var-args all-vars sink]
+  (let [init (run-streaming! ws d ["init" "-input=false" "-no-color"] sink)
+        res (if (zero? (:exit init))
+              (run-streaming! ws d (concat [action "-input=false" "-no-color"] (when (= action "apply") ["-auto-approve"]) var-args) sink)
+              init)
+        all (vec (concat (:lines init) (when-not (identical? res init) (:lines res))))
+        text (str/join "\n" all)
+        raw (store/raw-put! ws (.getBytes ^String text "UTF-8")
+                            {:source :file :op (str "terraform." action "-local") :env (:name e) :at (java.time.Instant/now)
+                             :content-type "text/plain" :path (str dir)})
+        summary (or (some #(when (re-find #"^(Plan:|Apply complete!|No changes\.|Error:)" %) %) (reverse all)) "")]
+    {:action action :dir (str dir) :env (:name e) :ok (zero? (:exit res)) :exit (:exit res) :summary summary
+     :sha (:sha raw) :path (str (:path raw)) :output text :vars all-vars}))
+
 (defn run!
-  "`{:action :dir :env :ok :exit :summary :sha :path}`; `action` is `\"plan\"` or `\"apply\"`; `vars` extra `-var name=value`s.
+  "`{:action :dir :env :ok :exit :summary :sha :path :output :vars}`; `action` is `\"plan\"`, `\"apply\"` or `\"vars\"` (only `{:action :dir :env :vars}`,
+  nothing runs); `vars` explicit `-var name=value`s over the ones `resolve-vars` fills.
   Throws `{:type :tf/local-only}` unless the environment is `:local`, `{:type :tf/no-root}` for a directory without .tf files."
   [ws env-name {:keys [dir action vars sink] :or {action "plan"}}]
   (let [e (env/load ws env-name)
@@ -42,20 +73,10 @@
                       {:type :tf/local-only :env (:name e)})))
     (when-not (and (.isDirectory d) (some #(str/ends-with? (.getName ^File %) ".tf") (.listFiles d)))
       (throw (ex-info (str "no Terraform files in " dir) {:type :tf/no-root :dir (str dir)})))
-    (when-not (#{"plan" "apply"} action)
-      (throw (ex-info "action is plan or apply" {:type :tf/bad-action})))
-    (let [endpoint (get-in e [:aws :endpoint])
-          all-vars (cond-> (or vars {}) (and (declares-endpoint? d) (not (contains? (or vars {}) "endpoint"))) (assoc "endpoint" endpoint))
-          var-args (mapcat (fn [[k v]] ["-var" (str k "=" v)]) all-vars)
-          init (run-streaming! ws d ["init" "-input=false" "-no-color"] sink)
-          res (if (zero? (:exit init))
-                (run-streaming! ws d (concat [action "-input=false" "-no-color"] (when (= action "apply") ["-auto-approve"]) var-args) sink)
-                init)
-          all (vec (concat (:lines init) (when-not (identical? res init) (:lines res))))
-          text (str/join "\n" all)
-          raw (store/raw-put! ws (.getBytes ^String text "UTF-8")
-                              {:source :file :op (str "terraform." action "-local") :env (:name e) :at (java.time.Instant/now)
-                               :content-type "text/plain" :path (str dir)})
-          summary (or (some #(when (re-find #"^(Plan:|Apply complete!|No changes\.|Error:)" %) %) (reverse all)) "")]
-      {:action action :dir (str dir) :env (:name e) :ok (zero? (:exit res)) :exit (:exit res) :summary summary
-       :sha (:sha raw) :path (str (:path raw)) :output text})))
+    (when-not (#{"plan" "apply" "vars"} action)
+      (throw (ex-info "action is plan, apply or vars" {:type :tf/bad-action})))
+    (let [all-vars (resolve-vars ws e d vars)
+          var-args (mapcat (fn [[k v]] ["-var" (str k "=" v)]) all-vars)]
+      (if (= action "vars")
+        {:action action :dir (str dir) :env (:name e) :vars all-vars}
+        (run-action! ws e dir d action var-args all-vars sink)))))
