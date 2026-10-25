@@ -787,7 +787,7 @@
                    :doc "What exists in an environment (queues, tables, buses, functions, buckets, topics, parameters, secrets, streams, state machines): names for completion. Read calls only; a failing section is listed in errors."
                    :args (ws-schema :env {:type :string :doc "environment name (default local)"})}
    "terraform.drift" {:fn terraform-drift :class :read
-                      :doc "Terraform against an environment, reads only: the declared resources of a `terraform show -json` document (file, or run in dir, optionally for a saved plan) compared with what exists in env (aws.discover): missing, undeclared, matching. The document is persisted raw first."
+                      :doc "Terraform against an environment, reads only: the declared resources of a `terraform show -json` document (file, or run in dir, optionally for a saved plan) compared with what exists in env (aws.discover): missing, undeclared, matching. Of the document only an allowlisted extract (versions; per resource address, type, name, index, provider and the values name/arn/id/bucket/function_name) is persisted, first; the full document holds the state's secret values and is never written (B1)."
                       :args (ws-schema :env {:type :string :doc "environment name (default local)"}
                                        :file {:type :string :doc "terraform show -json output file"}
                                        :dir {:type :string :doc "a Terraform root directory (terraform show -json runs there, no apply)"}

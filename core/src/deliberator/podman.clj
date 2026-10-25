@@ -3,9 +3,7 @@
 
   Endpoints: `unix:///path/to/podman.sock` (JDK `UnixDomainSocketAddress` + hand-written HTTP/1.1
   framing: `Connection: close`, chunked, content-length and read-to-EOF bodies) and
-  `tcp://host:port` (`java.net.http`, HTTP/1.1). `ssh://user@host[:port]/remote/podman.sock` is parsed here
-  (`parse-endpoint` -> `:scheme :ssh`) but a client never speaks it: `deliberator.runtime/podman-client` opens the tunnel
-  (`deliberator.tunnel`) and hands this namespace the local `unix://` end.
+  `tcp://host:port` (`java.net.http`, HTTP/1.1).
 
   A client is a plain map `(client endpoint :ws ws)`. With a `:ws`, every response body of the
   operations below is persisted first through `store/raw-put!` (`:source :podman`, `:op \"METHOD
@@ -24,8 +22,7 @@
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [deliberator.store :as store]
-            [deliberator.tunnel :as tunnel])
+            [deliberator.store :as store])
   (:import (java.io BufferedReader ByteArrayInputStream ByteArrayOutputStream EOFException
                     IOException InputStream InputStreamReader RandomAccessFile)
            (java.net ConnectException StandardProtocolFamily URI URLEncoder UnixDomainSocketAddress)
@@ -55,8 +52,7 @@
     (str "unix://" rt "/podman/podman.sock")))
 
 (defn parse-endpoint
-  "`unix:///p` -> `{:scheme :unix :path \"/p\"}`; `tcp://h:p` -> `{:scheme :tcp :host :port}`.
-  `ssh://u@h:p/sock` -> `{:scheme :ssh :user :host :port :remote}` (see `deliberator.tunnel`); anything else throws
+  "`unix:///p` -> `{:scheme :unix :path \"/p\"}`; `tcp://h:p` -> `{:scheme :tcp :host :port}`; anything else throws
   `:podman/unsupported-endpoint`."
   [endpoint]
   (let [[_ scheme rest] (re-matches #"(?s)([a-z]+)://(.*)" (str endpoint))]
@@ -67,17 +63,12 @@
                 (throw (ex-info (str "tcp endpoint needs host:port: " endpoint)
                                 {:type :podman/unsupported-endpoint :endpoint endpoint})))
               {:scheme :tcp :host host :port (Long/parseLong port)})
-      "ssh" (assoc (tunnel/parse-ssh endpoint) :scheme :ssh)
       (throw (ex-info (str "unsupported podman endpoint: " (pr-str endpoint))
                       {:type :podman/unsupported-endpoint :endpoint endpoint})))))
 
 (defn client
   "A client map for `endpoint`; `:ws` turns response persistence on."
   [endpoint & {:keys [ws]}]
-  (when (= :ssh (:scheme (parse-endpoint endpoint)))
-    (throw (ex-info (str "an ssh:// endpoint needs its tunnel first: " endpoint)
-                    {:type :podman/unsupported-endpoint :endpoint endpoint
-                     :hint "go through deliberator.runtime/podman-client, which opens the tunnel"})))
   {:endpoint endpoint :ws ws})
 
 ;; ---------------------------------------------------------------------------------------------
