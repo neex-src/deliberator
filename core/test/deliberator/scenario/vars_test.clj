@@ -66,5 +66,23 @@
   (is (= "x-http://h" (String. (vars/substitute-bytes (.getBytes "{{a}}-{{service/a}}") {"a" "x"}
                                                       :resolve (constantly "http://h"))))))
 
+(deftest escaped-braces-are-literal
+  (testing "text"
+    (is (= "{{end}}" (vars/substitute "{{{{end}}" {})) "no unknown-var for an escaped name")
+    (is (= "{{range}}x{{end}} 1" (vars/substitute "{{{{range}}x{{{{end}} {{a}}" {"a" "1"})))
+    (is (= "{{" (vars/substitute "{{{{" {}))))
+  (testing "references"
+    (is (= ["a"] (vars/references "{{{{end}} {{a}}")))
+    (is (= [] (vars/references "{{{{end}}"))))
+  (testing "bytes"
+    (is (= "{{end}} é-x" (String. (vars/substitute-bytes (.getBytes "{{{{end}} é-{{a}}" StandardCharsets/UTF_8)
+                                                         {"a" "x"})
+                                  StandardCharsets/UTF_8)))
+    (let [bs (byte-array [0xff 0x7b 0x7b 0x7b 0x7b 0x61 0x7d 0x7d])]
+      (is (Arrays/equals ^bytes (vars/substitute-bytes bs {}) (byte-array [0xff 0x7b 0x7b 0x61 0x7d 0x7d])))))
+  (testing "a @var value may escape too, and is not volatile"
+    (is (= "{{x}}" (get (vars/snapshot {:vars [{:name "v" :value "{{{{x}}" :line 1}]}) "v")))
+    (is (not (contains? (vars/volatile-names {:vars [{:name "v" :value "{{{{uuid}}"}]}) "v")))))
+
 (deftest volatility
   (is (= #{"uuid" "now" "now.epoch" "correlation" "orderId" "again"} (vars/volatile-names header))))

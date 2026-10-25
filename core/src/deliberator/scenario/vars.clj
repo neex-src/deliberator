@@ -11,9 +11,10 @@
   `(substitute text vars & {:keys [resolve]})` replaces `{{name}}`; a name that is not a var and
   contains `/` is asked of `resolve` (a fn name -> text, the targets: `{{service/a}}`); any other
   unknown name throws `{:type :scenario/unknown-var :name :known [...]}`. `{{` not followed by a
-  name is left alone. `(substitute-bytes bytes vars opts)` does the same on raw bytes without ever
+  name is left alone. `{{{{` is the escape: the literal text `{{`, never a placeholder, so
+  `{{{{end}}` renders `{{end}}`. `(substitute-bytes bytes vars opts)` does the same on raw bytes without ever
   touching other bytes (a payload without placeholders comes back identical). `(references text)`
-  lists the names used; `(overlay vars captures)` merges captures over a snapshot;
+  lists the names used (an escaped brace is no reference);`(overlay vars captures)` merges captures over a snapshot;
   `(volatile-names header)` is the set of var names whose value differs run to run (derived from
   uuid, now, now.epoch, correlation), which `render/diff` normalises."
   (:require [clojure.string :as str]
@@ -23,10 +24,12 @@
 
 (def builtin-names ["uuid" "now" "now.epoch" "correlation"])
 
-(def ^:private placeholder #"\{\{\s*([A-Za-z_][A-Za-z0-9_./-]*)\s*\}\}")
+;; `{{{{` is tried first so it wins over a placeholder starting at the same place; group 1 is nil
+;; for the escape.
+(def ^:private placeholder #"\{\{\{\{|\{\{\s*([A-Za-z_][A-Za-z0-9_./-]*)\s*\}\}")
 
 (defn references [text]
-  (mapv second (re-seq placeholder (str text))))
+  (into [] (keep second) (re-seq placeholder (str text))))
 
 (defn- unknown [name vars line]
   (ex-info (str "unknown variable {{" name "}}; known: " (str/join ", " (sort (keys vars))))
@@ -38,6 +41,7 @@
   (str/replace (str text) placeholder
                (fn [[_ n]]
                  (cond
+                   (nil? n) "{{"
                    (contains? vars n) (get vars n)
                    (and resolve (str/includes? n "/")) (str (resolve n))
                    :else (throw (unknown n vars line))))))
