@@ -364,6 +364,8 @@
   (let [ws (ws-of args)
         s (runtime/logs ws role (cond-> {}
                                   since (assoc :since (parse-instant since "since"))
+                                  ;; like logs.fetch (B6): a follow without since or tail does not replay the whole log
+                                  (and follow (not since) (not tail)) (assoc :since (java.time.Instant/now))
                                   follow (assoc :follow true)
                                   tail (assoc :tail tail)))
         n (volatile! 0)]
@@ -761,7 +763,7 @@
                    :doc "Removes the workspace's runtime containers (and only those)."
                    :events ["runtime.removed"]}
    "runtime.logs" {:fn runtime-logs :class :read
-                   :doc "Streams a container's log lines as `line` events (mirrored to logs/services/); with follow, until cancelled or the client leaves."
+                   :doc "Streams a container's log lines as `line` events (mirrored to logs/services/); with follow, until cancelled or the client leaves, starting at the end of the log unless since or tail says otherwise."
                    :events ["line"]
                    :args (ws-schema :role {:type :string :required true :doc "runtime role, e.g. floci, postgres, service/a"}
                                     :since {:type :string :doc "ISO-8601 instant; older lines are dropped"}
