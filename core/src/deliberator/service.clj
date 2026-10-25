@@ -157,7 +157,8 @@
 (defn list
   "`[{:name :kind :repo :module :port :jdwp :image :mode [:url] :status}]`; `:mode` is the service's mode in
   environment `env-name` (default local): local, external (with its `:url`) or off. `:status` is the runtime's.
-  `:port` and `:jdwp` are host ports (`runtime.edn :services <name> :ports` applied), the description's when unchanged."
+  `:port` and `:jdwp` are host ports (`runtime.edn :services <name> :ports` applied), the description's when unchanged;
+  `:container-port` and `:container-jdwp` are the description's (the IDE joins them with the runtime row's port map)."
   ([ws] (list ws "local"))
   ([ws env-name]
    (let [descs (description/list ws)
@@ -166,8 +167,8 @@
      (mapv (fn [d] (let [ent (env/service-entry e (:name d))]
                      (cond-> (merge (let [hp (host-ports ws d rows)]
                                       (cond-> (select-keys d [:name :kind :repo :module :port :jdwp])
-                                        (:port d) (assoc :port (host-port hp (:port d)))
-                                        (:jdwp d) (assoc :jdwp (host-port hp (:jdwp d)))))
+                                        (:port d) (assoc :port (host-port hp (:port d)) :container-port (:port d))
+                                        (:jdwp d) (assoc :jdwp (host-port hp (:jdwp d)) :container-jdwp (:jdwp d))))
                                     {:image (or (:image d) description/default-image)
                                      :mode (clojure.core/name (env/service-mode e (:name d)))
                                      :status (:status (status-row ws d rows))})

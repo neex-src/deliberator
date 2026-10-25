@@ -96,8 +96,9 @@ data class WorkspaceModel(
                 val name = d.str("name") ?: "?"
                 val s = st[name]
                 val rt = containers.firstOrNull { it.role == "service-$name" || it.role == "service/$name" }
-                val port = d.int("port")
-                val jdwp = d.int("jdwp")
+                // service.list's port/jdwp are host ports since B5; the container ports key the runtime row's port map
+                val port = d.int("container-port") ?: d.int("port")
+                val jdwp = d.int("container-jdwp") ?: d.int("jdwp")
                 ServiceRow(name, d.str("kind"), d.str("mode") ?: "local", d.str("url"), s?.str("status") ?: d.str("status") ?: "?", port, jdwp,
                     port?.let { rt?.portMap?.get(it.toString()) }, jdwp?.let { rt?.portMap?.get(it.toString()) },
                     s?.int("reload-count"), s?.get("drift")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false, s?.str("detail"))
