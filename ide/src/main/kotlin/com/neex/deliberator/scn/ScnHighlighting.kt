@@ -13,6 +13,7 @@ import com.intellij.openapi.fileTypes.SyntaxHighlighterFactory
 import com.intellij.openapi.options.colors.AttributesDescriptor
 import com.intellij.openapi.options.colors.ColorDescriptor
 import com.intellij.openapi.options.colors.ColorSettingsPage
+import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
@@ -103,8 +104,9 @@ class ScnColorSettingsPage : ColorSettingsPage {
 /**
  * Colours the words of a step line that only the registry can tell apart (verb, target, name) and the
  * `{{vars}}` inside them. With no registry yet (daemon never reached) the lexical rule is used, as the PSI's.
+ * DumbAware: it reads the registry and the PSI only, so the colours stay while the project indexes.
  */
-class ScnHeadAnnotator : Annotator {
+class ScnHeadAnnotator : Annotator, DumbAware {
     override fun annotate(element: PsiElement, holder: AnnotationHolder) {
         if (element !is ScnStepHead) return
         val words = element.words
