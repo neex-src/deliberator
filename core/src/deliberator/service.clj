@@ -145,16 +145,29 @@
         rows (rt-rows ws (when name [(role-label name)]))]
     (mapv #(status-row ws % rows) descs)))
 
+(defn- host-port [spec-ports cp] (get spec-ports cp cp))
+
+(defn- host-ports
+  "container port -> host port of service `d`: the runtime row's (the container as it is, or as it would be created),
+  else the `runtime.edn :services` override, else nil (the description's ports stand)."
+  [ws d rows]
+  (let [rp (:ports (when (map? rows) (get rows (role-label (:name d)))))]
+    (if (seq rp) rp (get-in (runtime/read-config ws) [:services (:name d) :ports]))))
+
 (defn list
   "`[{:name :kind :repo :module :port :jdwp :image :mode [:url] :status}]`; `:mode` is the service's mode in
-  environment `env-name` (default local): local, external (with its `:url`) or off. `:status` is the runtime's."
+  environment `env-name` (default local): local, external (with its `:url`) or off. `:status` is the runtime's.
+  `:port` and `:jdwp` are host ports (`runtime.edn :services <name> :ports` applied), the description's when unchanged."
   ([ws] (list ws "local"))
   ([ws env-name]
    (let [descs (description/list ws)
          rows (rt-rows ws nil)
          e (if (= "local" env-name) (topology/local-env ws) (env/load ws env-name))]
      (mapv (fn [d] (let [ent (env/service-entry e (:name d))]
-                     (cond-> (merge (select-keys d [:name :kind :repo :module :port :jdwp])
+                     (cond-> (merge (let [hp (host-ports ws d rows)]
+                                      (cond-> (select-keys d [:name :kind :repo :module :port :jdwp])
+                                        (:port d) (assoc :port (host-port hp (:port d)))
+                                        (:jdwp d) (assoc :jdwp (host-port hp (:jdwp d)))))
                                     {:image (or (:image d) description/default-image)
                                      :mode (clojure.core/name (env/service-mode e (:name d)))
                                      :status (:status (status-row ws d rows))})
@@ -281,8 +294,6 @@
                       :hint "start again without confirm to get the first token"))))
 
 ;; start / stop / restart -----------------------------------------------------------------------
-
-(defn- host-port [spec-ports cp] (get spec-ports cp cp))
 
 (defn- result [ws d]
   (let [rows (rt-rows ws [(role-label (:name d))])
