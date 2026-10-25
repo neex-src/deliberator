@@ -137,6 +137,29 @@
 (defn- target-like? [w]
   (or (str/includes? w "/") (str/starts-with? w "{{")))
 
+(defn- verb-error
+  "The `needs a verb` message. A short verb list is printed whole; a long one of `service.Operation` verbs (the aws kind:
+  thousands) names the services, or the close operations of a known service."
+  [kind word real]
+  (if (<= (count real) 100)
+    (str kind " needs a verb: " (str/join " | " (sort real)))
+    (let [[svc op] (some-> word (str/split #"\." 2))
+          services (into (sorted-set) (map #(first (str/split % #"\." 2))) real)
+          close (fn [xs w] (let [w (str/lower-case (str w))
+                                 p (subs w 0 (min 4 (count w)))]
+                             (filter #(let [x (str/lower-case %)]
+                                        (or (str/includes? x w) (str/includes? w x) (and (seq p) (str/starts-with? x p))))
+                                     xs)))]
+      (if (and op (contains? services svc))
+        (let [ops (sort (keep #(when (str/starts-with? % (str svc ".")) (subs % (inc (count svc)))) real))
+              near (take 12 (close ops op))]
+          (str kind " has no verb " word ": " svc " has " (count ops) " operations"
+               (when (seq near) (str ", close: " (str/join " | " (map #(str svc "." %) near))))))
+        (let [near (when svc (seq (close services svc)))]
+          (str kind " needs a verb service.Operation" (when word (str ", not " word))
+               (when near (str "; did you mean " (str/join " or " near) "?"))
+               " services: " (str/join " " services)))))))
+
 (defn- split-words [no kind words kmap]
   (let [verbs (if kmap (:verbs kmap #{nil}) #{nil})
         real (disj verbs nil)
@@ -147,7 +170,7 @@
                                      (target-like? (second words)))))
                        [(first words) (rest words)]
                        (do (when (and kmap (not (contains? verbs nil)))
-                             (perr no (str kind " needs a verb: " (str/join " | " (sort real)))))
+                             (perr no (verb-error kind (first words) real)))
                            [nil words]))
         mode (if kmap (:target kmap :optional) :optional)
         n (count words)]
