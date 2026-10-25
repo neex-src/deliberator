@@ -231,3 +231,21 @@
                 (is (= "confirm-required" (get-in t1 [:error :type])))
                 (is (= "ok" (get-in t2 [:result :status])) (pr-str (or (:error t2) (:result t2))))))
             (finally (aws/invoke! {:ws "default"} local :sqs :DeleteQueue {:QueueUrl url})))))))
+
+(deftest-floci a-confirmed-rerun-keeps-the-variables-of-its-run
+  ;; `dlb`'s "to approve" line and the IDE re-send only path, steps and token: a {{uuid}} var must not be drawn again
+  (let [q (str "dlbaudit-" (subs (str (UUID/randomUUID)) 0 8))]
+      (with-remote-daemon [h]
+        (env/save! "default" (assoc-in (remote-env) [:targets :queue/audit] q))
+        (let [local (audit-env q)
+              url (:QueueUrl (aws/invoke! {:ws "default"} local :sqs :CreateQueue {:QueueName q}))]
+          (try
+            (with-client [c h]
+              (ok! c "session.start" {:key "T-1"})
+              (let [path (write-file "send-var.scn" "# @var id = probe-{{uuid}}\n### sqs send queue/audit\n{{id}}\n")
+                    t1 (:terminal (tc/request c "scenario.run" {:path path :env "dlbdev"}))
+                    token (get-in t1 [:error :token])
+                    t2 (:terminal (tc/request c "scenario.run" {:path path :env "dlbdev" :confirm token :steps [1]}))]
+                (is (= "confirm-required" (get-in t1 [:error :type])))
+                (is (= "ok" (get-in t2 [:result :status])) (pr-str (or (:error t2) (:result t2))))))
+            (finally (aws/invoke! {:ws "default"} local :sqs :DeleteQueue {:QueueUrl url})))))))

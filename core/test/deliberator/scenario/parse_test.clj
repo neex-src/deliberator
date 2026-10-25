@@ -141,6 +141,23 @@
     (is (str/starts-with? (ex-message (try (parse/parse "### nosuch\n" :kinds kinds) (catch Exception e e)))
                           "line 1: unknown step kind"))))
 
+(deftest a-long-verb-list-is-not-printed-whole
+  ;; the aws kind has thousands of service.Operation verbs: name the services or the close operations instead
+  (let [verbs (set (concat (for [i (range 150)] (str "eventbridge.Op" i))
+                           ["eventbridge.DescribeEventBus" "eventbridge.DescribeRule" "sqs.SendMessage"]))
+        ks (assoc kinds "aws" {:kind "aws" :verbs verbs :target :none})
+        msg (fn [src] (:message (thrown src :kinds ks)))]
+    (testing "an unknown service names the known ones and a close one"
+      (let [m (msg "### aws events.DescribeEventBus bus\n")]
+        (is (< (count m) 300) m)
+        (is (str/includes? m "did you mean eventbridge?") m)
+        (is (str/includes? m "services: eventbridge sqs") m)))
+    (testing "an unknown operation of a known service names the close ones"
+      (let [m (msg "### aws eventbridge.DescribeBus bus\n")]
+        (is (str/includes? m "eventbridge has 152 operations") m)
+        (is (str/includes? m "eventbridge.DescribeEventBus") m)
+        (is (not (str/includes? m "Op7")) m)))))
+
 (deftest name-directive-overrides
   (is (= "z" (:name (first (:steps (parse/parse "### x y\n# @name z\n")))))))
 

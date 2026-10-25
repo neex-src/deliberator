@@ -462,7 +462,8 @@
                                     :host ctx}
                              (seq steps) (assoc :steps (set steps))
                              confirm (assoc :confirm confirm)
-                             continue (assoc :vars (continue-vars ws sess file)))))]
+                             ;; a token is bound to the exact request: its run's {{uuid}} vars and captures come back
+                             (or continue confirm) (assoc :vars (continue-vars ws sess file)))))]
     (try
       (let [res (assoc @run :session sess :env env-name)
             cs @confirmations]

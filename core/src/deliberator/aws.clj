@@ -241,7 +241,9 @@
     (with-meta
       (cond-> {:type :aws/error :category cat
                :code (or (:cognitect.aws.error/code r) (some-> (:__type r) str))
-               :message (or (:message r) (:Message r) (:cognitect.anomalies/message r)
+               ;; query-protocol services (iam, sts, sns...) nest it: <ErrorResponse><Error><Message>
+               :message (or (:message r) (:Message r) (get-in r [:ErrorResponse :Error :Message]) (get-in r [:Error :Message])
+                            (:cognitect.anomalies/message r)
                             (some-> t ex-message) (str cat))
                :hint (hint env cat)
                :service service :op op-name :env (:name env) :raw raw}
