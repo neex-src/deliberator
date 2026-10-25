@@ -15,7 +15,7 @@
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.test-util :as tu]
-            [deliberator.steps.http] [deliberator.steps.logs] [deliberator.steps.sql] [deliberator.steps.wait]
+            [deliberator.steps.http] [deliberator.steps.logs :as logs] [deliberator.steps.sql] [deliberator.steps.wait]
             [deliberator.steps.sqs] [deliberator.steps.eventbridge] [deliberator.steps.lambda]
             [deliberator.steps.dynamodb] [deliberator.steps.scheduler]))
 
@@ -404,6 +404,90 @@
         (is (= (:sha r) (store/sha256 (.getBytes "a CORR-1\n  cont\nc CORR-1\n" "UTF-8"))))
         (is (some? (store/raw-meta "default" raw-sha)) "the unfiltered follow is in the raw store too")
         (is (= 1 (count (session-logs "default" "S1"))))))))
+
+;; --- a follow of a container starts at the end of its log (B6) ---------------------------------
+;; Only the seam to Podman is replaced (`logs/start-source` records where the container source is told to start and
+;; feeds lines); everything after it is the real follow: events, the one file, the raw blob. The same behaviour against a
+;; real container is `follow-estate-test/follow-without-since-starts-at-the-end-of-the-log`.
+
+(deftest follow-start-is-since-else-now-for-a-container-only
+  (let [now (java.time.Instant/parse "2026-10-25T10:00:00Z")
+        since (java.time.Instant/parse "2026-10-25T09:00:00Z")]
+    (is (= now (logfetch/follow-start nil "container" now)) "no since: the end of the log, now")
+    (is (= since (logfetch/follow-start since "container" now)) "an explicit since wins")
+    (is (nil? (logfetch/follow-start nil "file" now)) "a file is read from byte 0")
+    (is (= since (logfetch/follow-start since "file" now)))
+    (is (nil? (logfetch/follow-start nil "cloudwatch" now)) "CloudWatch's 15 minute default is set by the caller")
+    (is (= since (logfetch/follow-start since "cloudwatch" now)))))
+
+(defn- container-env! [ws]
+  (env/save! ws (assoc-in (env/load ws "local") [:targets :log/ctr] {:container "some-container"})))
+
+(defn- fetch-container-with-recorded-source
+  "`logs.fetch` of the container target `log/ctr` with `args`, the container source replaced by a recorder that feeds `lines`.
+  A follow is cancelled once its lines are events. -> `{:started {:source :offset :at} :t0 :t1 :events :result}`;
+  `:t0`/`:t1` bracket the call."
+  [args lines]
+  (let [started (atom nil) events (atom []) cancelled (atom false)
+        t0 (java.time.Instant/now)
+        fake (fn [_ctx source offset at _pattern ^java.util.concurrent.LinkedBlockingQueue q]
+               (reset! started {:source source :offset offset :at at})
+               (doseq [l lines] (.put q l))
+               (fn []))
+        result (with-redefs [logs/start-source fake]
+                 (let [f (future (ops/call! "logs.fetch" {:emit! #(swap! events conj %) :cancelled? #(deref cancelled)}
+                                            (merge {:target "log/ctr"} args)))]
+                   (when (or (:follow args) (= "until-cancelled" (:for args)))
+                     (wait-until #(= (count lines) (count @events)) 3000)
+                     (reset! cancelled true))
+                   (deref f 5000 ::timeout)))]
+    {:started @started :t0 t0 :t1 (java.time.Instant/now) :events @events :result result}))
+
+(defn- between? [^java.time.Instant at ^java.time.Instant lo ^java.time.Instant hi]
+  (and (some? at) (not (.isBefore at lo)) (not (.isAfter at hi))))
+
+(deftest a-container-follow-without-since-starts-now
+  (tu/with-temp-home
+    (session/start! "default" "S1")
+    (container-env! "default")
+    (let [{:keys [started t0 t1 events result]} (fetch-container-with-recorded-source {:follow true} ["from now" "and on"])]
+      (testing "the container source is told to start at the moment of the request, not at the beginning of the log"
+        (is (= {:container "some-container"} (:source started)))
+        (is (between? (:at started) t0 t1) (pr-str (:at started))))
+      (testing "what is followed is persisted as before: events, one file, the raw blob"
+        (is (= ["from now" "and on"] (map :text events)))
+        (is (true? (:follow result)))
+        (is (= "from now\nand on\n" (slurp (:path result))))
+        (is (= 1 (count (session-logs "default" "S1"))))
+        (is (= :podman (:source (store/raw-meta "default" (:sha result)))))
+        (is (java.nio.file.Files/isSameFile (.toPath (io/file (:path result))) (store/raw-path "default" (:sha result))))))))
+
+(deftest a-container-follow-with-since-keeps-its-start
+  (tu/with-temp-home
+    (session/start! "default" "S1")
+    (container-env! "default")
+    (testing "a duration ago"
+      (let [{:keys [started t0 t1]} (fetch-container-with-recorded-source {:follow true :since "10m"} ["x"])]
+        (is (between? (:at started) (.minusSeconds t0 600) (.minusSeconds t1 600)) (pr-str (:at started)))))
+    (testing "an instant"
+      (let [{:keys [started]} (fetch-container-with-recorded-source {:follow true :since "2026-10-01T00:00:00Z"} ["x"])]
+        (is (= (java.time.Instant/parse "2026-10-01T00:00:00Z") (:at started)))))))
+
+(deftest for-until-cancelled-is-a-follow-too
+  (tu/with-temp-home
+    (session/start! "default" "S1")
+    (container-env! "default")
+    (let [{:keys [started t0 t1 result]} (fetch-container-with-recorded-source {:for "until-cancelled"} ["x"])]
+      (is (true? (:follow result)))
+      (is (between? (:at started) t0 t1) (pr-str (:at started))))))
+
+(deftest a-window-of-a-container-without-since-still-reads-the-history
+  (tu/with-temp-home
+    (session/start! "default" "S1")
+    (container-env! "default")
+    (let [{:keys [started result]} (fetch-container-with-recorded-source {:for "300ms"} ["x"])]
+      (is (nil? (:at started)) "a window (not a follow) is history plus what arrives, as documented")
+      (is (nil? (:follow result))))))
 
 (deftest a-window-streams-events-and-keeps-its-result
   (tu/with-temp-home

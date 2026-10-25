@@ -25,7 +25,9 @@
   entries are appended to the session file. A sidecar `raw/follow/<id>.edn` names them and the owning process. At the end
   the files become raw blobs by hard link (`store/raw-adopt!`, no byte array, any length) and the session file IS the
   blob; a follow whose daemon died is finished the same way at the next daemon start (`adopt-orphans!`). The result
-  has `:follow true`."
+  has `:follow true`. A follow of a container without `since` starts at the current end of its log (`follow-start`: only the
+  lines written from now on, like `tail -f -n 0`); with `since` it starts there, as before. A file follow still starts at byte 0
+  and CloudWatch at its 15 minute default."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [deliberator.env :as env]
@@ -46,6 +48,13 @@
   (let [s (str/trim (str s))]
     (cond (expr/duration? s) (.minus ^Instant now (Duration/ofMillis (expr/parse-duration s)))
           :else (try (Instant/parse s) (catch Exception _ (bad (str "bad since " (pr-str s))))))))
+
+(defn follow-start
+  "Where a follow reads from: `since` (an Instant, nil = none given) when given, else for a container `now`, so that
+  following does not replay the whole log first (podman `--since now`). A file (byte 0) and CloudWatch (its default
+  `since` is set before) are left as they are. `kind` is \"container\", \"file\" or \"cloudwatch\"."
+  [since kind now]
+  (or since (when (= "container" kind) now)))
 
 (def ^:private stamp (-> (DateTimeFormatter/ofPattern "yyyyMMdd-HHmmss") (.withZone ZoneOffset/UTC)))
 
@@ -196,7 +205,7 @@
                (fn [_]))
         ]
     (if follow?
-      (follow! ws e source kind target since-i pred session emit! (or cancelled? (constantly false)) ctx now)
+      (follow! ws e source kind target (follow-start since-i kind now) pred session emit! (or cancelled? (constantly false)) ctx now)
       (fetch-window! ws e source kind target since-i pred session filter line! gap! cancelled? ctx now file-path listening? for-ms))))
 
 (defn- fetch-window!
