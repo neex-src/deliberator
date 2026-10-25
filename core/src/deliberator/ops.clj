@@ -364,6 +364,8 @@
   (let [ws (ws-of args)
         s (runtime/logs ws role (cond-> {}
                                   since (assoc :since (parse-instant since "since"))
+                                  ;; like logs.fetch (B6): a follow without since or tail does not replay the whole log
+                                  (and follow (not since) (not tail)) (assoc :since (java.time.Instant/now))
                                   follow (assoc :follow true)
                                   tail (assoc :tail tail)))
         n (volatile! 0)]
@@ -761,7 +763,7 @@
                    :doc "Removes the workspace's runtime containers (and only those)."
                    :events ["runtime.removed"]}
    "runtime.logs" {:fn runtime-logs :class :read
-                   :doc "Streams a container's log lines as `line` events (mirrored to logs/services/); with follow, until cancelled or the client leaves."
+                   :doc "Streams a container's log lines as `line` events (mirrored to logs/services/); with follow, until cancelled or the client leaves, starting at the end of the log unless since or tail says otherwise."
                    :events ["line"]
                    :args (ws-schema :role {:type :string :required true :doc "runtime role, e.g. floci, postgres, service/a"}
                                     :since {:type :string :doc "ISO-8601 instant; older lines are dropped"}
@@ -815,11 +817,11 @@
    "repo.list" {:fn repo-list :class :read :args (ws-schema)
                 :doc "The repositories attached to the workspace, in attach order."}
    "logs.fetch" {:fn logs-fetch :class :mutate
-                 :doc "Fetches a log target (container, file or CloudWatch group of the environment) into the session as logs/<target>-<ts>.log, hard-linked from the raw blobs. Without for: one shot; with for: also listens that long, streaming every line as a logs.line event while it arrives. follow (or for until-cancelled) listens until the request is cancelled or the client leaves, with ONE file for the whole follow, written as lines arrive. filter keeps whole matching entries."
+                 :doc "Fetches a log target (container, file or CloudWatch group of the environment) into the session as logs/<target>-<ts>.log, hard-linked from the raw blobs. Without for: one shot; with for: also listens that long, streaming every line as a logs.line event while it arrives. follow (or for until-cancelled) listens until the request is cancelled or the client leaves, with ONE file for the whole follow, written as lines arrive; a container's follow starts at the current end of its log unless since says otherwise (only the lines written from now on). filter keeps whole matching entries."
                  :events ["logs.line"]
                  :args (ws-schema :target {:type :string :required true :doc "environment target such as log/service-a, or an absolute file path"}
                                   :env {:type :string :doc "environment name; default local"}
-                                  :since {:type :string :doc "ISO-8601 instant or a duration ago like 10m; default all (CloudWatch: 15m)"}
+                                  :since {:type :string :doc "ISO-8601 instant or a duration ago like 10m; default all (CloudWatch: 15m); a follow of a container without since starts at the end of its log"}
                                   :for {:type :string :doc "keep listening this long, e.g. 5s; until-cancelled = follow"}
                                   :follow {:type :bool :doc "listen until cancelled (Ctrl-C / the client leaving), one file for the whole follow"}
                                   :filter {:type :string :doc "text or /regex/ an entry must match"}
