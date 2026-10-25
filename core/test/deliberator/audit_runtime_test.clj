@@ -1,7 +1,7 @@
 (ns deliberator.audit-runtime-test
   "Audit of M1, layers 2 and 3 against the running estate (pass B of `bb core:test:all`): needs the
   Floci of `floci-util/url` (default http://localhost:14566) and, for the `sql` step, Postgres on
-  15432; each test skips with a message when Floci is down. Resources are prefixed `dlbaudit-` and
+  `DLB_TEST_PG_PORT` (default 15432); each test skips with a message when Floci is down. Resources are prefixed `dlbaudit-` and
   removed. What it adds to the per-kind tests: the raw store is complete and intact after every kind
   has run, a 200 KB SQS body, `@until` and cancel against a real long poll, a confirmed re-run
   through the daemon on a remote-shaped environment, a token that is used twice. Tests tagged
@@ -33,12 +33,14 @@
            (java.nio.file Files)
            (java.util UUID)))
 
+(def ^:private pg-port (or (some-> (System/getenv "DLB_TEST_PG_PORT") parse-long) 15432))
+
 (defn- pg-up? []
-  (try (with-open [s (Socket.)] (.connect s (InetSocketAddress. "localhost" 15432) 500) true)
+  (try (with-open [s (Socket.)] (.connect s (InetSocketAddress. "localhost" (int pg-port)) 500) true)
        (catch Exception _ false)))
 
 (def ^:private pg-target
-  {:url "jdbc:postgresql://localhost:15432/deliberator" :user "deliberator" :password "deliberator"})
+  {:url (str "jdbc:postgresql://localhost:" pg-port "/deliberator") :user "deliberator" :password "deliberator"})
 
 (defn- audit-env
   "The local environment pointed at the test Floci, with the audit queue and the estate's resources."
@@ -105,9 +107,10 @@
             (is (= (.length f) (:bytes m)))
             (is (not (.canWrite f)) (str "blob is read-only " sha)))))
       (testing "the meta names each kind's source"
-        (is (= #{:aws :http :sql} (set (filter #{:aws :http :sql} (map #(:source (store/raw-meta "w" (str (.getName (.getParentFile %)) (.getName %)))) (raw-files "w")))))
+        (is (= (cond-> #{:aws :http} (pg-up?) (conj :sql))
+               (set (filter #{:aws :http :sql} (map #(:source (store/raw-meta "w" (str (.getName (.getParentFile %)) (.getName %)))) (raw-files "w")))))
             "aws, http and (with Postgres up) sql")
-        (when-not (pg-up?) (println "NOTE: Postgres on :15432 is down, the sql step was not part of this run")))
+        (when-not (pg-up?) (println (str "NOTE: Postgres on :" pg-port " is down, the sql step was not part of this run"))))
       (testing "every request.* / response.* in the run is a hard link of a blob"
         (let [files (filter #(re-matches #"(request|response)\..+" (.getName %))
                             (file-seq (io/file (get-in res [:paths :run]) "steps")))]

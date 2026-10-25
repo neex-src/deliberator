@@ -120,11 +120,15 @@
   (fs/create-dirs (str repo "/.scratch/tf-plugin-cache"))
   (apply p/shell {:dir tf-dir :env (tf-env) :extra-env {}} "terraform" args))
 
-(defn local-endpoint
-  "The workspace's `local` AWS endpoint (environments/local.edn, written by runtime sync-env)."
+(defn local-env
+  "The workspace's `local` environment record (environments/local.edn, written by runtime sync-env)."
   [ws]
-  (let [f (str (home) "/workspaces/" ws "/environments/local.edn")]
-    (get-in (edn/read-string (slurp f)) [:aws :endpoint])))
+  (edn/read-string (slurp (str (home) "/workspaces/" ws "/environments/local.edn"))))
+
+(defn local-endpoint
+  "The workspace's `local` AWS endpoint."
+  [ws]
+  (get-in (local-env ws) [:aws :endpoint]))
 
 (defn- write-local2!
   "The environment `local2` of the workspace: the same Floci as `local`, region eu-west-1, where terraform seeded
