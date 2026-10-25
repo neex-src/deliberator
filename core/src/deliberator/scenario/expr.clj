@@ -158,23 +158,30 @@
 
 (defn evaluate
   "Evaluates a parsed assertion against `actual` (found? says whether the operand exists) of the
-  fact type `type` (or nil). Returns {:ok bool :was actual-or-nil :found? bool}."
+  fact type `type` (or nil). Returns {:ok bool :was actual-or-nil :found? bool}. A missing operand
+  (`found?` false) fails every operator except `!=` (anything but `!= null`) and `== null`: its text is
+  never compared, so `$.x matches .*` or `$.x contains null` on an absent path does not pass."
   [{:keys [op value quoted?]} actual found? type]
   (let [actual (when found? actual)
         text (value-text actual)
-        ok (case op
-             "==" (zero? (first (compare-values op actual value type quoted?)))
-             "!=" (not (zero? (first (compare-values op actual value type quoted?))))
-             "<" (neg? (first (compare-values op actual value type quoted?)))
-             "<=" (not (pos? (first (compare-values op actual value type quoted?))))
-             ">" (pos? (first (compare-values op actual value type quoted?)))
-             ">=" (not (neg? (first (compare-values op actual value type quoted?))))
-             "contains" (cond
-                          (sequential? actual) (boolean (some #(= (value-text %) value) actual))
-                          (map? actual) (boolean (some #(= (name %) value) (keys actual)))
-                          :else (str/includes? text value))
-             "matches" (boolean (re-find (regex-of value) text)))
-        ok (and (or found? (#{"==" "!=" "contains" "matches"} op)) ok)]
-    {:ok (boolean (if (and (not found?) (#{"<" "<=" ">" ">="} op)) false ok))
+        null-literal? (and (not quoted?) (= "null" value))
+        ok (if-not found?
+             (case op
+               "==" null-literal?
+               "!=" (not null-literal?)
+               false)
+             (case op
+               "==" (zero? (first (compare-values op actual value type quoted?)))
+               "!=" (not (zero? (first (compare-values op actual value type quoted?))))
+               "<" (neg? (first (compare-values op actual value type quoted?)))
+               "<=" (not (pos? (first (compare-values op actual value type quoted?))))
+               ">" (pos? (first (compare-values op actual value type quoted?)))
+               ">=" (not (neg? (first (compare-values op actual value type quoted?))))
+               "contains" (cond
+                            (sequential? actual) (boolean (some #(= (value-text %) value) actual))
+                            (map? actual) (boolean (some #(= (name %) value) (keys actual)))
+                            :else (str/includes? text value))
+               "matches" (boolean (re-find (regex-of value) text))))]
+    {:ok (boolean ok)
      :was (if (or (map? actual) (sequential? actual)) (value-text actual) actual)
      :found? (boolean found?)}))

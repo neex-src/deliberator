@@ -15,7 +15,8 @@
   Entries: a header line plus the lines that continue it (indented lines, and Postgres
   `DETAIL:`/`HINT:`/`CONTEXT:`/`STATEMENT:`/`QUERY:`/`LOCATION:` lines) form one entry. The filters
   see the WHOLE entry (each filter must match somewhere in it) and a matching entry is emitted line
-  for line, verbatim, to the stream (`:line!`) and to `response.log`. The default filter (no
+  for line, verbatim, to the stream (`:line!`) and to `response.log`; every line the source delivered
+  in the window, filtered or not, is the step's `source.log` (persist first). The default filter (no
   `@filter`) is the run's correlation id. An entry completes when the next header arrives or when
   the source is idle for 200 ms. A container that stops does not end the tail: the window is the only end. A line
   `-- container X stopped at T: log stream ended --` (bypassing the filters) marks the gap, the tail
@@ -108,10 +109,13 @@
     (runtime/podman-client (:ws ctx) cfg :persist? false)))
 
 (defn container-source
-  "Follows the container's logs. When the stream ends or breaks after the first attach (the container
-  stopped), pushes `{:gap text}` and waits for the container to run again (inspect every 500 ms), then
-  re-attaches with `since` = the last line seen (lines at or before it are skipped); pushes
-  `{:gap text}` again when it is back. Only an error of the FIRST attach is pushed as a Throwable."
+  "Follows the container's logs. Every line of an attach is delivered, lines sharing a timestamp included (conmon
+  stamps a write burst with ONE timestamp: a 30-line `for` loop, a Spring Boot start, a stack trace). When the
+  stream ends or breaks after the first attach (the container stopped), pushes `{:gap text}` and waits for the
+  container to run again (inspect every 500 ms), then re-attaches with `since` = the instant of the last line seen
+  and pushes `{:gap text}` again when it is back. Podman replays the lines AT that instant: those whose text matches,
+  in order, the lines already delivered at it are skipped once (`seen`), so a re-attach replays nothing and a new
+  line written at the same instant still arrives. Only an error of the FIRST attach is pushed as a Throwable."
   [ctx name since ^LinkedBlockingQueue q]
   (let [client (podman-client ctx)
         closer (atom nil) stop (atom false)]
@@ -119,16 +123,25 @@
            ^Runnable
            (fn []
              (try
-               (loop [since since last-at nil attached? false]
+               (loop [since since last-at nil seen [] attached? false]
                  (when-not @stop
                    (let [last-at (volatile! last-at)
+                         seen (volatile! seen)                        ; texts delivered at @last-at, in order
+                         replay (volatile! (when attached? 0))        ; index into seen while a re-attach replays them
                          err (try
                                (let [s (podman/logs client name :since since :follow true)]
                                  (reset! closer (:close (meta s)))
-                                 (doseq [e s :while (not @stop)
-                                         :when (or (nil? @last-at) (nil? (:at e)) (.isAfter ^Instant (:at e) ^Instant @last-at))]
-                                   (when (:at e) (vreset! last-at (:at e)))
-                                   (.put q (:text e)))
+                                 (doseq [e s :while (not @stop)]
+                                   (let [^Instant at (:at e) text (:text e) ^Instant la @last-at]
+                                     (cond
+                                       (nil? at) (.put q text)
+                                       (or (nil? la) (.isAfter at la))
+                                       (do (vreset! last-at at) (vreset! seen [text]) (vreset! replay nil) (.put q text))
+                                       (.isBefore at la) nil
+                                       ;; the same instant as the last line seen
+                                       (and @replay (< (long @replay) (count @seen)) (= text (nth @seen @replay)))
+                                       (vswap! replay inc)             ; the re-attach replays a line delivered before the gap
+                                       :else (do (vreset! replay nil) (vswap! seen conj text) (.put q text)))))
                                  nil)
                                (catch Throwable t (when-not @stop (if attached? t (throw t)))))]
                      (when-not @stop
@@ -139,7 +152,7 @@
                            (Thread/sleep 500) (recur)))
                        (when-not @stop
                          (.put q {:gap (str "-- container " name " running again at " (Instant/now) ": log stream resumed --")})
-                         (recur (or @last-at since) @last-at true))))))
+                         (recur (or @last-at since) @last-at @seen true))))))
                (catch InterruptedException _ nil)
                (catch Throwable t (when-not @stop (.put q t)))))
            "deliberator-logs-container")
@@ -233,6 +246,11 @@
     :else (vec (mapcat #(str/split (str/replace (:message %) #"\n$" "") #"\n")
                        (sort-by :timestamp (cw-events ctx (:cloudwatch source) (.toEpochMilli ^Instant since) pattern))))))
 
+(defn source-kind
+  "The raw-store `:source` of a log source map: `:podman` (container), `:file`, `:aws` (CloudWatch)."
+  [source]
+  (cond (:container source) :podman (:file source) :file :else :aws))
+
 (defn start-source
   "Starts the source of `source` feeding queue `q`; returns its stop fn. `offset` (file) and `at`
   (container, CloudWatch: an Instant) say where it starts; `pattern` is the CloudWatch filterPattern."
@@ -291,16 +309,19 @@
         end (min (+ t0 window) (.toEpochMilli ^Instant (or (:attempt-deadline ctx) (:deadline ctx))))
         q (LinkedBlockingQueue.)
         stop (start-source ctx source offset at (cw-pattern raw-filters) q)
-        {out :out gaps :gaps gap-lines :gap-lines}
+        {out :out raw :raw gaps :gaps gap-lines :gap-lines}
         (try (drain! q end (:cancelled? ctx) filters (:line! ctx)
                      (str "check the log target " (:target step) " in environment " (c/env-name ctx)))
              (finally (stop)))
         gaps (volatile! gaps) gap-lines (volatile! gap-lines) out (volatile! out)]
     (let [lines @out]
+      ;; persist first (principle 1): every line the source delivered in the window is `source.log`, the
+      ;; entries the filters kept are `response.log`
       (cond-> {:facts {"lines" (- (count lines) @gap-lines)
                        "gaps" @gaps}
                :lines (- (count lines) @gap-lines)
-               :source :file :op (str "logs " (:target step)) :content-type "text/plain"}
+               :source (source-kind source) :op (str "logs " (:target step)) :content-type "text/plain"}
+        (seq raw) (assoc :raw-bytes (c/utf8 (str (str/join "\n" raw) "\n")) :raw-ext "log")
         (seq lines) (assoc :response-bytes (c/utf8 (str (str/join "\n" lines) "\n")) :response-ext "log")
         (empty? lines) (assoc :display (str "(no lines matched " (str/join " AND " raw-filters)
                                             " in " (quot window 1000) " s)"))))))

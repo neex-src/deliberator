@@ -25,7 +25,8 @@
   :output :error ..}`), `scenario.scn` (hard link into the raw store), `steps/NNN-<kind>-<name>/`
   with `step.edn` (the full record incl. every attempt's request/response sha), `request.<ext>`,
   `response.<ext>` (hard links of the LAST attempt; every attempt is in the raw store, persisted
-  before anything is parsed), `display.txt`; then `result.txt` from `render/result!`.
+  before anything is parsed), `source.<ext>` when the kind filtered what it fetched (`:raw-bytes`: the
+  logs kind's whole window), `display.txt`; then `result.txt` from `render/result!`.
 
   Execution. Step correlation is `<run id>-NNN`; `{{correlation}}` is the run id,
   `{{step.correlation}}` the step's. Concurrent kinds are armed (`:arm`, synchronously, in order)
@@ -327,6 +328,8 @@
         _ (Files/createDirectories step-dir (make-array FileAttribute 0))
         vs (vars-for st step corr)
         rstep (resolve-step st step vs)
+        _ (doseq [w (:warnings step)]   ; the parser's warnings (a shell/sql body that shed `#` lines) go to the run's stream
+            (emit! st {:event :line :step (:n step) :text (str "warning: line " (:line w) ": " (:message w))}))
         timeout-ms (if-let [t (dir-value rstep "timeout")]
                      (expr/parse-duration t)
                      (or (:default-timeout-ms kmap) default-timeout-ms))
@@ -395,7 +398,9 @@
                 r (or r {})]
             {:r r :ms ms :facts (facts-of kmap r ms) :body-json (body-json-of r)
              :request-sha (put! st step r (:request-bytes r))
-             :response-sha (put! st step r (:response-bytes r))}))
+             :response-sha (put! st step r (:response-bytes r))
+             ;; a kind that filters what it fetched hands the unfiltered bytes over as :raw-bytes (the logs kind's window)
+             :raw-sha (put! st step (cond-> r (:op r) (update :op str " (unfiltered)")) (:raw-bytes r))}))
         until-check
         (fn [att]
           (when until
@@ -405,7 +410,7 @@
         (loop [n 1 attempts []]
           (when @(:cancelled st) (throw (InterruptedException. "run cancelled")))
           (let [att (attempt! n)
-                attempts (conj attempts (select-keys att [:ms :request-sha :response-sha]))
+                attempts (conj attempts (select-keys att [:ms :request-sha :response-sha :raw-sha]))
                 uchk (until-check att)]
             (if (or (nil? until) (:ok uchk)
                     (> (+ (System/currentTimeMillis) poll-ms) window-end))
@@ -416,8 +421,10 @@
         ext-rq (or (:request-ext r) "txt") ext-rs (or (:response-ext r) "txt")
         rq-name (when (:request-sha att) (str "request." ext-rq))
         rs-name (when (:response-sha att) (str "response." ext-rs))
+        raw-name (when (:raw-sha att) (str "source." (or (:raw-ext r) ext-rs)))
         _ (when rq-name (link! st (:request-sha att) (.resolve ^Path step-dir ^String rq-name)))
         _ (when rs-name (link! st (:response-sha att) (.resolve ^Path step-dir ^String rs-name)))
+        _ (when raw-name (link! st (:raw-sha att) (.resolve ^Path step-dir ^String raw-name)))
         display (when (some? (:display r)) "display.txt")
         _ (when display
             (store/write-bytes-atomic! (.resolve ^Path step-dir "display.txt")
@@ -441,7 +448,7 @@
            :fact-types (into {} (keep (fn [k] (when-let [t (kinds/fact-type kmap k)] [k t])) (keys facts)))
            :checks checks :captures captures
            :output (or display rs-name)
-           :request rq-name :response rs-name :lines (:lines r)
+           :request rq-name :response rs-name :source-file raw-name :lines (:lines r)
            :attempts attempts)))
 
 (defn- exec-step

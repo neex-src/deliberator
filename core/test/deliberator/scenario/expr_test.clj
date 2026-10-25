@@ -78,7 +78,19 @@
   (testing "missing operands"
     (is (not (ev "x == 1" nil false nil))) (is (not (ev "x < 1" nil false nil)))
     (is (ev "x != 1" nil false nil)) (is (not (ev "x contains a" nil false nil)))
-    (is (nil? (:was (expr/evaluate (expr/parse-assert "x == 1") 5 false nil))))))
+    (is (nil? (:was (expr/evaluate (expr/parse-assert "x == 1") 5 false nil)))))
+  (testing "a missing operand has no text (review 2026-10-25, R28): only == null and != <not null> pass"
+    (is (not (ev "x matches .*" nil false nil)) "matches on an absent path")
+    (is (not (ev "x matches null" nil false nil)))
+    (is (not (ev "x contains null" nil false nil)))
+    (is (not (ev "x contains n" nil false nil)))
+    (is (ev "x == null" nil false nil) "absent is null")
+    (is (not (ev "x != null" nil false nil)) "absent is not 'not null'")
+    (is (not (ev "x == \"null\"" nil false nil)) "the quoted text null is text, an absent value is not it")
+    (is (ev "x != \"null\"" nil false nil))
+    (is (ev "x == null" nil true nil) "a present null value is null")
+    (is (not (ev "x != null" nil true nil)))
+    (is (ev "x matches null" nil true nil) "a present null value does have the text null")))
 
 (deftest capture-text
   (is (= ["1" "a" "true" "null" "[1,2]" "{\"a\":1}" "2"]
