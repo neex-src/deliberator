@@ -54,7 +54,20 @@
     (is (= (at "03.500") (:last-at a)))
     (is (nil? (:error a)))
     (is (= 2 (count (:lines a))))
+    (is (not (:settled a)) "a new bean is a change: the long quiet applies")
     (is (some? (:error (reload/scan-agent [(ev "04.000" "HOTSWAP AGENT: 12:00:04.000 ERROR (org.hotswap.agent.config.PluginManager) - boom")]))))))
+
+(deftest spring-with-nothing-to-recreate-settles-the-reload
+  ;; the lines of a body change on the estate (2026-10-25): RELOAD, then only "no change, ignore reloading" (B10)
+  (let [ev (fn [s t] {:at (Instant/parse (str "2026-10-25T08:59:" s "Z")) :stream :stdout :text (str "HOTSWAP AGENT: " t)})
+        reload (ev "37.036" "08:59:37.036 RELOAD (org.hotswap.agent.config.PluginManager) - Reloading classes [estate.a.Api] (autoHotswap)")
+        none (fn [s] (ev s "INFO (org.hotswap.agent.plugin.spring.reload.SpringBeanReload) - no change, ignore reloading 'org.springframework.beans.factory.support.DefaultListableBeanFactory@57b63253'"))
+        bean (ev "38.700" "INFO (org.hotswap.agent.plugin.spring.reload.SpringBeanReload) - reload spring bean 'api'")]
+    (is (not (:settled (reload/scan-agent [reload]))) "Spring has not answered yet")
+    (is (:settled (reload/scan-agent [reload (none "38.662") (none "38.785")])))
+    (is (not (:settled (reload/scan-agent [reload (none "38.662") bean]))) "a bean was re-created")
+    (is (not (:settled (reload/scan-agent [(none "36.000") reload]))) "an answer to an earlier RELOAD does not count")
+    (is (not (:settled (reload/scan-agent [(none "38.662")]))) "no RELOAD at all")))
 
 (deftest compiler-lines
   (let [r (reload/compile-errors ["[ERROR] COMPILATION ERROR : "

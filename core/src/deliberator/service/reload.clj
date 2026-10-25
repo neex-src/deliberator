@@ -6,7 +6,8 @@
   module's `target/classes` against its staging dir (`deliberator.service.staging`), only changed files are copied (temp
   name + rename, vanished files deleted), then the container log is watched from the copy on: HotswapAgent's
   `RELOAD … Reloading classes […] (autoHotswap)` line (a new bean: `add new spring bean '<name>'`), then the health probe UP
-  and `quiet-ms` (2.5 s) without another `HOTSWAP AGENT` line (the Spring re-creation of a changed bean has no 'done' line).
+  and `quiet-ms` (2.5 s) without another `HOTSWAP AGENT` line (the Spring re-creation of a changed bean has no 'done' line);
+  when Spring's only answer is `no change, ignore reloading`, 0.3 s (`settled-quiet-ms`).
   Budget 15 s from the copy. An `ERROR (org.hotswap.agent` line, no RELOAD line in the budget, health not UP afterwards, or a
   changed resource (not a class file: configuration is read at startup) ends in `service.restart`, said in `:fallback`.
 
@@ -33,6 +34,9 @@
 
 (def default-budget-ms 15000)
 (def default-quiet-ms 2500)
+(def settled-quiet-ms
+  "The quiet that ends a reload once Spring said it has nothing to re-create (B10)."
+  300)
 
 (defn- fail [type msg & {:as data}] (throw (ex-info msg (assoc data :type type))))
 
@@ -77,18 +81,27 @@
 (def ^:private reload-re #"Reloading classes \[([^\]]*)\] \(autoHotswap\)")
 (def ^:private bean-re #"add new spring bean '([^']+)'")
 (def ^:private agent-error-re #"ERROR \(org\.hotswap\.agent")
+(def ^:private spring-re #"\(org\.hotswap\.agent\.plugin\.spring\.")
+(def ^:private no-change-re #"no change, ignore reloading")
 
 (defn- agent-lines [evs] (filterv #(str/includes? (str (:text %)) "HOTSWAP AGENT") evs))
 
 (defn scan-agent
-  "Log events -> `{:redefined [class] :beans [name] :error text|nil :last-at Instant|nil :lines [text]}` of the HotswapAgent lines."
+  "Log events -> `{:redefined [class] :beans [name] :error text|nil :last-at Instant|nil :settled bool :lines [text]}` of the
+  HotswapAgent lines. `:settled`: after the last RELOAD line Spring answered and every one of its lines is `no change, ignore
+  reloading` (nothing to re-create, so no long quiet is needed)."
   [evs]
-  (let [as (agent-lines evs)]
+  (let [as (agent-lines evs)
+        after (seq (reverse (take-while #(not (re-find reload-re (str (:text %)))) (reverse as))))
+        spring (filter #(re-find spring-re (str (:text %))) after)]
     {:redefined (vec (distinct (for [e as :let [m (re-find reload-re (:text e))] :when m
                                      c (str/split (second m) #",\s*") :when (seq c)] c)))
      :beans (vec (distinct (keep #(second (re-find bean-re (:text %))) as)))
      :error (some #(when (re-find agent-error-re (:text %)) (:text %)) as)
      :last-at (some->> (keep :at as) seq (apply max-key #(.toEpochMilli ^Instant %)))
+     :settled (boolean (and (some #(re-find reload-re (str (:text %))) as)
+                            (seq spring) (= (count after) (count spring))
+                            (every? #(re-find no-change-re (str (:text %))) spring)))
      :lines (mapv :text as)}))
 
 (defn- row-of [ws role]
@@ -112,7 +125,8 @@
         (cond
           (:error a) {:ok false :reason (str "HotswapAgent reported: " (:error a)) :lines (:lines a)}
           (and reloaded? (:last-at a)
-               (>= (- (System/currentTimeMillis) (.toEpochMilli ^Instant (:last-at a))) quiet-ms)
+               (>= (- (System/currentTimeMillis) (.toEpochMilli ^Instant (:last-at a)))
+                   (if (:settled a) (min quiet-ms settled-quiet-ms) quiet-ms))
                (= :healthy (:health (row-of ws role))))
           (assoc a :ok true)
           (> (System/currentTimeMillis) deadline)

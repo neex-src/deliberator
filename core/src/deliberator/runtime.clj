@@ -137,7 +137,9 @@
   "The hotswap image's command: JBR with enhanced redefinition, the agent, JDWP for the IDE only, the exploded
   classpath (conf dir with hotswap-agent.properties, the staged class dirs, the dependency jars)."
   [{:keys [debug java-opts exploded]}]
-  (vec (concat ["java" "-XX:+AllowEnhancedClassRedefinition" "-javaagent:/opt/hotswap/hotswap-agent.jar=autoHotswap=true"]
+  (vec (concat ["java" "-XX:+AllowEnhancedClassRedefinition" "-javaagent:/opt/hotswap/hotswap-agent.jar=autoHotswap=true"
+                ;; the Spring plugin waits 1600 ms by default to batch class changes; service.reload stages them all at once (B10)
+                "-DSpringReloadDelayMillis=200"]
                (map #(str "--add-opens=" % "=ALL-UNNAMED") agent-opens)
                (when debug [(str "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:" debug)])
                java-opts
