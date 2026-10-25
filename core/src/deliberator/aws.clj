@@ -75,6 +75,19 @@
   [x]
   (walk/postwalk (fn [v] (if (map? v) (vec (sort-by (comp pr-str key) v)) v)) (edn-ready x)))
 
+(defn- without-run-id
+  "The request minus the run id: an SQS send carries it as the `correlation` message attribute (also
+  per entry of a batch), and it differs on every run. Everything else stays."
+  [request]
+  (let [drop-attr (fn [m] (if (map? (:MessageAttributes m)) (update m :MessageAttributes dissoc "correlation") m))]
+    (cond-> (drop-attr request)
+      (sequential? (:Entries request)) (update :Entries #(mapv drop-attr %)))))
+
+(defn- fingerprint-request
+  "What a confirmation token binds: the canonical request without the run id."
+  [request]
+  (canonical (without-run-id request)))
+
 (defn- ->bytes ^bytes [^String s] (.getBytes s "UTF-8"))
 
 ;; redaction ----------------------------------------------------------------------------------
@@ -272,7 +285,7 @@
                       {:op op-name :service api :role :request :class class
                        :content-type "application/edn"})
         fp (store/sha256 (->bytes (pr-str [(store/ws-name ws) (:name env) (get-in env [:aws :account])
-                                           api op-name (canonical request)])))
+                                           api op-name (fingerprint-request request)])))
         line (fn [m] (when remote?
                        (audit! ctx (merge {:at (store/now) :env (:name env) :account (get-in env [:aws :account])
                                            :service api :op op-name :class class

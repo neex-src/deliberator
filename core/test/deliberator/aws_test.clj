@@ -92,6 +92,19 @@
       (is (str/includes? (blob (-> r :raw :response :sha)) "QueueDoesNotExist")
           "the error body is on disk too"))))
 
+(deftest fingerprint-ignores-the-run-id-only
+  (let [fp @#'aws/fingerprint-request
+        send (fn [run body] {:QueueUrl "q" :MessageBody body
+                             :MessageAttributes {"correlation" {:DataType "String" :StringValue run}
+                                                 "kind" {:DataType "String" :StringValue "a"}}})]
+    (is (= (fp (send "run-1" "hello")) (fp (send "run-2" "hello"))) "two runs, same fingerprint")
+    (is (not= (fp (send "run-1" "hello")) (fp (send "run-1" "other"))) "a changed body changes it")
+    (is (not= (fp (send "run-1" "hello")) (fp (assoc (send "run-1" "hello") :QueueUrl "q2"))) "so does the target")
+    (is (not= (fp (send "run-1" "hello"))
+              (fp (assoc-in (send "run-1" "hello") [:MessageAttributes "kind" :StringValue] "b")))
+        "so does any other attribute")
+    (is (= (fp {:Entries [(send "r1" "x")]}) (fp {:Entries [(send "r2" "x")]})) "batch entries too")))
+
 (deftest unreachable-endpoint-persists-the-anomaly
   (with-temp-home
     (let [e (assoc-in local [:aws :endpoint] "http://localhost:1")

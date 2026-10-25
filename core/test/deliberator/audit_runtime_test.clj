@@ -211,9 +211,8 @@
             (is (>= (count (str/split-lines log)) 3))
             (is (not (str/includes? log token)))))))))
 
-(deftest-floci ^:known-bug a-confirmed-rerun-of-sqs-send-passes
-  ;; 08c in PROGRESS.md: the token is bound to the exact request and the request holds the run id
-  ;; (the `correlation` attribute), so a re-run asks for a new token for ever.
+(deftest-floci a-confirmed-rerun-of-sqs-send-passes
+  ;; the request holds the run id (the `correlation` attribute); the token's fingerprint leaves it out.
   (let [q (str "dlbaudit-" (subs (str (UUID/randomUUID)) 0 8))]
       (with-remote-daemon [h]
         (env/save! "default" (assoc-in (remote-env) [:targets :queue/audit] q))
