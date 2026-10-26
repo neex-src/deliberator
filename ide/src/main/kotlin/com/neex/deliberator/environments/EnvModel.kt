@@ -155,12 +155,9 @@ data class DeployedView(
 }
 
 /** One line of `audit.show`. */
-data class AuditLine(val n: Int, val at: String?, val env: String?, val service: String?, val op: String?, val outcome: String?, val confirmation: String? = null, val reason: String? = null) {
-    /** A call that went through with a confirmation (the line says `used` or `pass`; its outcome is the call's own: ok or error). */
-    val given: Boolean get() = confirmation != null
-
+data class AuditLine(val n: Int, val at: String?, val env: String?, val service: String?, val op: String?, val outcome: String?) {
     /** The attempts a person must notice: a confirmation asked, given, or a mutation refused. */
-    val notable: Boolean get() = given || outcome in NOTABLE
+    val notable: Boolean get() = outcome in NOTABLE
 
     companion object {
         val NOTABLE = setOf("confirm-required", "confirmed", "refused")
@@ -171,7 +168,7 @@ data class AuditLine(val n: Int, val at: String?, val env: String?, val service:
 data class AuditSummary(val path: String, val exists: Boolean, val scope: String, val session: String?, val count: Int, val outcomes: Map<String, Int>, val lines: List<AuditLine>) {
     /** The banner above the opened file. */
     fun banner(): String {
-        val conf = lines.count { it.given } + (outcomes["confirmed"] ?: 0)
+        val conf = (outcomes["confirmed"] ?: 0)
         val asked = (outcomes["confirm-required"] ?: 0)
         val refused = (outcomes["refused"] ?: 0)
         return (if (scope == "session") "Audit trail of session $session" else "Audit trail of the workspace (no session open)") +
@@ -183,7 +180,7 @@ data class AuditSummary(val path: String, val exists: Boolean, val scope: String
             o.str("path") ?: "", o.get("exists")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false, o.str("scope") ?: "workspace", o.str("session"),
             o.int("count") ?: 0,
             o.getAsJsonObject("outcomes")?.entrySet()?.associate { (k, v) -> k to (v.takeIf { it.isJsonPrimitive }?.asInt ?: 0) } ?: emptyMap(),
-            o.get("lines").objects().map { AuditLine(it.int("n") ?: 0, it.str("at"), it.str("env"), it.str("service"), it.str("op"), it.str("outcome"), it.str("confirmation"), it.str("reason")) },
+            o.get("lines").objects().map { AuditLine(it.int("n") ?: 0, it.str("at"), it.str("env"), it.str("service"), it.str("op"), it.str("outcome")) },
         )
     }
 }

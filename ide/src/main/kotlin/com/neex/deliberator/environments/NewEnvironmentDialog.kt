@@ -89,8 +89,6 @@ class NewEnvironmentDialog(private val project: Project, private val onCreated: 
                 ApplicationManager.getApplication().invokeLater({
                     created = c
                     show(c.text(f.profile, f.region), error = false)
-                    // the dialog closes at once: the account-check result stays on screen in a balloon
-                    com.neex.deliberator.ui.Ui.notify(project, "Deliberator environment", c.text(f.profile, f.region))
                     onCreated(c)
                     busy.set(false)
                     close(OK_EXIT_CODE)

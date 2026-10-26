@@ -55,8 +55,8 @@ object EnvironmentOps {
             val g = v.takeIf { it.isJsonObject }?.asJsonObject?.get("cloudwatch")?.takeIf { it.isJsonPrimitive }?.asString
             if (k.removePrefix(":").startsWith("log/") && g != null) groups[g] = k.removePrefix(":").removePrefix("log/")
         }
-        val rows = try { deployed(svc, env).rows } catch (_: DaemonException) { emptyList() }
-        return LogGroupIndex(groups, rows.filter { it.kind == "lambda" }.map { it.name }, rows.filter { it.kind != "lambda" }.map { it.name })
+        val lambdas = try { deployed(svc, env).rows.filter { it.kind == "lambda" }.map { it.name } } catch (_: DaemonException) { emptyList() }
+        return LogGroupIndex(groups, lambdas)
     }
 }
 
@@ -64,10 +64,7 @@ object EnvironmentOps {
  * The log groups of one environment: its `log/` targets that name a CloudWatch group, and the Lambda functions of the cached deployed
  * view (`/aws/lambda/<fn>`). [forService] narrows to a service by name; with no service every known group is offered.
  */
-class LogGroupIndex(private val targetGroups: Map<String, String>, private val lambdas: List<String>, private val otherServices: List<String> = emptyList()) {
-    /** The names a person may pick as "the service": what the environment's log targets are called, its cached Lambda functions and ECS services. */
-    fun serviceNames(): List<String> = (targetGroups.values.map { it.removePrefix("service-") } + lambdas + otherServices).distinct()
-
+class LogGroupIndex(private val targetGroups: Map<String, String>, private val lambdas: List<String>) {
     fun forService(service: String?): List<String> {
         if (service.isNullOrBlank()) return targetGroups.keys.toList()
         val named = targetGroups.filter { (g, t) -> t == service || t == "service-$service" || g.contains(service) }.keys

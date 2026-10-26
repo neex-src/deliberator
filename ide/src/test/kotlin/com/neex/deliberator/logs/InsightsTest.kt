@@ -102,7 +102,6 @@ class InsightsTest : BasePlatformTestCase() {
         assertEquals(listOf("/aws/lambda/orders-api"), idx.forService(null))
         assertEquals(listOf("/aws/lambda/orders-api"), idx.forService("orders"))
         assertEquals(emptyList<String>(), idx.forService("billing"))
-        assertEquals("the service picker offers what the environment's targets are called", listOf("orders"), idx.serviceNames())
     }
 
     fun testARunThatTheDaemonRefusesIsTheDaemonsError() {
@@ -123,7 +122,7 @@ class InsightsTest : BasePlatformTestCase() {
             JsonParser.parseString("""{"path":"$f","status":"Complete","rows":1,"bytes-scanned":1536,"query-file":null}""").asJsonObject,
             InsightsRequest(listOf("/aws/lambda/x"), "q", "1h", null, null, "dev"),
         )
-        val vf = InsightsRun.show(project, res, InsightsRun.resolve(res))!!
+        val vf = InsightsRun.show(project, res)!!
         val fe = FileEditorManager.getInstance(project).getEditors(vf).first()
         val banner = bg { InsightsBanner().collectNotificationData(project, vf) }!!.apply(fe) as com.intellij.ui.EditorNotificationPanel
         assertTrue(banner.text, banner.text.contains("1 row(s)") && banner.text.contains("1.5 KB (1536 bytes) scanned") && banner.text.contains("Complete") && banner.text.contains("/aws/lambda/x"))

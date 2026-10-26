@@ -188,11 +188,7 @@ class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), 
 
     private fun openText() {
         val p = view?.text ?: return
-        var vf: com.intellij.openapi.vfs.VirtualFile? = null
-        // the VFS refresh is a slow operation: off the EDT, then the editor on it
-        Ui.background(project, "Deliberator: open the deployed view", { vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByNioFile(java.nio.file.Path.of(p)) }, {
-            vf?.let { Ui.openEditor(project, it, 0) }
-        })
+        Ui.openFile(project, p)
     }
 
     override fun dispose() {}
