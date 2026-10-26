@@ -74,8 +74,6 @@
       (is (= :insights/bad-arg (bad {:groups [] :query "fields x"})))
       (is (= :insights/bad-arg (bad {:groups ["g"] :query "  "})))
       (is (= :insights/bad-arg (bad {:groups ["g"] :query "fields x" :since "1h" :until "2h"})))
-      (is (= :session/none (try (call "logs.insights" {:ws "default" :env "dlbremote" :groups ["g"] :query "fields x" :session nil} (atom []))
-                                nil (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))) "no current session, no place for the answer")
       (testing "nothing was sent to the service"
         (is (not (.exists (io/file (str (aws/audit-path {:ws "default" :session "I-2"}))))))))))
 

@@ -78,7 +78,10 @@
     (is (= :insights/bad-arg (:type (boom {:groups [] :query "fields x"}))))
     (is (= :insights/bad-arg (:type (boom {:groups ["g"] :query " "}))))
     (is (= :insights/bad-arg (:type (boom {:groups ["g"] :query "fields x" :since "1h" :until "2h"}))))
-    (is (= :insights/bad-arg (:type (boom {:groups (vec (repeat 51 "g")) :query "fields x"}))))))
+    (is (= :insights/bad-arg (:type (boom {:groups (vec (repeat 51 "g")) :query "fields x"}))))
+    (testing "no session, no place for the answer: refused before any call"
+      (is (= :session/none (try (ins/query! {:ws "w"} {:name "dev" :kind :local :aws {}} {:groups ["g"] :query "fields x"}) nil
+                                (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))))))
 
 ;; --- the step line ------------------------------------------------------------------------------------------
 

@@ -9,7 +9,8 @@
   (what Insights bills for), `records-matched`, `records-scanned`, `rows`, `status`. `$` is
   `{status, statistics{bytesScanned ...}, results[{field: value}], raw[{op request response}]}`; the persisted
   `response.json` is that document and the step's display is the result text with the bytes scanned line. A query that
-  does not end `Complete` (failed, stopped over the step's timeout) is a step ERROR; the partial text is still written.
+  does not end `Complete` (failed, stopped over the step's budget) is a step ERROR; the budget is the step's timeout
+  (`@timeout`, default 10 minutes) minus two seconds, after which the query is stopped, not abandoned; the partial text is still written.
   The step needs a remote or emulated environment that answers CloudWatch Logs; Floci's Insights is a stub that answers
   `Failed`, so against `local` expect an ERROR with the service's words."
   (:require [clojure.data.json :as json]
