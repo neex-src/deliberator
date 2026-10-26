@@ -29,14 +29,13 @@ pwd | tr -d '\n'
 # @capture endpoint = $.env.aws.endpoint
 {"name": "local"}
 
-### op env.remove start-clean
-# A record an earlier run of this chapter left. Whether there was one does not matter.
-# @assert ok matches /^(true|false)$/
-{"name": "tour-remote"}
-
-### op env.remove start-clean-ro
-# @assert ok matches /^(true|false)$/
-{"name": "tour-readonly"}
+### shell start-clean
+# A record an earlier run of this chapter left. Whether there was one does not matter. (`dlb` removes it: an `op` step may not even
+# name a remote environment, which is the point of a later step.)
+# @cwd ..
+./cli/dlb env remove tour-remote --ws "$DLB_WS" >/dev/null 2>&1
+./cli/dlb env remove tour-readonly --ws "$DLB_WS" >/dev/null 2>&1
+echo "no tour-remote or tour-readonly record left"
 
 ### op env.create tour-remote
 # `dlb env create tour-remote --profile tour-remote --account 000000000000 --region eu-central-1 --read-only false --endpoint ...`.
@@ -100,12 +99,15 @@ if grep -rlqF -- "$value" "$DELIBERATOR_HOME/workspaces/$DLB_WS/sessions/$DLB_SE
 # @assert out contains to approve: dlb run tour/11-remote/write.scn
 # @assert out contains approved: OK  1 steps, 0 failed
 # @assert out contains used twice: the token is refused
+# @assert out contains the token is not in audit.log
 cmd=(./cli/dlb run tour/11-remote/write.scn --env tour-remote --ws "$DLB_WS" --session "$DLB_SESSION")
 first=$("${cmd[@]}" 2>&1); echo "$first"
 approve=$(printf '%s\n' "$first" | sed -n 's/^to approve: dlb //p')
 [ -n "$approve" ] || { echo "no 'to approve' line"; exit 1; }
 second=$(./cli/dlb $approve 2>&1); echo "approved: $(printf '%s\n' "$second" | grep -E '^(OK|FAILED) ')"
 third=$(./cli/dlb $approve 2>&1); printf '%s\n' "$third" | grep -qiE 'unknown, expired, already used' && echo "used twice: the token is refused"
+token=$(printf '%s\n' "$approve" | sed -n 's/.*--confirm \([^ ]*\).*/\1/p')
+[ -n "$token" ] && ! grep -rqF -- "$token" "$DELIBERATOR_HOME/workspaces/$DLB_WS/sessions/$DLB_SESSION/audit.log" && echo "the token is not in audit.log"
 
 ### shell read-only-is-refused-flat
 # `tour-readonly` has `:read-only true`: the same mutation gets no token at all.
@@ -124,21 +126,24 @@ third=$(./cli/dlb $approve 2>&1); printf '%s\n' "$third" | grep -qiE 'unknown, e
 ### shell the-audit-log
 # Every remote call of the session is one EDN line in sessions/<key>/audit.log: time, environment, account, service, operation,
 # class, outcome (ok, error, confirm-required, refused, confirmed), whether a confirmation was used, bytes and the sha of the request and
-# the response. Never a token, never a value.
+# the response. Never a token, never a value. (The log of the session grows with every tour of the day, so the counts are "at least".)
 # @cwd ..
-# @assert out contains confirm-required: 1
-# @assert out contains confirmation used: 1
-# @assert out contains refused read-only: 1
-# @assert out contains reads: 
-# @assert out contains no token and no secret in the log
+# @assert out contains audit: a confirmation was asked for
+# @assert out contains audit: a confirmation was used
+# @assert out contains audit: a mutation was refused as read-only
+# @assert out contains audit: the reads are there, class read
+# @assert out contains audit: the account was asked first
+# @assert out contains audit: no secret value in the log
 log="$DELIBERATOR_HOME/workspaces/$DLB_WS/sessions/$DLB_SESSION/audit.log"
-echo "lines: $(wc -l < "$log")"
-echo "confirm-required: $(grep -c ':outcome :confirm-required' "$log")"
-echo "confirmation used: $(grep -c ':confirmation :used' "$log")"
-echo "refused read-only: $(grep -c ':reason :read-only' "$log")"
-echo "reads: $(grep -c ':class :read' "$log")"
-if grep -qiE 'secretstring|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"? *:' "$log"; then echo "the log has a value or a token"; exit 1; fi
-echo "no token and no secret in the log"
+n() { grep -c -- "$1" "$log"; }
+[ "$(n ':outcome :confirm-required')" -ge 1 ] && echo "audit: a confirmation was asked for"
+[ "$(n ':confirmation :used')" -ge 1 ] && echo "audit: a confirmation was used"
+[ "$(n ':reason :read-only')" -ge 1 ] && echo "audit: a mutation was refused as read-only"
+[ "$(n ':class :read')" -ge 4 ] && echo "audit: the reads are there, class read"
+[ "$(n ':op "GetCallerIdentity"')" -ge 1 ] && echo "audit: the account was asked first"
+if grep -qi 'secretstring' "$log"; then echo "the log has a value"; exit 1; fi
+echo "audit: no secret value in the log"
+tail -n 3 "$log" | cut -c1-160
 
 ### shell clean-up
 # Floci is shared with the other chapters: take back the parameter the walk wrote.

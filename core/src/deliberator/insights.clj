@@ -153,8 +153,9 @@
         _ (when (empty? groups) (fail :insights/bad-arg "logs insights needs at least one log group" :hint "--groups /aws/lambda/fn (a log group name or a log/ target of the environment)"))
         _ (when (> (count groups) max-groups) (fail :insights/bad-arg (str "at most " max-groups " log groups per query")))
         _ (when (str/blank? query) (fail :insights/bad-arg "logs insights needs a query" :hint "e.g. fields @timestamp, @message | sort @timestamp desc | limit 20"))
-        t1 (if (str/blank? until) now (parse-instant until now))
-        t0 (parse-instant (if (str/blank? since) default-since since) now)
+        whole-s #(.truncatedTo ^Instant % java.time.temporal.ChronoUnit/SECONDS)   ; StartQuery takes epoch seconds
+        t1 (whole-s (if (str/blank? until) now (parse-instant until now)))
+        t0 (whole-s (parse-instant (if (str/blank? since) default-since since) now))
         _ (when-not (.isBefore t0 t1) (bad (str "the window is empty: since " t0 " is not before until " t1)))
         qfile (when name (save-query! ws sess name query))   ; persist first: the text is on disk before the service sees it
         started-ms (System/currentTimeMillis)
