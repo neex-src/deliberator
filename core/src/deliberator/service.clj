@@ -184,6 +184,9 @@
                        (get targets (keyword "log" (role-label (:name d))))
                        (assoc :log-target (str "log/" (role-label (:name d)))
                               :log (get targets (keyword "log" (role-label (:name d))))))))
+                       (get-in e [:targets (keyword "log" (role-label (:name d)))])
+                       (assoc :log-target (str "log/" (role-label (:name d)))
+                              :log (get-in e [:targets (keyword "log" (role-label (:name d)))])))))
            descs))))
 
 (defn show
