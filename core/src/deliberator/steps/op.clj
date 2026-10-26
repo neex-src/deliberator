@@ -79,7 +79,6 @@
   (let [op (:verb step)
         host (or (:host ctx) (throw (ex-info "op steps need the daemon (run the scenario through it)" {:type :op/no-daemon})))
         args (args-of ctx step op)
-        _ (refuse-remote-body! ctx op args)
         req (c/utf8 (pretty args))
         cancels (atom [])
         line! (or (:line! ctx) (fn [_]))
