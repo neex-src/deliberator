@@ -35,8 +35,8 @@ in 0.6 s)*. One repository, one plugin id, one distribution.
 | Concept | What it is | Persisted as |
 |---|---|---|
 | **Workspace** | The long-lived context: attached repositories, environments, runtime, topology, sessions. One IDE project is one workspace's window. | `workspaces/<ws>/workspace.edn` |
-| **Repository** | An attached checkout, recorded by `repo.attach` (name, path). A bare-clone store under `repos/<name>.git` is M5: planned, not built. | `workspace.edn :repos` |
-| **Worktree** | A disposable checkout of a repository at a branch or PR head; "start working" and "open PR" each make one and touch nothing else. M5: planned, not built. | `worktrees/<repo>/<name>/` (planned) |
+| **Repository** | A repository the workspace knows: an attached checkout (`repo.attach`: name, path) or a bare clone made by `repo.clone <url>` under `repos/<name>.git` (`:bare true`, the url, the default branch). | `workspace.edn :repositories`, `repos/<name>.git` |
+| **Worktree** | A disposable checkout of a repository: `worktree.start <repo> [branch]` fetches and branches from the latest main with no questions, `worktree.list|remove`. Git is its only state. "Open PR" (M5.5) makes one the same way. | `worktrees/<repo>/<name>/` |
 | **Session** | A unit of work, usually a ticket key. Owns every scenario, run, query, fetched log, config snapshot and scratch file made while it is current. Started and ended explicitly, never deleted, searchable. | `sessions/<key>/` |
 | **Environment** | Where operations go: `local` (Floci + Podman, fake credentials, an endpoint that may only be this machine or a private network: never AWS) or a remote (`dev`, `preprod`, …: a profile; read-only unless the record says `:read-only false`, then every mutation needs a confirmation). Also names the logical targets a scenario refers to (service base URLs, queues, tables, log sources, Postgres DSN). | `environments/<env>.edn` |
 | **Runtime** | Declarative desired state of the local infrastructure: Podman endpoint, network, Floci, Postgres, service containers. Reconciled lazily. | `runtime.edn` |
@@ -66,12 +66,17 @@ workspaces/<ws>/
   raw/sha256/<2>/<62>           raw/sha256/<2>/<62>.meta.edn
   raw/follow/                   a follow in progress, adopted into raw/ when it ends
   logs/services/<service>/<date>.log   logs/build/   logs/reload/
+  repos/<name>.git              bare clones (repo.clone); git fetches into refs/remotes/origin/*
+  worktrees/<repo>/<name>/      worktrees (worktree.start); the branch outlives the directory
+  github.edn                    optional: where the GitHub token comes from (never the token), the API base
   terraform-plugin-cache/
   sessions/<key>/
     session.edn  notes/  audit.log   (every remote call: time, env, op, bytes, confirmation)
     scenarios/*.scn
     logs/<target>-<ts>.log      one file per fetch or follow, hard-linked into raw/
     logs/insights-<name>-<ts>.txt   a Logs Insights answer as text, the bytes scanned in its header
+    ci/runs-<repo>-<workflow>-<ts>.txt   <repo>-<run>-<job>-<id>.log   diff-<repo>-<red>-vs-<green>-<job>.diff   requests.log
+                                GitHub Actions as text (ci.runs, ci.log|tail, ci.diff); every API response is a blob in raw/ first
     queries/<name>.insights     the text of a named Insights query     queries/<name>.scn   a named query: a one-step scenario
     config/                     config snapshots taken while the session was current
     runs/<yyyymmdd-hhmmss>-<scenario>/
@@ -83,8 +88,7 @@ workspaces/<ws>/
         request.*    response.*    display.txt    the bytes, byte-exact (hard links into raw/)
 ```
 
-Planned, not built: `repos/<name>.git` and `worktrees/<repo>/<name>/` (M5), `providers/<name>.edn`
-(M6). Cached views so far: `config/<env>.edn` and `cache/<env>/deployed.edn`; a named query is a
+Planned, not built: `providers/<name>.edn` (M6). Cached views so far: `config/<env>.edn` and `cache/<env>/deployed.edn`; a named query is a
 convention, not a concept: a one-step `.scn` under the session's `queries/` and `dlb runs list --scenario <name>` as its
 history.
 
