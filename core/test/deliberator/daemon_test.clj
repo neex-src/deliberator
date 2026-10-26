@@ -48,7 +48,7 @@
   `dlb` help and docs. Every other test derives its expectations from `ops/table`."
   ["hello" "op.describe" "daemon.stop" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "session.note" "session.start" "session.end" "session.list" "session.current"
    "config.chain" "config.refresh"
-   "env.list" "env.describe" "env.check" "env.save" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
+   "env.list" "env.describe" "env.check" "env.save" "env.create" "env.remove" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
    "aws.describe" "aws.discover" "terraform.drift" "terraform.local"
    "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "repo.attach" "repo.detach" "repo.list" "logs.fetch" "logs.match" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
 
@@ -508,6 +508,87 @@
                     (is (true? (:ok r)) (pr-str r))
                     (is (= "ok" (get-in r [:result :status])))))))
             (finally ((:stop! h)))))))))
+
+(defn- err [c op args] (:error (:terminal (tc/request c op args))))
+
+(deftest env-create-env-save-and-env-remove-offline
+  ;; the credentials cannot be fetched (no file, no CLI): a remote record is written only with `check false`
+  (tu/with-short-home
+    (binding [env/*credentials-file* (io/file (str (store/home)) "no-credentials")
+              env/*aws-cli* "/no/such/aws"]
+      (let [h (daemon/start! {:idle-minutes 0})]
+        (try
+          (with-client [c h]
+            (ok! c "workspace.open" {:ws "w1"})
+            (testing "the record is validated before anything is asked of AWS"
+              (is (= "env/invalid" (:type (err c "env.create" {:ws "w1" :name "dev" :profile "p" :account "12" :region "eu-central-1"}))))
+              (is (= "env/invalid" (:type (err c "env.create" {:ws "w1" :name "local" :profile "p" :account "123456789012" :region "r"})))
+                  "the name local is the local environment's")
+              (is (= "store/invalid-name" (:type (err c "env.create" {:ws "w1" :name "../x" :profile "p" :account "123456789012" :region "r"}))))
+              (is (= ["local"] (map :name (:environments (:result (ok! c "env.list" {:ws "w1"})))))))
+            (testing "a profile that cannot log in refuses the record, with the CLI's words and `aws sso login`"
+              (let [e (err c "env.create" {:ws "w1" :name "dev" :profile "dlbtest-sso" :account "123456789012" :region "eu-central-1"})]
+                (is (= "check-failed" (:type e)))
+                (is (re-find #"cannot be started" (:message e)) (pr-str e))
+                (is (re-find #"aws sso login --profile dlbtest-sso" (:hint e)) (pr-str e)))
+              (is (= ["local"] (map :name (:environments (:result (ok! c "env.list" {:ws "w1"}))))) "nothing written"))
+            (testing "check false writes it anyway (authoring offline): read-only by default"
+              (let [r (:result (ok! c "env.create" {:ws "w1" :name "dev" :profile "dlbtest-sso" :account "123456789012"
+                                                    :region "eu-central-1" :check false :description "dev account"}))]
+                (is (= {:env "dev" :kind "remote" :account "123456789012" :checked false :read-only true}
+                       (select-keys r [:env :kind :account :checked :read-only])))
+                (is (.isFile (io/file (:path r)))))
+              (let [rec (:env (:result (ok! c "env.describe" {:ws "w1" :name "dev"})))]
+                (is (= {:profile "dlbtest-sso" :region "eu-central-1" :account "123456789012"} (:aws rec)))
+                (is (= "dev account" (:description rec)))
+                (is (true? (:read-only rec)))))
+            (testing "an existing name is not overwritten by create; save replaces the whole record"
+              (is (= "env/exists" (:type (err c "env.create" {:ws "w1" :name "dev" :profile "p" :account "123456789012" :region "r" :check false}))))
+              (ok! c "env.save" {:ws "w1" :name "dev" :check false
+                                 :record {:kind "remote" :read-only false :aws {:profile "other" :region "eu-west-1" :account "123456789012"}
+                                          :targets {}}})
+              (is (= "other" (get-in (:env (:result (ok! c "env.describe" {:ws "w1" :name "dev"}))) [:aws :profile]))))
+            (testing "remove deletes the record and only the record; local stays"
+              (let [r (:result (ok! c "env.remove" {:ws "w1" :name "dev"}))]
+                (is (= {:removed "dev" :kind "remote"} (select-keys r [:removed :kind])))
+                (is (not (.exists (io/file (:path r))))))
+              (is (= "env/not-found" (:type (err c "env.remove" {:ws "w1" :name "dev"}))))
+              (is (= "env/protected" (:type (err c "env.remove" {:ws "w1" :name "local"}))))
+              (is (= ["local"] (map :name (:environments (:result (ok! c "env.list" {:ws "w1"}))))))))
+          (finally ((:stop! h))))))))
+
+(deftest-floci env-create-asks-the-profile-who-it-is-first
+  ;; a remote-shaped record on Floci (decision 09's trick): sts answers 000000000000
+  (tu/with-short-home
+    (with-profile
+      (let [h (daemon/start! {:idle-minutes 0})]
+        (try
+          (with-client [c h]
+            (ok! c "workspace.open" {:ws "w1"})
+            (testing "the wrong account is refused and nothing is written"
+              (let [e (err c "env.create" {:ws "w1" :name "dev" :profile "dlbtest" :region "eu-central-1" :endpoint fu/url
+                                           :account "111111111111"})]
+                (is (= "account-mismatch" (:type e)))
+                (is (= "111111111111" (:expected e)))
+                (is (= "000000000000" (:found e))))
+              (is (= ["local"] (map :name (:environments (:result (ok! c "env.list" {:ws "w1"})))))))
+            (testing "the right one is created, checked, read-only; env.check agrees"
+              (let [r (:result (ok! c "env.create" {:ws "w1" :name "dev" :profile "dlbtest" :region "eu-central-1" :endpoint fu/url
+                                                    :account "000000000000"}))]
+                (is (= {:env "dev" :kind "remote" :account "000000000000" :checked true :read-only true}
+                       (select-keys r [:env :kind :account :checked :read-only]))))
+              (is (true? (:ok (:result (ok! c "env.check" {:ws "w1" :name "dev"}))))))
+            (testing "a record saved over it with another account is checked again"
+              (let [e (err c "env.save" {:ws "w1" :name "dev"
+                                         :record {:kind "remote" :aws {:profile "dlbtest" :region "eu-central-1" :endpoint fu/url
+                                                                       :account "222222222222"}
+                                                  :targets {}}})]
+                (is (= "account-mismatch" (:type e))))
+              (is (= "000000000000" (get-in (:env (:result (ok! c "env.describe" {:ws "w1" :name "dev"}))) [:aws :account]))))
+            (testing "remove, and the next call on it fails as an unknown environment"
+              (ok! c "env.remove" {:ws "w1" :name "dev"})
+              (is (= "env/not-found" (:type (err c "env.check" {:ws "w1" :name "dev"}))))))
+          (finally ((:stop! h))))))))
 
 (deftest-floci a-run-on-a-remote-environment-checks-the-account-first
   (tu/with-short-home

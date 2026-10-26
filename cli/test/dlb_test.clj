@@ -479,3 +479,68 @@
     (let [f (slurp (str *home* "/workspaces/anything/environments/local.edn"))]
       (is (str/includes? f (or (System/getenv "DLB_TEST_FLOCI_URL") "http://localhost:19")) f)
       (is (not (str/includes? f ":4566"))))))
+
+(deftest env-create-and-env-remove
+  (dlb *home* "workspace" "open" "envs")
+  (let [create (fn [& more] (apply dlb *home* "env" "create" "dev" "--profile" "dlbtest-none" "--account" "123456789012"
+                                   "--region" "eu-central-1" "--ws" "envs" more))]
+    (testing "a bad account is refused before anything is asked of AWS"
+      (let [r (dlb *home* "env" "create" "dev" "--profile" "p" "--account" "12" "--region" "eu-central-1" "--ws" "envs")]
+        (is (= 2 (:exit r)))
+        (is (str/includes? (:err r) "env/invalid") (:err r))
+        (is (str/includes? (:err r) "12-digit") (:err r))))
+    (testing "--check false writes a read-only record without asking AWS (offline authoring)"
+      (let [r (create "--check" "false" "--description" "dev account")]
+        (is (= 0 (:exit r)) (:err r))
+        (is (str/includes? (:out r) "env: dev") (:out r))
+        (is (str/includes? (:out r) "read-only: true") (:out r))
+        (is (str/includes? (:out r) "checked: false") (:out r)))
+      (let [f (slurp (str *home* "/workspaces/envs/environments/dev.edn"))]
+        (is (str/includes? f ":profile \"dlbtest-none\"") f)
+        (is (str/includes? f ":read-only true") f)))
+    (testing "the bool flag: --read-only alone is true, --read-only false opens the confirmation flow"
+      (dlb *home* "env" "remove" "dev" "--ws" "envs")
+      (is (= 0 (:exit (create "--check" "false" "--read-only" "false"))))
+      (is (str/includes? (slurp (str *home* "/workspaces/envs/environments/dev.edn")) ":read-only false")))
+    (testing "the same name again is refused, with the way out"
+      (let [r (create "--check" "false")]
+        (is (= 2 (:exit r)))
+        (is (str/includes? (:err r) "dlb env remove dev") (:err r))))
+    (testing "without --check false a profile that cannot log in is refused, naming the profile and `aws sso login`"
+      (dlb *home* "env" "remove" "dev" "--ws" "envs")
+      (let [r (create)]
+        (is (= 2 (:exit r)))
+        (is (str/includes? (:err r) "check-failed") (:err r))
+        (is (str/includes? (:err r) "aws sso login --profile dlbtest-none") (:err r)))
+      (is (not (fs/exists? (str *home* "/workspaces/envs/environments/dev.edn")))))
+    (testing "remove: gone, once; local stays"
+      (create "--check" "false")
+      (let [r (dlb *home* "env" "remove" "dev" "--ws" "envs")]
+        (is (= 0 (:exit r)) (:err r))
+        (is (str/includes? (:out r) "removed: dev") (:out r)))
+      (is (= 2 (:exit (dlb *home* "env" "remove" "dev" "--ws" "envs"))))
+      (let [r (dlb *home* "env" "remove" "local" "--ws" "envs")]
+        (is (= 2 (:exit r)))
+        (is (str/includes? (:err r) "env/protected") (:err r))))))
+
+(deftest text-results-print-nested-rows-and-resources
+  ;; B14: the shapes of `aws discover` and `config chain` (rows of maps with nested maps) print every row and every resource
+  (let [out (with-out-str
+              (render/print-result "aws.discover" {:env "local" :errors []
+                                                   :resources {:queue [{:name "q1" :ref "http://q1"} {:name "q2" :ref "http://q2"}]
+                                                               :table []}}))]
+    (is (str/includes? out "resources:") out)
+    (is (str/includes? out "queue: 2") out)
+    (is (str/includes? out "name=q1 ref=http://q1") out)
+    (is (str/includes? out "name=q2 ref=http://q2") out))
+  (let [out (with-out-str
+              (render/print-result "config.chain"
+                                   {:service "a" :env "local"
+                                    :extra [{:taskdef {:name "X" :kind "env"} :parameter {:status "found" :name "/p/x"}}
+                                            {:taskdef {:name "Y" :kind "secret"}}]
+                                    :entries [{:placeholder "P" :file "/f" :internal false :taskdef {:name "Z"}}]}))
+        rows (filter #(str/starts-with? % "  ") (str/split-lines out))]
+    (is (str/includes? out "extra: 2") out)
+    (is (= 3 (count rows)) out)
+    (is (every? #(not (str/blank? %)) rows) "no blank rows")
+    (is (some #(str/includes? % "\"name\":\"X\"") rows) out)))
