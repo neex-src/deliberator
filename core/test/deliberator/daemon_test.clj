@@ -47,7 +47,7 @@
   `op-describe-lists-every-operation-with-its-schema` until the name is added here, on purpose, in the same commit as its
   `dlb` help and docs. Every other test derives its expectations from `ops/table`."
   ["hello" "op.describe" "daemon.stop" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "explore.write" "session.note" "session.start" "session.end" "session.list" "session.current"
-   "config.chain" "config.refresh"
+   "config.chain" "config.refresh" "deployed.refresh" "deployed.show" "logs.insights"
    "env.list" "env.describe" "env.check" "env.save" "env.create" "env.remove" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
    "aws.describe" "aws.discover" "terraform.drift" "terraform.local"
    "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "repo.attach" "repo.detach" "repo.list" "logs.fetch" "logs.match" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
