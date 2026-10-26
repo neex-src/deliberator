@@ -137,7 +137,8 @@
 (deftest help-names-every-op
   (let [table (json/parse-string (:out (dlb *home* "help" "--json")) true)
         txt (:out (dlb *home* "help"))]
-    (is (= 55 (count table)))
+    (is (= (count (:result (json-line (:out (dlb *home* "op" "describe" "--json"))))) (count table))
+        "help --json is the daemon's whole op table (the count itself is pinned once, in daemon-test/expected-ops)")
     (doseq [{:keys [op]} table]
       (is (str/includes? txt (str/replace op "." " ")) (str op " is in the help")))
     (is (= txt (:out (dlb *home*))) "no args = help")
@@ -175,8 +176,11 @@
     (is (every? :order table))
     (is (= ["a" "b" "session" "ws"] (:order (by "runs.diff"))))
     (is (str/includes? (:out (dlb *home* "help" "runs" "diff")) "dlb runs diff <a> <b>"))
-    (is (str/includes? (:out (dlb *home* "help" "runtime" "logs")) "dlb runtime logs <role> [--since string] [--follow] [--tail int] [--ws string]"))
-    (is (str/includes? (:out (dlb *home* "help" "scenario" "run")) "dlb scenario run <path> [--env string]"))))
+    ;; the positional head and one flag each, not the whole flag list: a new flag is not a change of order (R29)
+    (let [h (:out (dlb *home* "help" "runtime" "logs"))]
+      (is (str/includes? h "dlb runtime logs <role> [--"))
+      (is (str/includes? h "[--follow]")))
+    (is (str/includes? (:out (dlb *home* "help" "scenario" "run")) "dlb scenario run <path> [--"))))
 
 (deftest daemon-status-and-stop
   (let [h (new-home)]
@@ -346,20 +350,31 @@
     (is (false? (:ok m)))
     (is (= "scenario/not-found" (get-in m [:error :type])))))
 
-(defmethod clojure.test/report :skip [m] (println "SKIP" (:message m)))
-
 (deftest plain-scenario-when-the-runtime-is-up
   ;; The throwaway test home has no runtime and no Postgres target, so this can only run against a
-  ;; real estate: ESTATE_WS=<ws> and DELIBERATOR_HOME=<its home> (bb estate:up --ws <ws>).
+  ;; real estate: ESTATE_WS=<ws> and DELIBERATOR_HOME=<its home> (bb estate:up --ws <ws>). The scenario is the plain kinds on
+  ;; the estate's own targets (plain.scn names the targets of steps_test's private environment: log/pg, service/floci).
   (let [ws (System/getenv "ESTATE_WS")
         home (System/getenv "DELIBERATOR_HOME")]
     (if (or (str/blank? ws) (str/blank? home))
       (clojure.test/do-report {:type :skip :message "plain-scenario-when-the-runtime-is-up: set ESTATE_WS=<ws> and DELIBERATOR_HOME=<its home> after bb estate:up"})
       (try
         (dlb home "session" "start" "PLAIN" "--ws" ws)
-        (let [r (dlb home "run" (str root "/core/test/fixtures/plain.scn") "--ws" ws)]
-          (is (#{0 1} (:exit r)) (str (:out r) (:err r)))
-          (is (re-find #"▶ 001" (:out r))))
+        (let [scn (str (fs/create-temp-file {:prefix "estate-plain" :suffix ".scn"}))
+              _ (spit scn (str "# the plain kinds in one run, on the targets of the estate's local environment\n"
+                               "# @env local\n# @var rowId = row-{{uuid}}\n\n"
+                               "### logs log/service-a service-a-log\n# @for 1s\n\n"
+                               "### sql db/main make-table\ncreate table if not exists plain_t (id text primary key, note text, n int)\n\n"
+                               "### http health\n# @assert status == 200\n# @assert header.content-type contains json\n# @assert bytes > 0\n"
+                               "GET {{service/a}}/actuator/health\nAccept: application/json\n\n"
+                               "### sql db/main insert\n# @assert updated == 1\ninsert into plain_t values ('{{rowId}}', 'first note', 7) /* {{correlation}} */\n\n"
+                               "### sql db/main select\n# @assert rows == 1\n# @assert col.note == first note\n# @assert col.n == 7\n"
+                               "select id, note, n from plain_t where id = '{{rowId}}'\n\n"
+                               "### wait pause\n# @for 1s\n"))
+              r (dlb home "run" scn "--ws" ws)]
+          (is (zero? (:exit r)) (str (:out r) (:err r)))
+          (is (re-find #"▶ 001" (:out r)))
+          (is (some #(str/starts-with? % "OK ") (str/split-lines (:out r))) "the four plain kinds pass against the estate"))
         (finally (stop-daemon! home))))))
 (deftest ide-ops-take-shell-relative-paths
   (testing "scenario parse, repo attach and marker add send existing relative paths absolute"
@@ -376,8 +391,11 @@
     (let [m (json-line (:out (dlb *home* "marker" "list" "--json")))]
       (is (= [(str (fs/normalize root) "/cli/test/fixtures/wait.scn")] (map :file (:result m))))))
   (testing "help reads well for the new areas"
-    (is (str/includes? (:out (dlb *home* "help" "logs" "fetch")) "dlb logs fetch <target> [--env string] [--since string] [--for string] [--follow] [--filter string] [--session string] [--ws string]"))
-    (is (str/includes? (:out (dlb *home* "help" "marker" "add")) "dlb marker add <file> <line> [--logger string]"))
+    (let [h (:out (dlb *home* "help" "logs" "fetch"))]
+      (is (str/includes? h "dlb logs fetch <target> [--"))
+      (is (str/includes? h "[--since string]"))
+      (is (str/includes? h "[--follow]")))
+    (is (str/includes? (:out (dlb *home* "help" "marker" "add")) "dlb marker add <file> <line> [--"))
     (is (str/includes? (:out (dlb *home* "help" "repo")) "dlb repo attach <path>"))
     (is (str/includes? (:out (dlb *home* "help" "scenario")) "dlb scenario kinds"))))
 
@@ -421,8 +439,7 @@
   "Runs argv with DELIBERATOR_NO_DEFAULT_HOME set and no home anywhere. -> {:exit :out :err}"
   [& argv]
   (select-keys (apply p/shell {:out :string :err :string :continue true
-                               :extra-env {"DELIBERATOR_NO_DEFAULT_HOME" "1"}
-                               :remove-env ["DELIBERATOR_HOME"]}
+                               :env (-> (into {} (System/getenv)) (dissoc "DELIBERATOR_HOME") (assoc "DELIBERATOR_NO_DEFAULT_HOME" "1"))}
                       argv)
                [:exit :out :err]))
 

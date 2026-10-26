@@ -3,7 +3,7 @@
   `logs`. A cancelled run mid-`logs` leaves a closed run, a 5 MB blob is described not shipped, a
   scenario path may point anywhere, parallel runs on one session get their own directories, a run
   diffs equal to itself, a protocol line that cannot be parsed still gets an answer, a long run is
-  not an idle daemon. Tests tagged `^:known-bug` run with `clojure -M:test:known-bugs`."
+  not an idle daemon."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]

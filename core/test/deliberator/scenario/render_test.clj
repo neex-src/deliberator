@@ -9,6 +9,7 @@
             [deliberator.store :as store]
             [deliberator.test-util :as t]))
 
+(use-fixtures :once fake/with-kinds)
 (use-fixtures :each (fn [f] (fake/reset-state!) (f)))
 
 (def env {:name "local" :kind :local})

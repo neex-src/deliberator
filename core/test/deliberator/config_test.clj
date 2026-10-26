@@ -58,11 +58,18 @@
 
 (def ^:private estate (io/file "../estate/terraform/modules/stack"))
 
+(defn- line-of
+  "The 1-based number of the first line of `text` that matches `re` (the estate's files move; the expectation follows them)."
+  [text re]
+  (first (keep-indexed (fn [i l] (when (re-find re l) (inc i))) (str/split-lines text))))
+
 (deftest tftpl-and-main-tf-of-the-estate
   (testing "the estate's template renders from maps: the line is the loop's entry line, no literal names"
-    (let [t (src/tftpl (slurp (io/file estate "taskdef.json.tftpl")))]
+    (let [text (slurp (io/file estate "taskdef.json.tftpl"))
+          t (src/tftpl text)]
       (is (= {} (:literals t)))
-      (is (= {:env 9 :secret 14} (:loops t)))))
+      (is (= {:env (inc (line-of text #"for k, v in environment")) :secret (inc (line-of text #"for k, v in secrets"))} (:loops t))
+          "the loop's entry line is the one after its %{ for }")))
   (testing "a template with literal entries gives their lines"
     (let [t (src/tftpl "{\n \"environment\": [\n  { \"name\": \"REGION\", \"value\": \"eu\" }\n ],\n \"secrets\": [\n  { \"name\": \"KEY\", \"valueFrom\": \"/p/key\" }\n ]\n}")]
       (is (= {"REGION" {:kind :env :line 3 :value "eu"} "KEY" {:kind :secret :line 6 :value-from "/p/key"}} (:literals t)))))
@@ -70,11 +77,11 @@
     (let [text (slurp (io/file estate "main.tf"))
           a (src/main-tf text "a")
           b (src/main-tf text "b")]
-      (is (= {:kind :secret :line 282 :expr "local.ssm_arn[\"common/table-name\"]" :literal? false} (get a "TABLE_NAME")))
-      (is (= {:kind :env :line 280 :expr "var.auto_publish" :literal? false} (get a "APP_AUTO_PUBLISH")))
+      (is (= {:kind :secret :line (line-of text #"TABLE_NAME\s*=") :expr "local.ssm_arn[\"common/table-name\"]" :literal? false} (get a "TABLE_NAME")))
+      (is (= {:kind :env :line (line-of text #"APP_AUTO_PUBLISH\s*=") :expr "var.auto_publish" :literal? false} (get a "APP_AUTO_PUBLISH")))
       (is (= "aws_secretsmanager_secret.api_key.arn" (:expr (get b "API_KEY"))))
       (is (= #{"DB_URL" "DB_USER" "DB_PASSWORD" "EVENTS_QUEUE" "SERVICE_A_URL" "API_KEY"} (set (keys b))))
-      (is (= 273 (:line (src/main-tf-name text "AWS_REGION"))))))
+      (is (= (line-of text #"AWS_REGION\s*=") (:line (src/main-tf-name text "AWS_REGION"))))))
   (testing "literals"
     (let [m (src/main-tf "locals {\n  svc = {\n    x = {\n      secrets = {\n        K = \"/p/k\"\n        N = 3\n        E = var.e\n      }\n    }\n  }\n}\n" "x")]
       (is (= {"K" {:kind :secret :line 5 :expr "\"/p/k\"" :literal? true :value "/p/k"}

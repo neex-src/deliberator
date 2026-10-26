@@ -4,8 +4,7 @@
   `DLB_TEST_PG_PORT` (default 15432); each test skips with a message when Floci is down. Resources are prefixed `dlbaudit-` and
   removed. What it adds to the per-kind tests: the raw store is complete and intact after every kind
   has run, a 200 KB SQS body, `@until` and cancel against a real long poll, a confirmed re-run
-  through the daemon on a remote-shaped environment, a token that is used twice. Tests tagged
-  `^:known-bug` describe behaviour the product does not have yet (`clojure -M:test:known-bugs`)."
+  through the daemon on a remote-shaped environment, a token that is used twice."
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]

@@ -2,8 +2,7 @@
   "Audit of M2, layer 1 (the core ops added for the IDE), odd inputs the per-piece tests do not try: marker arguments that
   make no sense, error messages that quote non-ASCII text, a 5 000-step `scenario.parse`, a pathological log line and a
   200 000-line log through `markers/match-lines`, a bad regex filter, the same directory spelt three ways, `runs.list` with regex
-  characters. Tests tagged `^:known-bug` describe behaviour the product does not have yet; they are excluded from
-  `clojure -M:test` and run with `clojure -M:test:known-bugs`."
+  characters."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]

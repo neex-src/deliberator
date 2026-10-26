@@ -2,13 +2,11 @@
   "Audit of M1, layer 1 (no runtime): the odd inputs of docs/plans/m1-test-report.md that need no
   container. Parser corners, an empty scenario, CRLF files, `{{` that is not a variable, `@until` that
   cannot hold, a scenario outside the session and outside the repo, a 200 KB body through `http`, a
-  run diffed against itself, a `:local` record with a `:profile` on disk. Tests tagged `^:known-bug`
-  describe correct behaviour the product does not have yet; they are excluded from `clojure -M:test`
-  and run with `clojure -M:test:known-bugs`."
+  run diffed against itself, a `:local` record with a `:profile` on disk."
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [deliberator.env :as env]
             [deliberator.fake-kind :as fake]
             [deliberator.scenario.engine :as engine]
@@ -29,6 +27,8 @@
 (defn- head [s] (subs s 0 (min 300 (count s))))
 
 (def local {:name "local" :kind :local})
+
+(use-fixtures :once fake/with-kinds)
 
 (defn- run-text!
   "Writes `text` (a string or bytes) to a scenario file called `fname` under the temp home and runs it."
