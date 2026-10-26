@@ -49,7 +49,7 @@
   ["hello" "op.describe" "daemon.stop" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "explore.write" "session.note" "session.start" "session.end" "session.list" "session.current"
    "audit.show" "config.chain" "config.refresh" "deployed.refresh" "deployed.show" "logs.insights"
    "env.list" "env.describe" "env.check" "env.save" "env.create" "env.remove" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
-   "aws.describe" "aws.discover" "terraform.drift" "terraform.local"
+   "aws.describe" "aws.discover" "terraform.drift" "terraform.local" "terraform.graph" "terraform.apply-all" "terraform.locate"
    "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "repo.attach" "repo.detach" "repo.list" "logs.fetch" "logs.match" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
 
 ;; --- lifecycle ----------------------------------------------------------------------------------
