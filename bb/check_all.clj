@@ -45,7 +45,7 @@
   (let [row (fn [stage ok? detail] {:stage stage :ok? ok? :secs secs :detail (or detail "")})]
     (case name
       "core:test:all"
-      (let [pass (fn [p] (second (find-line lines (re-pattern (str "^== pass " p ": (.*)$")))))
+      (let [pass (fn [p] (second (find-line lines (re-pattern (str "^== pass " p ": (exit .*)$")))))
             a (pass "A") b (pass "B")
             skipped (fn [s] (some-> (re-find #"(\d+) skipped" (str s)) second parse-long))]
         [(row "core:test pass A" (boolean (some-> a (str/starts-with? "exit 0"))) a)
