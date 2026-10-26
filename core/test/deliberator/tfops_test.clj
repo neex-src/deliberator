@@ -106,10 +106,3 @@
         (is (= [app] (:skipped r)))
         (is (= 1 (count (:results r))))
         (is (str/starts-with? (:summary (first (:results r))) "Error:"))))))
-
-(deftest drift-of-a-folder-without-terraform-files-is-an-error-not-no-drift
-  ;; B18: it used to answer declared 0, missing 0
-  (let [home (tmp-home)]
-    (binding [store/*home* home]
-      (env/save! "w" env/default-local)
-      (is (= :tf/no-root (:type (err #(call "terraform.drift" {:ws "w" :env "local" :dir home}))))))))

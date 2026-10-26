@@ -67,7 +67,7 @@
     terraform.locate root* address*                 -> {file line address root}   (where a drift row's address is declared)
     terraform.graph roots* ws                       -> {roots[{name dir}] edges[{from to via ref file line}] order[dir] unresolved[]}   (reads .tf files, evaluates nothing)
     terraform.apply-all roots* action env vars ws   -> {action env order ok failed skipped results[{dir ok exit summary sha path}]}   [tf.root tf.line]
-    terraform.locate root* address* ws              -> {file line address root}   (where a drift row's address is declared)
+    terraform.locate root* address*                 -> {file line address root}   (where a drift row's address is declared)
     aws.describe service* op*                      -> {service op class input}   (input = shape tree: type required members member enum)
     scenario.parse path text ws                    -> {header steps errors}   (a syntax error is data in errors, not an op error)
     runs.list ws session scenario limit            -> {session runs}
