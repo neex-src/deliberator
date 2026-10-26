@@ -36,7 +36,7 @@
     daemon.stop                                    -> {stopping pid runs}   (the daemon exits a moment later)
     runtime.sync-env ws                            -> {ws path}
     service.adopt path* taskdef name jdwp ws       -> {name created path repo module from}
-    service.list env ws                            -> [{name kind repo module port jdwp image mode [url] status}]
+    service.list env ws                            -> [{name kind repo module port jdwp image mode [url] status container [log-target log]}]
     topology.show env* ws                          -> {env services hash}
     topology.set env* name* mode* url container-url log-container ws -> as show + {dependents}
     service.show name* ws                          -> the description + {status container runtime}
@@ -697,6 +697,10 @@
 
 (defn- terraform-drift [ctx {:keys [env file dir plan] :as args}]
   (let [ws (ws-of args) env-name (or env "local")]
+    (when (and dir (not file)
+               (not-any? #(let [n (.getName ^java.io.File %)] (or (str/ends-with? n ".tf") (str/ends-with? n ".tf.json")))
+                         (or (.listFiles (io/file (str dir))) [])))
+      (fail :tf/no-root (str "no Terraform files in " dir) :dir (str dir)))      ; B18: a wrong folder is not "no drift"
     (verify-remote! ctx ws env-name)
     (tfdrift/drift! ws env-name (cond-> {} file (assoc :file file) dir (assoc :dir dir) plan (assoc :plan plan)))))
 
@@ -978,7 +982,7 @@
                                      :env {:type :string :doc "environment name; default local"})}
    "service.list" {:fn service-list :class :read
                    :args (ws-schema :env {:type :string :doc "environment whose topology gives the mode; default local"})
-                   :doc "The services of the workspace with kind, repository, module, ports, image, mode (local, external with its url, off) and runtime status."}
+                   :doc "The services of the workspace with kind, repository, module, ports, image, mode (local, external with its url, off) and runtime status, their runtime container and the log/ target of the environment for them (log-target, e.g. log/service-a, and log, its value: a container or a CloudWatch group)."}
    "topology.show" {:fn topology-show :class :read
                     :args (ws-schema :env {:type :string :required true :doc "environment name"})
                     :doc "The mode of every service in an environment: {services {name {mode [url]}} hash}. local is the container (url = its host URL), external is served from a URL, off is not available."}
