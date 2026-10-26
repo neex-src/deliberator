@@ -7,7 +7,8 @@
 
   Chapter 11 runs against `tour-remote`, a remote-shaped record at the tour's Floci: its profile `tour-remote` (fake keys, the
   emulator's) is written to `<home>/tour-aws-credentials`, which the daemon this task starts gets as `AWS_SHARED_CREDENTIALS_FILE`
-  (a daemon that is already running keeps its own environment; chapter 11's first step says so).
+  (a daemon that is already running keeps its own environment: when chapter 11 is in the run and the running daemon of this home does
+  not have the file, it is stopped and replaced; `/proc/<pid>/environ` says).
 
   Environment, all optional: `DELIBERATOR_HOME` (default `<repo>/.scratch/tour-home`, the home of `bb tour:ide`), `DELIBERATOR_JAR` (default
   core/target/deliberatord.jar, built when missing), `DLB_DAEMON_ARGS` (default `--idle-minutes 15`). Run from the repository
@@ -35,6 +36,14 @@
     (fs/create-dirs home)
     (spit (str f) "[tour-remote]\naws_access_key_id = test\naws_secret_access_key = test\n")
     (str f)))
+
+(defn- daemon-has-credentials?
+  "True when the daemon of `home` (the pid in its lock file) was started with `AWS_SHARED_CREDENTIALS_FILE=<creds>`."
+  [home creds]
+  (try (let [pid (str/trim (slurp (str (fs/path home "daemon" "lock"))))
+             environ (slurp (str "/proc/" pid "/environ"))]
+         (boolean (some #(= (str "AWS_SHARED_CREDENTIALS_FILE=" creds) %) (str/split environ #"\u0000"))))
+       (catch Exception _ false)))
 
 (defn- today [] (.format (java.time.LocalDate/now java.time.ZoneOffset/UTC) (java.time.format.DateTimeFormatter/BASIC_ISO_DATE)))
 
@@ -73,7 +82,14 @@
         home (home)
         dlb (str (fs/absolutize "cli/dlb"))
         files (chapters args)
-        pre-existing? (boolean (when-let [c (endpoint/connect-existing home)] (dlb.client/close! (:channel c)) true))
+        creds (credentials-file! home)
+        running? (boolean (when-let [c (endpoint/connect-existing home)] (dlb.client/close! (:channel c)) true))
+        ;; chapter 11 needs the daemon to see the profile `tour-remote`: a running daemon without it is replaced
+        replace? (and running? (some #(re-find #"/11-" %) files) (not (daemon-has-credentials? home creds)))
+        _ (when replace?
+            (println "the daemon of" home "was not started with the tour's credentials file (chapter 11 needs the profile tour-remote): stopping it, `bb tour` starts its own")
+            (stop-daemon! home))
+        pre-existing? (and running? (not replace?))
         t0 (System/nanoTime)]
     (when (empty? files) (println "no chapter matches" (str/join " " args)) (System/exit 2))
     (core-build/ensure-jar!)
@@ -81,7 +97,7 @@
       (let [env {"DELIBERATOR_HOME" home
                  "DELIBERATOR_JAR" (or (System/getenv "DELIBERATOR_JAR") (str (fs/absolutize "core/target/deliberatord.jar")))
                  "DLB_DAEMON_ARGS" (or (System/getenv "DLB_DAEMON_ARGS") "--idle-minutes 15")
-                 "AWS_SHARED_CREDENTIALS_FILE" (credentials-file! home)}
+                 "AWS_SHARED_CREDENTIALS_FILE" creds}
             session (str "TOUR-" (today))
             _ (p/shell {:extra-env env :out :string} dlb "workspace" "open" ws)
             _ (p/shell {:extra-env env :out :string} dlb "session" "start" session "--ws" ws)

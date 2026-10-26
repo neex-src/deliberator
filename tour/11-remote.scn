@@ -6,7 +6,8 @@
 # all of it without leaving the machine: the record `tour-remote` is remote in every respect except its `:endpoint`, which
 # points at the Floci of this tour (the test hook of decision 53; the real endpoint is the profile's region). Static keys
 # come from the profile `tour-remote` of the credentials file `bb tour` writes next to the home and hands the daemon it starts
-# (`AWS_SHARED_CREDENTIALS_FILE`); a daemon that was already running does not have it, and the first step says so.
+# (`AWS_SHARED_CREDENTIALS_FILE`; `bb tour` replaces a running daemon of this home that lacks it). A daemon started any other way
+# (the IDE's, a `dlb` of yours) does not have the profile: `env.create` below then says `check-failed`; `dlb daemon stop` and run `bb tour --only 11`.
 # The real account (a sandbox AWS account) is checked by hand: docs/walkthrough.md, a sandbox AWS account chapter.
 #
 # A run has one environment, so this chapter (local) writes the records with `op` steps and then runs three small scenarios
@@ -40,7 +41,7 @@ echo "no tour-remote or tour-readonly record left"
 ### op env.create tour-remote
 # `dlb env create tour-remote --profile tour-remote --account 000000000000 --region eu-central-1 --read-only false --endpoint ...`.
 # The record is written only after STS has said which account the profile is in (Floci's is 000000000000): `checked` is true.
-# If this step fails with `check-failed`, the daemon does not see the profile: stop it (`dlb daemon stop`) and let `bb tour` start it.
+# If this step fails with `check-failed`, the daemon does not see the profile (see the top of this file).
 # @assert $.kind == remote
 # @assert $.checked == true
 # @assert $.read-only == false
