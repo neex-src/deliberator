@@ -55,6 +55,7 @@
                   (is (re-matches stamped (str (:version r))))
                   (is (= (.pid ^Process (:proc d)) (:pid r))))
                 (is (= (count ops/table) (count (:result (:terminal (tc/request c "op.describe" {}))))) "the AOT jar carries the whole op table")
+                (is (= 55 (count (:result (:terminal (tc/request c "op.describe" {}))))))
                 (tc/request c "session.start" {:key "J-1"})
                 (let [f (io/file home "w.scn")
                       _ (spit f "### wait one\n# @for 100ms\n")

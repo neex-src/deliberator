@@ -31,6 +31,7 @@
     env.save name* record* check ws                -> {env kind path [account checked read-only]}   (the one way to write environments/<name>.edn: env/validate; a remote record is written only when its profile is in its account)
     env.create name* profile* account* region* read-only description endpoint targets check ws -> as env.save   (a remote record from flags; refuses an existing name)
     env.remove name* ws                            -> {removed kind path}   (not `local`)
+    env.save name* record* ws                      -> {env kind path}   (the one way to write environments/<name>.edn: env/validate)
     runtime.set path* value* ws                    -> {ws path keys value}   (one value of runtime.edn by key path, then sync-env)
     daemon.stop                                    -> {stopping pid runs}   (the daemon exits a moment later)
     runtime.sync-env ws                            -> {ws path}
@@ -387,6 +388,12 @@
       (swap! c (fn [s] (into #{} (remove (fn [k] (and (= (store/ws-name ws) (first k)) (= (:name e) (nth k 2))))) s))))
     {:removed (:name e) :kind (:kind e)
      :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
+(defn- env-save [_ {:keys [name record] :as args}]
+  (let [ws (ws-of args)
+        r (-> (keywordize record) (assoc :name name))
+        r (cond-> r (string? (:kind r)) (update :kind keyword))
+        e (env/save! ws r)]
+    {:env (:name e) :kind (:kind e) :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
 
 (defn- runtime-set [_ {:keys [path value] :as args}]
   (runtime/set-config! (ws-of args)
@@ -707,6 +714,14 @@
     (verify-remote! ctx ws env-name)
     (logfetch/fetch! ws env-name target :session (session-key ws args) :since since :for for :filter filter
                      :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))))
+  (let [ws (ws-of args)
+        follow? (boolean (or follow (= "until-cancelled" (some-> for str str/trim str/lower-case))))
+        counter (when follow? (:follows (:daemon ctx)))]   ; an active follow is work in flight (hello :runs, R32)
+    (when counter (swap! counter inc))
+    (try
+      (logfetch/fetch! ws (or env "local") target :session (session-key ws args) :since since :for for :filter filter
+                       :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))
+      (finally (when counter (swap! counter dec))))))
 
 (defn- marker-add [_ {:keys [file line logger] :as args}] (markers/add! (ws-of args) file line :logger logger))
 (defn- marker-remove [_ {:keys [file line] :as args}] (markers/remove! (ws-of args) file line))
@@ -839,6 +854,7 @@
    "env.remove" {:fn env-remove :class :mutate
                  :doc "Deletes environments/<name>.edn (not `local`: it follows runtime.edn). What was fetched through it (config/<name>.edn, raw/, session runs) stays."
                  :args (ws-schema :name {:type :string :required true :doc "environment name"})}
+                                :record {:type :object :required true :doc "the environment record (kind, aws, targets, ...)"})}
    "runtime.set" {:fn runtime-set :class :mutate
                   :doc "Sets one value of the workspace's runtime.edn by key path (the file is created with the defaults when absent) and points the local environment at the result, as runtime.sync-env does; e.g. path containers,postgres,init value /repo/estate/sql. A path element of digits is a number key (ports)."
                   :args (ws-schema :path {:type :strings :required true :doc "key path into runtime.edn, e.g. containers,postgres,init"}

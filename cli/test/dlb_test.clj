@@ -139,6 +139,7 @@
         txt (:out (dlb *home* "help"))]
     (is (= (count (:result (json-line (:out (dlb *home* "op" "describe" "--json"))))) (count table))
         "help --json is the daemon's whole op table (the count itself is pinned once, in daemon-test/expected-ops)")
+    (is (= 55 (count table)))
     (doseq [{:keys [op]} table]
       (is (str/includes? txt (str/replace op "." " ")) (str op " is in the help")))
     (is (= txt (:out (dlb *home*))) "no args = help")
