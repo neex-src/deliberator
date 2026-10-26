@@ -26,13 +26,16 @@
       (io/make-parents p)
       (spit p (str "{:at #inst \"2026-10-26T10:00:00Z\" :env \"dev\" :service :ssm :op \"GetParameter\" :outcome :ok}\n"
                    "{:at #inst \"2026-10-26T10:00:01Z\" :env \"dev\" :service :ssm :op \"PutParameter\" :outcome :confirm-required}\n"
-                   "{:at #inst \"2026-10-26T10:00:02Z\" :env \"dev\" :service :ssm :op \"PutParameter\" :outcome :confirmed :confirmation :used}\n"
+                   "{:at #inst \"2026-10-26T10:00:02Z\" :env \"dev\" :service :ssm :op \"PutParameter\" :outcome :ok :confirmation :used}\n"
                    "{:at #inst \"2026-10-26T10:00:03Z\" :env \"dev\" :service :sqs :op \"DeleteQueue\" :outcome :refused :reason :read-only}\n"))
       (let [r (call "audit.show" {:ws "w" :session k})]
         (is (true? (:exists r)))
         (is (= 4 (:count r)))
-        (is (= {"ok" 1 "confirm-required" 1 "confirmed" 1 "refused" 1} (:outcomes r)))
+        (is (= {"ok" 2 "confirm-required" 1 "refused" 1} (:outcomes r)))
+        (is (= 1 (:confirmed r)) "the call that went through with a confirmation")
+        (is (= "used" (:confirmation (nth (:lines r) 2))))
+        (is (= "read-only" (:reason (nth (:lines r) 3))))
         (is (= [1 2 3 4] (map :n (:lines r))))
-        (is (= ["confirm-required" "confirmed"] (map :outcome (subvec (:lines r) 1 3))))
+        (is (= ["confirm-required" "ok"] (map :outcome (subvec (:lines r) 1 3))))
         (is (= "PutParameter" (:op (second (:lines r)))))
         (is (= (str p) (:path r)))))))
