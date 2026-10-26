@@ -156,7 +156,10 @@
     (if (seq rp) rp (get-in (runtime/read-config ws) [:services (:name d) :ports]))))
 
 (defn list
-  "`[{:name :kind :repo :module :port :jdwp :image :mode [:url] :status}]`; `:mode` is the service's mode in
+  "`[{:name :kind :repo :module :port :jdwp :image :mode [:url] :status :container [:log-target :log]}]`; `:container` is the
+  service's runtime container (the runtime's row, else the name it would get), `:log-target` the `log/` target of `env-name`
+  for it (`log/service-a`) and `:log` that target's value (`{:container}` or `{:cloudwatch}`; absent when the environment has
+  none) (M6.4: the explorer links an ECS service or a log group to both); `:mode` is the service's mode in
   environment `env-name` (default local): local, external (with its `:url`) or off. `:status` is the runtime's.
   `:port` and `:jdwp` are host ports (`runtime.edn :services <name> :ports` applied), the description's when unchanged;
   `:container-port` and `:container-jdwp` are the description's (the IDE joins them with the runtime row's port map)."
@@ -172,8 +175,14 @@
                                         (:jdwp d) (assoc :jdwp (host-port hp (:jdwp d)) :container-jdwp (:jdwp d))))
                                     {:image (or (:image d) description/default-image)
                                      :mode (clojure.core/name (env/service-mode e (:name d)))
-                                     :status (:status (status-row ws d rows))})
-                       (= :external (:mode ent)) (assoc :url (:url ent)))))
+                                     :status (:status (status-row ws d rows))
+                                     :container (or (:name (when (map? rows) (get rows (role-label (:name d)))))
+                                                    (store/container-name ws (role-label (:name d))))})
+                       (= :external (:mode ent)) (assoc :url (:url ent))
+                       ;; the `log/` target of the environment for this service (a container or a CloudWatch group), M6.4
+                       (get-in e [:targets (keyword "log" (role-label (:name d)))])
+                       (assoc :log-target (str "log/" (role-label (:name d)))
+                              :log (get-in e [:targets (keyword "log" (role-label (:name d)))])))))
            descs))))
 
 (defn show

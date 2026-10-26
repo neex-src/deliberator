@@ -48,3 +48,10 @@ output "schedule_group" { value = module.stack.schedule_group }
 output "scheduler_create_function" { value = module.stack.scheduler_create_function }
 output "ecs_scale_function" { value = module.stack.ecs_scale_function }
 output "ecs_service" { value = module.stack.ecs_service }
+
+# Looked up by name in the IAM root (../iam), which must be applied first in the account: the edge `terraform.graph` reads.
+data "aws_iam_role" "shared" {
+  name = "estate-shared"
+}
+
+output "shared_role_arn" { value = data.aws_iam_role.shared.arn }

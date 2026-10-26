@@ -18,7 +18,7 @@
 
     hello client version                           -> {version pid home endpoint protocol runs scenario-runs follows compatible}   (runs = work in flight: scenario runs + log follows)
     op.describe                                    -> [{op class doc args order events}]   (order = argument names as declared)
-    workspace.open path ws                         -> {ws dir project created}   (the one op that creates a workspace on purpose)
+    workspace.open path account ws                 -> {ws dir project created account}   (the one op that creates a workspace on purpose)
     workspace.show ws                              -> {ws path workspace environments}   (reading ops: unknown ws is workspace/not-found)
     session.note name* text* session ws            -> {path}
     explore.write name* text* if-missing ws        -> {path created written}   (<workspace project>/explore/<name>, for the IDE's explorer)
@@ -61,7 +61,10 @@
     scenario.kinds                                 -> [{kind verbs verb-optional target directives facts capture-roots concurrent default-timeout-ms}]
     aws.discover env ws                            -> {env resources{kind [{name ref}]} errors}
     terraform.drift env file dir plan ws           -> {env source region declared matching missing[] undeclared[] errors}
-    terraform.local dir* action env vars ws         -> {action dir env ok exit summary sha path output vars}   [tf.line]   (action vars: {action dir env vars} only)
+    terraform.local dir* action env vars ws         -> {action dir env ok exit summary sha path output vars [override warnings]}   [tf.line]   (action vars: {action dir env vars} only; override: writes the override file, runs nothing)
+    terraform.graph roots* ws                       -> {roots[{name dir}] edges[{from to via ref file line}] order[dir] unresolved[]}   (reads .tf files, evaluates nothing)
+    terraform.apply-all roots* action env vars ws   -> {action env order ok failed skipped results[{dir ok exit summary sha path}]}   [tf.root tf.line]
+    terraform.locate root* address* ws              -> {file line address root}   (where a drift row's address is declared)
     aws.describe service* op*                      -> {service op class input}   (input = shape tree: type required members member enum)
     scenario.parse path text ws                    -> {header steps errors}   (a syntax error is data in errors, not an op error)
     runs.list ws session scenario limit            -> {session runs}
@@ -94,8 +97,10 @@
             [deliberator.env :as env]
             [deliberator.logfetch :as logfetch]
             [deliberator.awsdiscover :as awsdiscover]
+            [deliberator.hcl :as hcl]
             [deliberator.tfdrift :as tfdrift]
             [deliberator.tflocal :as tflocal]
+            [deliberator.tfroot :as tfroot]
             [deliberator.awsmodel :as awsmodel]
             [deliberator.markers :as markers]
             [deliberator.repo :as repo]
@@ -126,7 +131,7 @@
 (def ^:private error-keys
   [:hint :known :problems :line :token :summary :step :confirmations :result :expires :target :env
    :role :key :sha :schema :account :expected :found :log :exit :service :lines :errors
-   :of :names :sources :output :endpoint :command :ref])
+   :of :names :sources :output :endpoint :command :ref :cycle :edges :file])
 
 (defn error-map
   "The wire error of a throwable: `{:type :message [:hint ...]}`."
@@ -246,7 +251,7 @@
     (fail :workspace/not-found (str "no workspace " (store/ws-name ws))
           :hint "workspace.open creates it (dlb workspace open NAME); check the spelling of --ws")))
 
-(defn- workspace-open [_ {:keys [path] :as args}]
+(defn- workspace-open [_ {:keys [path account] :as args}]
   (let [ws (ws-of args)
         _ (store/ws-name ws)
         created (not (workspace-exists? ws))
@@ -256,10 +261,17 @@
         w (workspace/load ws)
         project (if path (str (.normalize (.toPath (io/file (str path))))) (str (store/path ws "project")))
         w (cond-> w path (assoc :project project))]
+    (when (and account (not (re-matches #"\d{12}" (str account))))
+      (fail :bad-args "workspace.open: account must be 12 digits" :problems ["account"]
+            :hint "the AWS account id the local runtime pretends to be (ARNs of the emulator carry it)"))
     (workspace/save! w)
-    (env/load ws "local")
+    (let [e (env/load ws "local")]
+      ;; M6.2: the real account id; the runtime hands it to Floci (FLOCI_DEFAULT_ACCOUNT_ID) on the next up
+      (when (and account (not= (str account) (get-in e [:aws :account])))
+        (env/save! ws (assoc-in e [:aws :account] (str account)))))
     (Files/createDirectories (.toPath (io/file project)) (make-array java.nio.file.attribute.FileAttribute 0))
-    {:ws (store/ws-name ws) :dir (str (store/path ws)) :project project :created created}))
+    {:ws (store/ws-name ws) :dir (str (store/path ws)) :project project :created created
+     :account (get-in (env/load ws "local") [:aws :account])}))
 
 (defn- session-note [_ {:keys [name text] :as args}]
   (let [ws (ws-of args)]
@@ -691,6 +703,40 @@
 (defn- terraform-local [ctx {:keys [env dir action vars] :as args}]
   (tflocal/run! (ws-of args) (or env "local") {:dir dir :action (or action "plan") :vars vars :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)}))
 
+(defn- terraform-graph [_ {:keys [roots]}]
+  (when-not (seq roots)
+    (fail :bad-args "terraform.graph: give at least one root directory" :problems ["roots"]))
+  (tfroot/graph roots))
+
+(defn- terraform-apply-all
+  "`terraform.local` of every root in the order `terraform.graph` finds (reverse for destroy), stopping at the first root that
+  fails; the roots after it are `:skipped`. Explicit `vars` go to the roots that declare them."
+  [ctx {:keys [roots env action vars] :as args}]
+  (when-not (seq roots)
+    (fail :bad-args "terraform.apply-all: give at least one root directory" :problems ["roots"]))
+  (let [ws (ws-of args)
+        action (or action "apply")
+        g (tfroot/graph roots)
+        order (if (= "destroy" action) (vec (reverse (:order g))) (:order g))
+        n (count order)]
+    (loop [[d & more :as todo] order results [] i 1]
+      (if (empty? todo)
+        {:action action :env (or env "local") :order order :edges (:edges g) :ok true :results results}
+        (do
+          (when-let [emit! (:emit! ctx)] (emit! {:event "tf.root" :dir d :index i :of n :action action}))
+          (let [r (tflocal/run! ws (or env "local") {:dir d :action action :vars vars :only-declared? true :siblings order
+                                                      :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)})
+                row (select-keys r [:ok :exit :summary :sha :path :warnings])
+                results (conj results (assoc row :dir d))]
+            (if (:ok r)
+              (recur more results (inc i))
+              {:action action :env (or env "local") :order order :edges (:edges g) :ok false :failed d :skipped (vec more) :results results})))))))
+
+(defn- terraform-locate [_ {:keys [root address]}]
+  (or (some-> (hcl/locate root address) (assoc :root (str root)))
+      (fail :tf/not-found (str "no declaration of " address " under " root)
+            :hint "the address is a drift row's: aws_sqs_queue.inbox, module.stack.aws_sqs_queue.inbox, data.aws_vpc.default")))
+
 (defn- aws-describe [_ {:keys [service op]}]
   (or (awsmodel/input service op)
       (fail :aws/unknown-operation (str "no operation " service "." op)
@@ -840,10 +886,11 @@
    "daemon.stop" {:fn daemon-stop :class :mutate :args {}
                   :doc "Stops the daemon gracefully: runs in flight are cancelled and finalised, endpoint, socket and lock are removed, the process exits. The answer comes first; the stop follows a moment later."}
    "workspace.open" {:fn workspace-open :class :mutate
-                     :doc "Creates the workspace when missing (record, default local environment, and the project directory an IDE project binds to) or confirms it; created says which. path: use this existing project directory instead of <workspace dir>/project."
+                     :doc "Creates the workspace when missing (record, default local environment, and the project directory an IDE project binds to) or confirms it; created says which. path: use this existing project directory instead of <workspace dir>/project. account: the 12-digit id of the real AWS account the local runtime stands in for (the local environment's :aws :account; the runtime passes it to Floci, which recreates on the next up), so ARNs in hardcoded policies and Terraform line up with the real ones."
                      :args (with-meta (array-map :ws (assoc ws-arg :positional true :doc "workspace name to create or confirm")
-                                                 :path {:type :string :doc "absolute project directory; default <workspace dir>/project"})
-                             {:order [:ws :path]})}
+                                                 :path {:type :string :doc "absolute project directory; default <workspace dir>/project"}
+                                                 :account {:type :string :doc "12-digit AWS account id of the real accounts this workspace mirrors: the local environment takes it and the runtime starts Floci with it (FLOCI_DEFAULT_ACCOUNT_ID), so hardcoded ARNs of a repository line up; default 000000000000"})
+                             {:order [:ws :path :account]})}
    "session.note" {:fn session-note :class :mutate
                    :doc "Persists a text as sessions/<key>/notes/<name>-<ts>.txt (raw store first, then a hard link); answers the path."
                    :args (ws-schema :name {:type :string :required true :doc "note name (letters, digits, . _ - kept)"}
@@ -1009,11 +1056,25 @@
                                        :file {:type :string :doc "terraform show -json output file"}
                                        :dir {:type :string :doc "a Terraform root directory (terraform show -json runs there, no apply)"}
                                        :plan {:type :string :doc "saved plan file in dir"})}
+   "terraform.graph" {:fn terraform-graph :class :read
+                      :doc "The order of several Terraform roots, read from their .tf files and never evaluated: root B comes after root A when B has a `terraform_remote_state` that reads A's state (an s3 backend key or a local path that A's backend names) or a `data` source that looks up, by a literal name, a resource A declares (`data \"aws_iam_role\"` with `name = \"x\"` and A's `resource \"aws_iam_role\"` with the same). Answers the roots, the edges (with the file and line that made each), the order (directories, dependencies first, otherwise as given) and the remote states that point at no given root. A cycle is an error."
+                      :args (ws-schema :roots {:type :strings :required true :positional true :doc "Terraform root directories, comma separated"})}
+   "terraform.apply-all" {:fn terraform-apply-all :class :mutate
+                          :doc "terraform.local of every given root in the order terraform.graph finds (apply; destroy runs in reverse), each with its override file; stops at the first root that fails and lists the rest as skipped. A terraform_remote_state of one root that reads another given root is redirected to that root's local state. Explicit vars go to the roots that declare them."
+                          :events ["tf.root" "tf.line"]
+                          :args (ws-schema :roots {:type :strings :required true :positional true :doc "Terraform root directories, comma separated"}
+                                           :action {:type :string :doc "apply (default), plan or destroy"}
+                                           :env {:type :string :doc "local environment name (default local)"}
+                                           :vars {:type :object :doc "explicit -var name value pairs for the roots that declare them"})}
+   "terraform.locate" {:fn terraform-locate :class :read
+                       :doc "Where a Terraform address is declared in a root: the .tf file and the line (a cheap read of the files, no Terraform run). The address is a drift row's (aws_sqs_queue.inbox, module.stack.aws_sqs_queue.inbox[0], data.aws_vpc.default); a module with a local source is followed, a registry module answers its own block with module-only."
+                       :args (ws-schema :root {:type :string :required true :positional true :doc "Terraform root directory"}
+                                        :address {:type :string :required true :positional true :doc "resource address, e.g. module.stack.aws_sqs_queue.inbox"})}
    "terraform.local" {:fn terraform-local :class :mutate
-                      :doc "terraform plan or apply of a root directory onto a local environment (refused for a remote one): init, then the action, output streamed as tf.line events and persisted raw. Variables the root declares are filled from the workspace: `endpoint` (the environment's), `container_endpoint`, `service_a_url`, `db_url` (the runtime's container names); `vars` overrides. The result lists the final `vars`."
+                      :doc "terraform plan, apply or destroy of a root directory onto a local environment (refused for a remote one): writes <root>/deliberator_override.tf.json first (the root's provider \"aws\" blocks point at the emulator with fake keys, the state is local under the workspace; never removed afterwards, a missing gitignore entry is a loud warning, a root the override cannot cover is refused), then init and the action, output streamed as tf.line events and persisted raw. Action override only writes the file. Variables the root declares are filled from the workspace: `endpoint` (the environment's), `container_endpoint`, `service_a_url`, `db_url` (the runtime's container names); `vars` overrides. The result lists the final `vars`."
                       :events ["tf.line"]
                       :args (ws-schema :dir {:type :string :required true :doc "Terraform root directory"}
-                                       :action {:type :string :doc "plan (default), apply, or vars (only return the final -var values, run nothing)"}
+                                       :action {:type :string :doc "plan (default), apply, destroy, vars (only return the final -var values, run nothing) or override (only write the override file)"}
                                        :env {:type :string :doc "local environment name (default local)"}
                                        :vars {:type :object :doc "explicit -var name value pairs, win over the derived ones"})}
    "aws.describe" {:fn aws-describe :class :read

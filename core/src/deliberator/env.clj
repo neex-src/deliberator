@@ -39,9 +39,14 @@
 
 ;; schema -------------------------------------------------------------------------------------
 
+(def fake-account
+  "The account id of Floci when nothing sets one (`FLOCI_DEFAULT_ACCOUNT_ID`): the account of a `local` environment that was
+  never given another (M6.2: `workspace.open --account`, `env.save` of `local`; the runtime passes it to Floci)."
+  "000000000000")
+
 (defn local-for
   "The environment written on first use of \"local\" in workspace `ws`: the runtime of the local Floci,
-  fake account, and the names of the estate (`estate/`): services on 8081/8082, the container logs of
+  the fake account (`fake-account`, until the workspace names the real one), and the names of the estate (`estate/`): services on 8081/8082, the container logs of
   the workspace's `deliberator-<ws>-service-*`, Postgres `deliberator`. A workspace whose runtime.edn
   moved the host ports gets its copy fixed by `runtime/sync-local-env!` (endpoint, db/main, log targets)."
   [ws]
@@ -49,7 +54,7 @@
    :description "Local runtime and the estate."
    :aws {:endpoint (or (System/getenv "DELIBERATOR_LOCAL_ENDPOINT") (System/getProperty "deliberator.local.endpoint")
                        "http://localhost:4566")
-         :region "eu-central-1" :account "000000000000"
+         :region "eu-central-1" :account fake-account
          :credentials {:access-key-id "test" :secret-access-key "test"}}
    :targets {:service/a "http://localhost:8081"
              :service/b "http://localhost:8082"
