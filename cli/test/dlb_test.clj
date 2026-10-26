@@ -683,6 +683,20 @@
           (is (str/includes? out "feat/x")))
         (spit (str (fs/path *home* "workspaces" "m5" "worktrees" "proj" "feat-x" "dirty.txt")) "x")
         (let [r (dlb *home* "worktree" "remove" "proj" "feat-x" "--ws" "m5")]
+(deftest a-providers-operations-are-dlb-commands
+  ;; M6.5: providers/sample.edn names the sample provider (babashka); its operations appear in the help and run like any other
+  (let [d (fs/file *home* "providers")]
+    (fs/create-dirs d)
+    (spit (fs/file d "sample.edn") (pr-str {:command ["bb" (str root "/providers/sample/sample.bb")]}))
+    (try
+      (testing "generated help lists them"
+        (is (str/includes? (:out (dlb *home* "help")) "sample")))
+      (testing "positional argument from the provider's schema, result and error"
+        (let [r (dlb *home* "sample" "echo" "hello" "--json")
+              m (json-line (:out r))]
+          (is (= 0 (:exit r)))
+          (is (= "hello" (get-in m [:result :echo]))))
+        (let [r (dlb *home* "sample" "fail")]
           (is (= 2 (:exit r)))
           (is (str/includes? (:err r) "sample/sample-failure"))))
       (testing "events are printed as they stream"

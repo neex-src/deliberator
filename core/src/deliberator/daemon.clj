@@ -28,6 +28,7 @@
             [clojure.string :as str]
             [deliberator.ops :as ops]
             [deliberator.protocol :as protocol]
+            [deliberator.provider :as provider]
             [deliberator.scenario.engine :as engine]
             [deliberator.steps.dynamodb]
             [deliberator.steps.eventbridge]
@@ -165,9 +166,10 @@
               last-activity (atom (System/currentTimeMillis))
               inflight (atom 0)
               runs (atom {})
+              providers (provider/registry home log)
               follows (atom 0)                 ; active logs.fetch follows: work in flight like a run (hello counts them, R32)
               stop-ref (atom nil)
-              dstate {:version (version) :pid (.pid (ProcessHandle/current)) :home home
+              dstate {:version (version) :pid (.pid (ProcessHandle/current)) :home home :providers providers
                       :endpoint endpoint :runs runs :follows follows :checked (atom #{})
                       ;; `daemon.stop`: the same `stop!`, started after the answer has been written
                       :stop-later! (fn [] (protocol/spawn! (fn [] (Thread/sleep 150) (@stop-ref :requested))))}
@@ -189,6 +191,7 @@
                            (catch Throwable e (log "stop: finalising runs failed" (ex-message e)))
                            (finally
                              (try (when-let [s @server] ((:stop! s))) (catch Throwable _ nil))
+                             (try (provider/stop-all! providers) (catch Throwable _ nil))
                              (try (Files/deleteIfExists (.resolve dir "endpoint")) (catch Exception _ nil))
                              (try (Files/deleteIfExists (.resolve dir "deliberatord.sock")) (catch Exception _ nil))
                              (release-lock! lock)

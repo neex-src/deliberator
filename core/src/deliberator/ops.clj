@@ -34,6 +34,8 @@
     env.remove name* ws                            -> {removed kind path}   (not `local`)
     runtime.set path* value* ws                    -> {ws path keys value}   (one value of runtime.edn by key path, then sync-env)
     daemon.stop                                    -> {stopping pid runs}   (the daemon exits a moment later)
+    provider.list                                  -> [{name status file command log [pid started-at ops restarts error]}]   (M6.5: <home>/providers/*.edn, never starts one; a provider's operations are <name>.<op>, see deliberator.provider)
+    provider.stop name*                            -> {name stopped}   (the next call to it starts it again)
     runtime.sync-env ws                            -> {ws path}
     service.adopt path* taskdef name jdwp ws       -> {name created path repo module from}
     service.list env ws                            -> [{name kind repo module port jdwp image mode [url] status container [log-target log]}]
@@ -112,6 +114,7 @@
             [deliberator.tfroot :as tfroot]
             [deliberator.awsmodel :as awsmodel]
             [deliberator.markers :as markers]
+            [deliberator.provider :as provider]
             [deliberator.repo :as repo]
             [deliberator.worktree :as worktree]
             [deliberator.runtime :as runtime]
@@ -143,6 +146,7 @@
    :role :key :sha :schema :account :expected :found :log :exit :service :lines :errors
    :of :names :sources :output :endpoint :command :ref :cycle :edges :file :path :repo :branch])
    :of :names :sources :output :endpoint :command :ref :cycle :edges :file :path :repo :branch :provider :stderr])
+   :of :names :sources :output :endpoint :command :ref :cycle :edges :file :provider :stderr])
 
 (defn error-map
   "The wire error of a throwable: `{:type :message [:hint ...]}`."
@@ -241,17 +245,30 @@
 
 (declare table)
 
+(defn reserved-areas
+  "The areas of the built-in operations (`service`, `fake`, ...): a provider may not take one as its name."
+  []
+  (into #{} (map #(first (str/split % #"\."))) (keys table)))
+
+(defn- describe-row [op {:keys [class doc args events order]}]
+  (let [ws? (contains? args :ws)]
+    {:op op :class (name class) :doc doc
+     :args (cond-> (describe-args args)
+             (not ws?) (assoc "ws" {:type "string" :required false :doc (:doc ignored-ws-arg) :ignored true}))
+     :order (cond-> (or order (arg-order args)) (not ws?) (conj "ws"))
+     :events (vec events)}))
+
 (defn describe
   "The table as data: `[{:op :class :doc :args :order :events}]`, sorted by op; `:order` lists the
-  argument names in declared order (required ones are the positionals of the CLI, in that order)."
-  []
-  (vec (for [[op {:keys [class doc args events]}] (sort-by key table)
-             :let [ws? (contains? args :ws)]]
-         {:op op :class (name class) :doc doc
-          :args (cond-> (describe-args args)
-                  (not ws?) (assoc "ws" {:type "string" :required false :doc (:doc ignored-ws-arg) :ignored true}))
-          :order (cond-> (arg-order args) (not ws?) (conj "ws"))
-          :events (vec events)})))
+  argument names in declared order (required ones are the positionals of the CLI, in that order).
+  With a request `ctx` the operations of the providers (M6.5, started when needed) are in it too."
+  ([] (describe nil))
+  ([ctx]
+   (let [reg (some-> ctx :daemon :providers)
+         pops (when reg (provider/ops reg (reserved-areas)))]
+     (vec (sort-by :op
+                   (concat (for [[op e] table] (describe-row op e))
+                           (for [{:keys [op] :as e} pops] (describe-row op (assoc e :order (:order e))))))))))
 
 (defn workspace-exists? [ws] (exists? (store/path ws "workspace.edn")))
 
@@ -896,6 +913,28 @@
       (cond-> {:sha sha :path (str p) :bytes n :meta (store/raw-meta ws sha)}
         (and bs (textual? bs)) (assoc :text (String. ^bytes bs StandardCharsets/UTF_8))))))
 
+(defn- registry-of [ctx]
+  (or (some-> ctx :daemon :providers)
+      (fail :provider/no-daemon "providers need the daemon" :hint "run the operation through deliberatord")))
+
+(defn- provider-list [ctx _] (provider/listing (registry-of ctx) (reserved-areas)))
+
+(defn- provider-stop [ctx {:keys [name]}]
+  (let [reg (registry-of ctx)]
+    (when-not (contains? (provider/configs reg (reserved-areas)) name)
+      (fail :provider/not-found (str "no provider " name) :known (vec (keys (provider/configs reg (reserved-areas)))) :hint "dlb provider list"))
+    {:name name :stopped (boolean (provider/stop! reg name))}))
+
+(defn- call-provider [op ctx args]
+  (let [reg (some-> ctx :daemon :providers)
+        reserved (reserved-areas)
+        row (when reg (provider/lookup reg op reserved))]
+    (when-not row
+      (fail :unknown-op (str "no such operation " op) :known (vec (sort (keys table)))
+            :hint "op.describe lists the operations"))
+    (let [args (validate-args op (:args row) args)]
+      (provider/call! reg (:provider row) (:local row) args ctx reserved))))
+
 ;; the table -----------------------------------------------------------------------------------
 
 (defn- ws-schema
@@ -910,8 +949,13 @@
             :doc "Handshake: the client names itself and the core version it expects; the daemon answers its version, pid, home, endpoint and the work in flight (runs = scenario runs + active log follows, also given apart)."
             :args {:client {:type :string :doc "client kind: dlb, ide, agent, ..."}
                    :version {:type :string :doc "core version the client expects; the answer says whether it matches"}}}
-   "op.describe" {:fn (fn [_ _] (describe)) :class :read :args {}
-                  :doc "Every operation with its class, documentation and argument schema."}
+   "op.describe" {:fn (fn [ctx _] (describe ctx)) :class :read :args {}
+                  :doc "Every operation with its class, documentation and argument schema, those of the providers (<home>/providers/*.edn, started when needed) included."}
+   "provider.list" {:fn provider-list :class :read :args {}
+                    :doc "The providers configured under <home>/providers/*.edn: status (running, stopped, crashed, failed, bad-config), command, pid, operations, restarts, last error and the raw stderr log. Starts nothing."}
+   "provider.stop" {:fn provider-stop :class :mutate
+                    :args {:name {:type :string :required true :doc "provider name (the file name without .edn)"}}
+                    :doc "Stops a running provider (stdin closed, killed after 2 s); the next call to one of its operations starts it again."}
    "daemon.stop" {:fn daemon-stop :class :mutate :args {}
                   :doc "Stops the daemon gracefully: runs in flight are cancelled and finalised, endpoint, socket and lock are removed, the process exits. The answer comes first; the stop follows a moment later."}
    "workspace.open" {:fn workspace-open :class :mutate
@@ -1236,15 +1280,15 @@
               :args (ws-schema :sha {:type :string :required true :doc "sha-256 hex of the blob"})}})
 
 (defn call!
-  "Validates `args` and runs the op; returns its result or throws (`unknown-op`, `bad-args`, ...)."
+  "Validates `args` and runs the op; returns its result or throws (`unknown-op`, `bad-args`, ...). An op that is not in
+  the table is looked up among the providers' (M6.5)."
   [op ctx args]
   (let [entry (get table op)]
-    (when-not entry
-      (fail :unknown-op (str "no such operation " op) :known (vec (sort (keys table)))
-            :hint "op.describe lists the operations"))
-    (let [args (validate-args op (:args entry) args)]
-      (when (and (contains? (:args entry) :ws)
-                 (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
-                     (and (= :read (:class entry)) (not= "scenario.parse" op))))
-        (require-workspace! (:ws args)))
-      ((:fn entry) ctx args))))
+    (if-not entry
+      (call-provider op ctx args)
+      (let [args (validate-args op (:args entry) args)]
+        (when (and (contains? (:args entry) :ws)
+                   (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
+                       (and (= :read (:class entry)) (not= "scenario.parse" op))))
+          (require-workspace! (:ws args)))
+        ((:fn entry) ctx args)))))
