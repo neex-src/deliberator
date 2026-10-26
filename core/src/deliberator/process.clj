@@ -5,6 +5,7 @@
   IDE: `:on-cancel!` of the protocol ctx) or when the budget runs out, so no `terraform apply` waiting on a state lock holds
   a request for ever and no orphan survives its request. The `shell` kind keeps its own byte-exact reader (its response is
   the exact bytes) and already kills its tree the same way."
+  (:refer-clojure :exclude [run!])
   (:require [clojure.java.io :as io]
             [clojure.string :as str])
   (:import (java.io File IOException)
