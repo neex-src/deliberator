@@ -237,7 +237,7 @@ class FindInCloudWatchAction : AnAction(), DumbAware {
                 index = EnvironmentOps.logGroupIndex(svc, env)
             }, {
                 val idx = index ?: LogGroupIndex(emptyMap(), emptyList())
-                val dlg = InsightsDialog(project, env, selection, services, service) { s -> idx.forService(s) }
+                val dlg = InsightsDialog(project, env, selection, (services + idx.serviceNames()).distinct(), service) { s -> idx.forService(s) }
                 if (dlg.showAndGet()) run(dlg.request())
             })
         }

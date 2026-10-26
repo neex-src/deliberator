@@ -102,6 +102,7 @@ class InsightsTest : BasePlatformTestCase() {
         assertEquals(listOf("/aws/lambda/orders-api"), idx.forService(null))
         assertEquals(listOf("/aws/lambda/orders-api"), idx.forService("orders"))
         assertEquals(emptyList<String>(), idx.forService("billing"))
+        assertEquals("the service picker offers what the environment's targets are called", listOf("orders"), idx.serviceNames())
     }
 
     fun testARunThatTheDaemonRefusesIsTheDaemonsError() {
