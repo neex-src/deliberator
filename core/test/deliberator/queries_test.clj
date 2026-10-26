@@ -5,7 +5,6 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [deliberator.daemon]   ; registers every step kind
             [deliberator.ops :as ops]
             [deliberator.session :as session]
             [deliberator.test-util :as tu]))
