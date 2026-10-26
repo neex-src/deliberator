@@ -167,6 +167,7 @@
 (defn- print-deployed
   "`deployed.show`: the age first (it is a cached view), a line per service, the CodeDeploy deployments, the section errors."
   [{:keys [env fetched-at age services deployments errors absent path text]}]
+  [{:keys [env fetched-at age services deployments errors path text]}]
   (println (str env ": " (count services) " service" (when (not= 1 (count services)) "s")
                 ", fetched " fetched-at " (" age " ago; dlb deployed refresh fetches again)"))
   (doseq [s services] (println (service-line s)))
