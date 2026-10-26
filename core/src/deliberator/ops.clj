@@ -71,6 +71,10 @@
     repo.attach path* kind ws                      -> {name path kind attached-at}
     repo.detach name* ws                           -> {removed}
     repo.list ws                                   -> [{name path kind attached-at}]
+    repo.clone url* name ws                        -> {name path kind bare url default-branch attached-at [existed]}   (M5.1: bare clone under repos/<name>.git)
+    worktree.start repo* branch base fetch ws      -> {repo name branch path base base-sha fetched created-branch}   (M5.1: worktrees/<repo>/<name>/ from the latest main)
+    worktree.list repo ws                          -> [{repo name branch head path dirty missing}]
+    worktree.remove repo* name* force ws           -> {repo name path branch branch-kept}   (the branch stays)
     logs.fetch target* env since for follow filter session ws -> {path lines bytes sha target source [follow]}   [logs.line]
     logs.insights groups* query* env since until name budget-ms limit session ws -> {query-id status bytes-scanned statistics rows path sha query-file raw}   [line]   (M4.3)
     logs.match path* markers ws                    -> {lines [{n marker-id}] path scanned}
@@ -105,6 +109,7 @@
             [deliberator.awsmodel :as awsmodel]
             [deliberator.markers :as markers]
             [deliberator.repo :as repo]
+            [deliberator.worktree :as worktree]
             [deliberator.runtime :as runtime]
             [deliberator.scenario.kinds :as kinds]
             [deliberator.scenario.engine :as engine]
@@ -134,6 +139,7 @@
    :role :key :sha :schema :account :expected :found :log :exit :service :lines :errors
    :of :names :sources :output :endpoint :command :ref :cycle :edges :file])
    :of :names :sources :output :endpoint :command :ref :cycle :edges :file :path :repo :branch])
+   :of :names :sources :output :endpoint :command :ref :path :repo :branch])
 
 (defn error-map
   "The wire error of a throwable: `{:type :message [:hint ...]}`."
@@ -758,6 +764,11 @@
 (defn- repo-attach [_ {:keys [path kind] :as args}] (repo/attach! (ws-of args) path :kind kind))
 (defn- repo-detach [_ {:keys [name] :as args}] {:removed (repo/detach! (ws-of args) name)})
 (defn- repo-list [_ args] (repo/list (ws-of args)))
+(defn- repo-clone [ctx {:keys [url name] :as args}] (repo/clone! (ws-of args) url :name name :on-cancel! (:on-cancel! ctx)))
+(defn- worktree-start [ctx {:keys [repo branch base fetch] :as args}]
+  (worktree/start! (ws-of args) repo :branch branch :base base :fetch fetch :on-cancel! (:on-cancel! ctx)))
+(defn- worktree-list [_ {:keys [repo] :as args}] (worktree/list (ws-of args) :repo repo))
+(defn- worktree-remove [_ {:keys [repo name force] :as args}] (worktree/remove! (ws-of args) repo name :force force))
 
 (defn- logs-fetch [ctx {:keys [target env since for filter follow] :as args}]
   (let [ws (ws-of args) env-name (or env "local")
@@ -1096,6 +1107,24 @@
                   :args (ws-schema :name {:type :string :required true :doc "repository name from repo.list"})}
    "repo.list" {:fn repo-list :class :read :args (ws-schema)
                 :doc "The repositories attached to the workspace, in attach order."}
+   "repo.clone" {:fn repo-clone :class :mutate
+                 :doc "Makes a bare clone of a git url or path under the workspace (repos/<name>.git), gives it the origin fetch refspec, fetches it and records it with the attached repositories. The name is the url's last segment without .git. The same url again returns the entry; git never prompts (a private repository needs the daemon user's credential helper)."
+                 :args (ws-schema :url {:type :string :required true :doc "git url or local path to clone from"}
+                                  :name {:type :string :positional true :doc "repository name; default the url's last segment without .git"})}
+   "worktree.start" {:fn worktree-start :class :mutate
+                     :doc "A fresh worktree of a recorded repository under worktrees/<repo>/<branch>/: fetches origin, then branches from the latest default branch (origin/main), no questions. An existing branch is checked out as it is; a branch only on origin is created from it. The branch defaults to work-<yyyyMMdd-HHmmss> (UTC)."
+                     :args (ws-schema :repo {:type :string :required true :doc "repository name from repo.list"}
+                                      :branch {:type :string :positional true :doc "branch to create or check out; default work-<timestamp>"}
+                                      :base {:type :string :doc "start a new branch here instead of the latest default branch (a branch, tag or commit)"}
+                                      :fetch {:type :bool :default true :doc "fetch origin first (false: use what the repository has now)"})}
+   "worktree.list" {:fn worktree-list :class :read
+                    :doc "The worktrees under worktrees/<repo>/ with their branch, head, and the number of changed paths; missing marks one whose directory is gone."
+                    :args (ws-schema :repo {:type :string :positional true :doc "only this repository; default all"})}
+   "worktree.remove" {:fn worktree-remove :class :mutate
+                      :doc "Removes a worktree directory. Refuses one with uncommitted changes (listing them) unless force. The branch and its commits stay in the repository."
+                      :args (ws-schema :repo {:type :string :required true :doc "repository name"}
+                                       :name {:type :string :required true :doc "worktree name from worktree.list"}
+                                       :force {:type :bool :doc "remove even with uncommitted changes"})}
    "logs.fetch" {:fn logs-fetch :class :mutate
                  :doc "Fetches a log target (container, file or CloudWatch group of the environment) into the session as logs/<target>-<ts>.log, hard-linked from the raw blobs. Without for: one shot; with for: also listens that long, streaming every line as a logs.line event while it arrives. follow (or for until-cancelled) listens until the request is cancelled or the client leaves, with ONE file for the whole follow, written as lines arrive; a container's follow starts at the current end of its log unless since says otherwise (only the lines written from now on). filter keeps whole matching entries."
                  :events ["logs.line"]
