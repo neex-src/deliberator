@@ -45,7 +45,7 @@ in 0.6 s)*. One repository, one plugin id, one distribution.
 | **Scenario** | A plain text file of ordered steps (`.scn`, §8), committed in a repository or ad hoc in a session. | the file |
 | **Run** | One execution of a scenario: every input and output raw, timings, correlation ids, a rendered text result. Diffable against any other run. | `sessions/<key>/runs/<ts>-<scenario>/` |
 | **Artifact** | Raw bytes fetched or produced, content-addressed, with metadata. Everything else references artifacts. | `raw/sha256/…` |
-| **Cached view** | The latest fetched state of something remote with its age. One exists today: the config snapshot (parameters and secret metadata, `config.refresh`); deployed versions and more are M4. | `config/<env>.edn` |
+| **Cached view** | The latest fetched state of something remote with its age. Two exist today: the config snapshot (parameters and secret metadata, `config.refresh`) and what is deployed (ECS services with their task definition revision and image tags, Lambda versions, CodeDeploy deployments; `deployed.refresh`, `deployed.show` answers from it with its age). | `config/<env>.edn`, `cache/<env>/deployed.edn` |
 | **Marker** | A source position (file, line) whose log lines are highlighted after a run. | `markers.edn` |
 | **Provider** | An external process contributing operations through the protocol (§6). M6: planned, not built. | `providers/<name>.edn` (planned) |
 
@@ -60,6 +60,7 @@ workspaces/<ws>/
   workspace.edn  runtime.edn  markers.edn
   audit.log                     remote calls made while no session was current
   environments/<env>.edn        services/<name>.edn        config/<env>.edn   (the config snapshot, with its age)
+  cache/<env>/deployed.edn      cache/<env>/deployed.txt   (what is deployed, fetched-at; `deployed.refresh` writes, `deployed.show` reads)
   project/                      the IDE project directory of the workspace
   services/<name>/classes/      staged classes for hot reload
   raw/sha256/<2>/<62>           raw/sha256/<2>/<62>.meta.edn
@@ -70,6 +71,8 @@ workspaces/<ws>/
     session.edn  notes/  audit.log   (every remote call: time, env, op, bytes, confirmation)
     scenarios/*.scn
     logs/<target>-<ts>.log      one file per fetch or follow, hard-linked into raw/
+    logs/insights-<name>-<ts>.txt   a Logs Insights answer as text, the bytes scanned in its header
+    queries/<name>.insights     the text of a named Insights query     queries/<name>.scn   a named query: a one-step scenario
     config/                     config snapshots taken while the session was current
     runs/<yyyymmdd-hhmmss>-<scenario>/
       run.edn        scenario path + sha, env, vars, topology, status, step summaries, timings
@@ -81,8 +84,9 @@ workspaces/<ws>/
 ```
 
 Planned, not built: `repos/<name>.git` and `worktrees/<repo>/<name>/` (M5), `providers/<name>.edn`
-(M6), `cache/<env>/<kind>/<key>.edn` as the general cached-view layout (M4; today's one view is
-`config/<env>.edn`), named `queries/` (M4, or a convention over `.scn` files).
+(M6). Cached views so far: `config/<env>.edn` and `cache/<env>/deployed.edn`; a named query is a
+convention, not a concept: a one-step `.scn` under the session's `queries/` and `dlb runs list --scenario <name>` as its
+history.
 
 Principles applied: every fetched byte lands in `raw/` before parsing (principle 1); `result.txt`
 and every view are derived and regenerable (`dlb runs render`); nothing is named `scratch_37`
@@ -127,8 +131,8 @@ A `:remote` environment takes its credentials from `:profile` (static keys from 
 `aws configure export-credentials` for SSO/assume-role profiles); `:read-only` defaults to true; an
 `:endpoint` is accepted on it only so tests can point a remote-shaped record at the emulator. Scenarios name targets
 (`service/a`, `queue/inbox`), not hosts, so the same file runs against any environment. Every operation that loads a
-remote environment (`scenario.run`, `config.refresh`, `aws.discover`, `terraform.drift`, `logs.fetch`,
-`service.start --secrets-from`) first asks STS who the profile is and refuses when the account is not the record's
+remote environment (`scenario.run`, `config.refresh`, `deployed.refresh`, `aws.discover`, `terraform.drift`, `logs.fetch`,
+`logs.insights`, `service.start --secrets-from`) first asks STS who the profile is and refuses when the account is not the record's
 (`account-mismatch`; once per session, environment, account and profile in a daemon's life).
 A remote record is authored, not hand-written: `dlb env create <name> --profile P --account A --region R [--read-only false]`
 (`env.create`; `env.save` takes the whole record) asks STS the same question before it writes and writes nothing on a
@@ -233,7 +237,7 @@ Operations are `area.verb`: `workspace.*`, `session.*`, `env.*`, `runtime.*`, `s
 schema and class. The CLI's help and the IDE's operations form are generated from `op.describe`,
 so an operation exists in both the moment the core has it; an agent's tool list generated the same
 way (§4.H of the brief) is planned, not built. Planned families, not built: `worktree.*`, `pr.*`,
-`ci.*` (M5), `query.*` (M4, or a convention over `.scn` files), `provider.*` (M6). Results are
+`ci.*` (M5), `provider.*` (M6). There is no `query.*` family and none is planned: a named query is a one-step `.scn` under the session's `queries/`. Results are
 small by rule: a summary plus paths; full data is on disk.
 
 **Providers** (M6, planned, not built) speak the same framing on stdio. `providers/<name>.edn`
@@ -261,7 +265,7 @@ The reconciler talks to the Podman REST API (libpod endpoints, Docker-compatible
 libpod lacks something) *(spike: the libpod and docker-compat APIs answered over the unix socket
 and over `tcp://127.0.0.1` from `java.net.http`, no client library needed)*. Containers carry
 labels `deliberator.workspace` and `deliberator.role`, so status and cleanup never guess by
-name. Health: HTTP for Floci (`/_floci/health` lists every service's state), `pg_isready` for
+name. Health: HTTP for Floci (`/_floci/health` lists every service's state), `pg_isready -h 127.0.0.1` (TCP, so not the image's temporary init server) for
 Postgres, the actuator for services. `runtime.ensure` and `service.start|restart` reconcile; a
 scenario run does not (a cold `dlb run` fails on connection errors until `dlb runtime ensure` or
 `bb estate:up`); a warm ensure costs nothing. Logs of every container are mirrored to
@@ -307,7 +311,9 @@ Content-Type: application/json
   `shell`, `op` (any daemon operation) and `aws` (any `service.Operation`); `scenario.kinds` lists
   them as data. Every kind declares its directives, facts and capture roots; the engine owns
   `@assert`, `@capture`, `@until`, `@timeout`, `@body`, `@name`; `@env` and `@var` are header
-  directives.
+  directives. A kind may give one of its verbs another shape (`:verb-kinds`: its own target rule, directives, facts and
+  `:run`): `logs` tails a log for a window, `logs insights` runs a Logs Insights query (`@group`, `@since`, `@to`; the body is
+  the query) and puts the bytes it scanned in its facts and its text.
 - Every step gets a correlation id (`X-Correlation-Id` header, `correlation` message attribute,
   `detail.correlation` on events), recorded in `step.edn`; `{{correlation}}` is the run's id,
   `{{step.correlation}}` the step's. Log steps filter by it exactly.
@@ -356,7 +362,7 @@ operation.
 | M1 core + CLI | store, sessions, environments, runtime (Floci + Postgres), scenario engine with the M1 kinds, daemon, protocol, `dlb`; estate deployed to Floci | done 2026-10-16: aws-api against Floci for SQS, DynamoDB, SSM, Secrets, EventBridge → SQS, Logs, ECS mock, STS; Podman API over unix and TCP; Clojure on JBR 25 | done |
 | M2 IDE layer | daemon lifecycle from the plugin, attach/detach, `.scn` editor with inline runs and diff, logs + markers, tool window | attach Gradle/Maven/plain dir without reopen on 2026.2; plugin starts the uberjar on `java.home` | done |
 | M3 services | service containers, topology switching, hot reload, config chain navigation and inspection, secrets gating | DCEVM reload into a container JVM on Java 21 and 25 | done headless 2026-10-16; the GUI checks of `docs/demo-m3.md` §9 partly walked |
-| M4 remote | SSO environments, read-only inspection, deployed versions, Logs Insights with bytes scanned, named queries, cached views | SSO profile use from the daemon; Insights statistics shape | partly built: `:remote` records with profile credentials, confirmation tokens, `audit.log`, remote reads and drift in the explorer, `config.refresh`; SSO, deployed versions, Insights and named queries not built (roadmap §3) |
+| M4 remote | SSO environments, read-only inspection, deployed versions, Logs Insights with bytes scanned, named queries, cached views | SSO profile use from the daemon; Insights statistics shape | built in core and CLI (2026-10-26): `:remote` records with profile credentials and `env.create`, confirmation tokens, `audit.log`, remote reads and drift in the explorer, `config.refresh`, `deployed.refresh|show`, `logs.insights` (bytes scanned in every result; the `logs insights` step), named queries as `queries/<name>.scn`; the IDE views (Environments, exception to logs) and real SSO by hand are open (roadmap §3) |
 | M5 CI/CD + PRs | Actions job logs as text, poll-tail, fail-vs-success diff, local pipeline (`act` + Floci CodeDeploy), PR worktrees with checks | `act` on Podman; what Floci does with a CodeDeploy deployment | not started |
 | M6 Terraform + fakes | override files, scrubbed wrapper, cross-repo apply order, resource → container links; record/replay HTTP fakes, identity-fake extension shape | Terraform AWS provider 6.x against Floci for the estate module | partly built: `terraform.local` plan/apply onto Floci and `terraform.drift`; override file, apply order, links and fakes not built (roadmap §4, §6) |
 
