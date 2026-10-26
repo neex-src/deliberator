@@ -251,7 +251,11 @@
                                                    :else m))))
   "True (and the pass is gone) when `pass` is live and was issued for `key` ([ws env account service op])."
   [pass key now]
-  (let [[old _] (swap-vals! passes (fn [m] (if (contains? m pass) (dissoc m pass) m)))
+  (let [[old _] (swap-vals! passes (fn [m] (let [v (get m pass)]
+                                             (cond (nil? v) m
+                                                   (.isAfter ^Instant now (:expires v)) (dissoc m pass)
+                                                   (= key (:key v)) (dissoc m pass)
+                                                   :else m))))
         v (get old pass)]
     (boolean (and v (= key (:key v)) (not (.isAfter ^Instant now (:expires v)))))))
 
