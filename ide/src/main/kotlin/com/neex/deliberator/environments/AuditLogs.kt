@@ -49,11 +49,11 @@ object AuditLogs {
     private val GIVEN = TextAttributes().apply { backgroundColor = JBColor(0xFFD58A, 0x6B4E10) }
     private val REFUSED = TextAttributes().apply { backgroundColor = JBColor(0xFAD4D4, 0x5A2A2A) }
 
-    /** The marker colour of [outcome], null when the line needs none. */
-    fun attributesFor(outcome: String?): TextAttributes? = when (outcome) {
-        "confirm-required" -> ASKED
-        "confirmed" -> GIVEN
-        "refused" -> REFUSED
+    /** The marker colour of [line], null when it needs none: asked (yellow), given (orange: a call that went through with a confirmation), refused (red). */
+    fun attributesFor(line: AuditLine): TextAttributes? = when {
+        line.outcome == "refused" -> REFUSED
+        line.given || line.outcome == "confirmed" -> GIVEN
+        line.outcome == "confirm-required" -> ASKED
         else -> null
     }
 
@@ -70,20 +70,27 @@ object AuditLogs {
     /** Asks `audit.show` for [session] (default: the current one) off the EDT, opens the file and marks it. */
     fun open(project: Project, session: String?, onOpened: (Editor?) -> Unit = {}) {
         var summary: AuditSummary? = null
-        Ui.background(project, "Deliberator: audit log", { summary = EnvironmentOps.audit(WorkspaceService.getInstance(project), session) }, {
+        var file: VirtualFile? = null
+        Ui.background(project, "Deliberator: audit log", {
+            summary = EnvironmentOps.audit(WorkspaceService.getInstance(project), session)
+            file = summary?.takeIf { it.exists }?.let { resolve(it) }
+        }, {
             val s = summary ?: return@background
-            onOpened(show(project, s))
+            onOpened(show(project, s, file))
         })
     }
 
-    /** Opens [s]'s file (EDT); null with a balloon when no trail was written yet. */
-    fun show(project: Project, s: AuditSummary): Editor? {
+    /** The audit file as the VFS knows it: a refresh, a slow operation, so off the EDT. */
+    fun resolve(s: AuditSummary): VirtualFile? = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(Path.of(s.path))
+
+    /** Opens [s]'s file (EDT; [vf] resolved off it); null with a balloon when no trail was written yet. */
+    fun show(project: Project, s: AuditSummary, vf: VirtualFile? = if (s.exists) resolve(s) else null): Editor? {
         ApplicationManager.getApplication().assertIsDispatchThread()
         if (!s.exists) {
             Ui.notify(project, "Deliberator audit log", "Nothing has been audited yet (${s.scope}${s.session?.let { " $it" } ?: ""}): the trail has a line for every call on a remote environment.")
             return null
         }
-        val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(Path.of(s.path)) ?: return null
+        vf ?: return null
         AuditViews.getInstance(project).put(s)
         val editor = Ui.openEditor(project, vf, 0) ?: return null
         mark(editor, s)
@@ -97,7 +104,7 @@ object AuditLogs {
         var n = 0
         val lines = editor.document.lineCount
         for (l in s.lines) {
-            val attrs = attributesFor(l.outcome) ?: continue
+            val attrs = attributesFor(l) ?: continue
             if (l.n - 1 !in 0 until lines) continue
             editor.markupModel.addLineHighlighter(l.n - 1, HighlighterLayer.SELECTION - 1, attrs).putUserData(MARK, true)
             n++

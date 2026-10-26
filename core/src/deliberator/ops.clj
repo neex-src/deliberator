@@ -760,7 +760,9 @@
      :lines (vec (map-indexed (fn [i l] (-> (select-keys l [:at :env :service :op :outcome])
                                             (assoc :n (inc i))
                                             (update :at str)
-                                            (update :outcome #(some-> % name))))
+                                            (update :outcome #(some-> % name))
+                                            (update :confirmation #(some-> % name))
+                                            (update :reason #(some-> % name))))
                               lines))}))
 
 (defn- marker-add [_ {:keys [file line logger] :as args}] (markers/add! (ws-of args) file line :logger logger))

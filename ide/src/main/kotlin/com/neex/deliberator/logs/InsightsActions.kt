@@ -179,9 +179,12 @@ object InsightsRun {
         } finally { if (!call.terminal.isDone) call.cancel() }
     }
 
-    /** Opens the result file (EDT) and shows the banner; returns the file. */
-    fun show(project: Project, res: InsightsResult): VirtualFile? {
-        val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(Path.of(res.path)) ?: return null
+    /** The result file as the VFS knows it: a refresh, a slow operation, so off the EDT. */
+    fun resolve(res: InsightsResult): VirtualFile? = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(Path.of(res.path))
+
+    /** Opens the result file (EDT; [vf] resolved off it) and shows the banner; returns the file. */
+    fun show(project: Project, res: InsightsResult, vf: VirtualFile? = resolve(res)): VirtualFile? {
+        vf ?: return null
         InsightsViews.getInstance(project).put(res)
         Ui.openEditor(project, vf, 0)
         EditorNotifications.getInstance(project).updateNotifications(vf)
@@ -190,14 +193,15 @@ object InsightsRun {
 
     fun run(project: Project, r: InsightsRequest, after: (InsightsResult) -> Unit = {}) {
         var res: InsightsResult? = null
+        var file: VirtualFile? = null
         object : Task.Backgroundable(project, "Deliberator: Logs Insights (${r.env})", true) {
             override fun run(indicator: ProgressIndicator) {
-                try { res = runNow(project, r, indicator) } catch (e: DaemonException) {
+                try { res = runNow(project, r, indicator).also { file = resolve(it) } } catch (e: DaemonException) {
                     if (e.type != "daemon/cancelled") Ui.notify(project, "Deliberator Logs Insights", e.message + (e.hint?.let { "\n$it" } ?: ""), NotificationType.ERROR)
                 }
             }
 
-            override fun onFinished() { res?.let { show(project, it); after(it) } }
+            override fun onFinished() { res?.let { show(project, it, file); after(it) } }
         }.queue()
     }
 }

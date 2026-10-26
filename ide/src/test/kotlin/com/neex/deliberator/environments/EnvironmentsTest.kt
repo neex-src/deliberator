@@ -214,7 +214,7 @@ class EnvironmentsTest : BasePlatformTestCase() {
             listOf(
                 """{:at #inst "2026-10-26T10:00:00Z" :env "dev" :service :ssm :op "GetParameter" :outcome :ok}""",
                 """{:at #inst "2026-10-26T10:00:01Z" :env "dev" :service :ssm :op "PutParameter" :outcome :confirm-required}""",
-                """{:at #inst "2026-10-26T10:00:02Z" :env "dev" :service :ssm :op "PutParameter" :outcome :confirmed :confirmation :used}""",
+                """{:at #inst "2026-10-26T10:00:02Z" :env "dev" :service :ssm :op "PutParameter" :outcome :ok :confirmation :used}""",
                 """{:at #inst "2026-10-26T10:00:03Z" :env "dev" :service :sqs :op "DeleteQueue" :outcome :refused :reason :read-only}""",
             ).joinToString("\n", postfix = "\n"),
         )
