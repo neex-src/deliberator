@@ -5,14 +5,18 @@
   core:test {:doc "Run the core tests (clojure -M:test in core/). Pass A of the full recipe: with the estate DOWN the runtime tests own host ports 14566/15432; tests that need an already running Floci (DLB_TEST_FLOCI_URL, default :14566) skip. `bb core:test:all` runs both passes."
              :requires ([core-build])
              :task (do (core-build/ensure-jar!) (shell {:dir "core" :extra-env {"DELIBERATOR_LOCAL_ENDPOINT" (or (System/getenv "DLB_TEST_FLOCI_URL") "http://localhost:19")}} "clojure -M:test"))}
-  core:test:all {:doc "Both passes of the core suite: A = bb core:test with the estate down; B = estate up (--ws W, default \"default\"), then the Floci-dependent namespaces and the ESTATE_WS end-to-end test against it; estate down again unless --keep"
+  core:test:all {:doc "Both passes of the core suite: A = bb core:test with the estate down (its SKIPs are the estate-gated tests, counted); B = estate up (--ws W, default \"default\"), then every namespace that uses deftest-floci or estate-ws (derived, not listed) against it, red on any SKIP; estate down again unless --keep"
                  :requires ([core-test-all])
                  :task (apply core-test-all/-main *command-line-args*)}
-  core:test:known-bugs {:doc "Only the audit's tests of known product bugs (^:known-bug), excluded from core:test; see docs/plans/m1-test-report.md"
-                        :task (shell {:dir "core"} "clojure -M:test:known-bugs")}
+  core:test:known-bugs {:doc "Only the tests of known product bugs (^:known-bug, excluded from core:test); exit 0 when there are none and BUGS.md pins none, or when all of them fail as they must; exit 1 when one passes (fixed: drop the tag) or BUGS.md's pinned list disagrees"
+                        :requires ([known-bugs])
+                        :task (known-bugs/-main)}
   check:arch {:doc "Layering rules: core, cli, ide separation, no employer names"
               :requires ([check-arch])
               :task (check-arch/-main)}
+  check:all {:doc "The whole integration test: check:arch, core:test:all (A, then B on the estate of --ws W, default \"check\"), cli:test with the estate up, tour, acceptance; a summary table; the estate down afterwards. Home $DELIBERATOR_HOME, else .scratch/check-home. Run under .scratch/runtime.lock"
+             :requires ([check-all])
+             :task (apply check-all/-main *command-line-args*)}
   runtime:up {:doc "Reconcile the local runtime (Floci, Postgres) through the daemon; args: --ws NAME (default \"default\"), --infra, --no-daemon (one-shot JVM)"
               :requires ([daemon-client])
               :task (apply daemon-client/-main "up" *command-line-args*)}
@@ -51,7 +55,7 @@
               :task (apply acceptance/-main *command-line-args*)}
   ide:build {:doc "Build the plugin zip ide/build/distributions/deliberator-*.zip (builds the core jar first, lib/deliberatord.jar inside)"
              :task (shell {:dir "ide"} "./gradlew" "buildPlugin")}
-  ide:test {:doc "Fixture tests of the plugin (JUnit on the platform test framework; real daemon on temp homes under ide/build/th); --known-bugs runs only the audit's @Category(KnownBug) tests (./gradlew knownBugs); extra args go to Gradle"
+  ide:test {:doc "Fixture tests of the plugin (JUnit on the platform test framework; real daemon on temp homes under ide/build/th); --group a|b runs half of the test packages (each half fits one 10-minute call; the groups must cover the packages on disk); --known-bugs runs only the @Category(KnownBug) tests (./gradlew knownBugs); extra args go to Gradle"
             :requires ([ide-test])
             :task (apply ide-test/-main *command-line-args*)}
   ide:run {:doc "Open the sandbox IDE with the plugin (a GUI: needs a display); args: [--ws W] [--home H] [--open FILE] -> DELIBERATOR_HOME=H and the project <H>/workspaces/<W>/project (created when missing); reuses a daemon already holding H"
@@ -59,7 +63,7 @@
            :task (apply ide-run/-main *command-line-args*)}
   ide:verify {:doc "Run the plugin verifier against the recommended IDEs"
               :task (shell {:dir "ide"} "./gradlew" "verifyPlugin")}
-  cli:test {:doc "Layer-4 tests of dlb against a real daemon (builds the jar if missing); --known-bugs runs only the audit's :known-bug tests"
+  cli:test {:doc "Layer-4 tests of dlb against a real daemon (the jar rebuilt when stale); SKIPs are printed and counted (with ESTATE_WS and DELIBERATOR_HOME set the estate-gated test runs); --known-bugs runs only the :known-bug tests and exits by their contract (decision 24, see core:test:known-bugs)"
             :requires ([cli-test])
             :task (apply cli-test/-main *command-line-args*)}
   cli:install {:doc "Symlink cli/dlb into ~/.local/bin"

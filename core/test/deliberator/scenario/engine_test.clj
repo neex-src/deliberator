@@ -9,6 +9,7 @@
             [deliberator.test-util :as t])
   (:import (java.nio.file Files Path)))
 
+(use-fixtures :once fake/with-kinds)
 (use-fixtures :each (fn [f] (fake/reset-state!) (f)))
 
 (def env {:name "local" :kind :local})

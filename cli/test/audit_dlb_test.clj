@@ -2,9 +2,7 @@
   "Audit of M1, layer 4 (`dlb`), odd inputs, against a real daemon on a short home (same harness as
   `dlb-test`, whose helpers it reuses). Ctrl-C (SIGINT) mid-run cancels the run, two `dlb run` in
   parallel on one session, `runs diff` of a run against itself, a scenario file outside the session
-  and the repo, `raw get` of a 5 MB blob, `--ws ../x`, `dlb run | head`. Tests tagged `:known-bug`
-  document behaviour the product does not have; `bb cli:test` reports them but they are not run
- ."
+  and the repo, `raw get` of a 5 MB blob, `--ws ../x`, `dlb run | head`."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]

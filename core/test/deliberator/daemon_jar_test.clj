@@ -4,11 +4,18 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [deliberator.daemon :as daemon]
+            [deliberator.ops :as ops]
             [deliberator.test-client :as tc]
             [deliberator.test-util :as tu])
-  (:import (java.util.concurrent LinkedBlockingQueue TimeUnit)))
+  (:import (java.util.concurrent LinkedBlockingQueue TimeUnit)
+           (java.util.regex Pattern)))
 
 (def jar (io/file (System/getProperty "user.dir") "target" "deliberatord.jar"))
+
+(def stamped
+  "The version a jar build stamps: the source's `version.edn` version plus `+yyyyMMddHHmmss` (core/build.clj)."
+  (re-pattern (str (Pattern/quote (daemon/version)) "\\+\\d{14}")))
 
 (defn- java [] (str (System/getProperty "java.home") "/bin/java"))
 
@@ -30,7 +37,7 @@
   (is (.isFile jar) "run `bb core:build` before the jar test")
   (when (.isFile jar)
     (let [v (spawn "--version")]
-      (is (re-matches #"deliberatord 0\.1\.0-m1\+\d{14}" (str (next-line v 60000))) "a jar build stamps its version")
+      (is (re-matches (re-pattern (str "deliberatord " stamped)) (str (next-line v 60000))) "a jar build stamps its version")
       (is (zero? (.waitFor ^Process (:proc v)))))
     (let [home (tu/short-home)
           d (spawn "--home" (str home) "--idle-minutes" "0.1")
@@ -45,9 +52,10 @@
             (let [c (tc/connect ep)]
               (try
                 (let [r (:result (:terminal (tc/request c "hello" {:client "jar-test"})))]
-                  (is (re-matches #"0\.1\.0-m1\+\d{14}" (str (:version r))))
+                  (is (re-matches stamped (str (:version r))))
                   (is (= (.pid ^Process (:proc d)) (:pid r))))
                 (is (= 55 (count (:result (:terminal (tc/request c "op.describe" {}))))))
+                (is (= (count ops/table) (count (:result (:terminal (tc/request c "op.describe" {}))))) "the AOT jar carries the whole op table")
                 (tc/request c "session.start" {:key "J-1"})
                 (let [f (io/file home "w.scn")
                       _ (spit f "### wait one\n# @for 100ms\n")

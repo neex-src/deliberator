@@ -80,4 +80,11 @@
              :display (str/join "\n" lines)}))})
 
 (defn register! [] (kinds/register! fake) (kinds/register! tail))
-(register!)
+(defn unregister! [] (kinds/unregister! "fake") (kinds/unregister! "tail"))
+
+(defn with-kinds
+  "A `:once` fixture: `fake` and `tail` are in the JVM-global registry for the namespace's tests and gone afterwards
+  (loading this namespace registers nothing, so no other namespace's view of `scenario.kinds` depends on load order)."
+  [f]
+  (register!)
+  (try (f) (finally (unregister!))))

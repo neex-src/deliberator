@@ -138,6 +138,8 @@
   (let [table (json/parse-string (:out (dlb *home* "help" "--json")) true)
         txt (:out (dlb *home* "help"))]
     (is (= 55 (count table)))
+    (is (= (count (:result (json-line (:out (dlb *home* "op" "describe" "--json"))))) (count table))
+        "help --json is the daemon's whole op table (the count itself is pinned once, in daemon-test/expected-ops)")
     (doseq [{:keys [op]} table]
       (is (str/includes? txt (str/replace op "." " ")) (str op " is in the help")))
     (is (= txt (:out (dlb *home*))) "no args = help")
@@ -175,8 +177,11 @@
     (is (every? :order table))
     (is (= ["a" "b" "session" "ws"] (:order (by "runs.diff"))))
     (is (str/includes? (:out (dlb *home* "help" "runs" "diff")) "dlb runs diff <a> <b>"))
-    (is (str/includes? (:out (dlb *home* "help" "runtime" "logs")) "dlb runtime logs <role> [--since string] [--follow] [--tail int] [--ws string]"))
-    (is (str/includes? (:out (dlb *home* "help" "scenario" "run")) "dlb scenario run <path> [--env string]"))))
+    ;; the positional head and one flag each, not the whole flag list: a new flag is not a change of order (R29)
+    (let [h (:out (dlb *home* "help" "runtime" "logs"))]
+      (is (str/includes? h "dlb runtime logs <role> [--"))
+      (is (str/includes? h "[--follow]")))
+    (is (str/includes? (:out (dlb *home* "help" "scenario" "run")) "dlb scenario run <path> [--"))))
 
 (deftest daemon-status-and-stop
   (let [h (new-home)]
@@ -358,8 +363,9 @@
       (try
         (dlb home "session" "start" "PLAIN" "--ws" ws)
         (let [r (dlb home "run" (str root "/core/test/fixtures/plain.scn") "--ws" ws)]
-          (is (#{0 1} (:exit r)) (str (:out r) (:err r)))
-          (is (re-find #"▶ 001" (:out r))))
+          (is (zero? (:exit r)) (str (:out r) (:err r)))
+          (is (re-find #"▶ 001" (:out r)))
+          (is (some #(str/starts-with? % "OK ") (str/split-lines (:out r))) "the four plain kinds pass against the estate"))
         (finally (stop-daemon! home))))))
 (deftest ide-ops-take-shell-relative-paths
   (testing "scenario parse, repo attach and marker add send existing relative paths absolute"
@@ -376,8 +382,11 @@
     (let [m (json-line (:out (dlb *home* "marker" "list" "--json")))]
       (is (= [(str (fs/normalize root) "/cli/test/fixtures/wait.scn")] (map :file (:result m))))))
   (testing "help reads well for the new areas"
-    (is (str/includes? (:out (dlb *home* "help" "logs" "fetch")) "dlb logs fetch <target> [--env string] [--since string] [--for string] [--follow] [--filter string] [--session string] [--ws string]"))
-    (is (str/includes? (:out (dlb *home* "help" "marker" "add")) "dlb marker add <file> <line> [--logger string]"))
+    (let [h (:out (dlb *home* "help" "logs" "fetch"))]
+      (is (str/includes? h "dlb logs fetch <target> [--"))
+      (is (str/includes? h "[--since string]"))
+      (is (str/includes? h "[--follow]")))
+    (is (str/includes? (:out (dlb *home* "help" "marker" "add")) "dlb marker add <file> <line> [--"))
     (is (str/includes? (:out (dlb *home* "help" "repo")) "dlb repo attach <path>"))
     (is (str/includes? (:out (dlb *home* "help" "scenario")) "dlb scenario kinds"))))
 

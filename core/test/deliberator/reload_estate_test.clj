@@ -26,7 +26,10 @@
 
 (def ^:private api "../estate/services/service-a/src/main/java/estate/a/Api.java")
 (def ^:private poller "../estate/services/common/src/main/java/estate/common/SqsPoller.java")
-(def ^:private paths ["estate/services/service-a/src" "estate/services/common/src"])
+(def ^:private paths
+  "The two files the test edits, as git sees them from the repository root: exactly what `restore!` puts back and what
+  `clean?` refuses to start over when they already carry uncommitted changes (R17: nothing else under estate/services is touched)."
+  ["estate/services/service-a/src/main/java/estate/a/Api.java" "estate/services/common/src/main/java/estate/common/SqsPoller.java"])
 
 (defn- call
   ([op args] (call op args (atom [])))
@@ -40,7 +43,7 @@
         out (slurp (.getInputStream p))]
     {:exit (.waitFor p) :out out}))
 
-(defn- restore! [] (git "checkout" "--" "estate/services"))
+(defn- restore! [] (apply git "checkout" "--" paths))
 
 (defn- edit! [path from to]
   (let [s (slurp path)]
@@ -65,7 +68,7 @@
 (deftest reload-story-hotswap
   (if-let [ws (fu/estate-ws)]
     (if-not (clean?)
-      (fu/skip! "reload-story-hotswap" "estate/services has uncommitted changes: the test restores them with git checkout and will not touch them")
+      (fu/skip! "reload-story-hotswap" "Api.java or SqsPoller.java has uncommitted changes: the test restores those two files with git checkout and will not touch them")
       (let [sess (str "RELOAD-" (System/currentTimeMillis))
             c0 (container ws)
             n0 (or (:reload-count (status-a ws)) 0)
@@ -127,7 +130,7 @@
 (deftest reload-story-plain-jre
   (if-let [ws (fu/estate-ws)]
     (if-not (clean?)
-      (fu/skip! "reload-story-plain-jre" "estate/services has uncommitted changes: the test restores them with git checkout and will not touch them")
+      (fu/skip! "reload-story-plain-jre" "Api.java or SqsPoller.java has uncommitted changes: the test restores those two files with git checkout and will not touch them")
       (let [a (description/read ws "a")
             marker (str "jdwp-" (System/currentTimeMillis))]
         (try

@@ -9,6 +9,7 @@
             [deliberator.daemon :as daemon]
             [deliberator.env :as env]
             [deliberator.floci-util :as fu :refer [deftest-floci]]
+            [deliberator.ops :as ops]
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.test-client :as tc]
@@ -42,6 +43,9 @@
 (def two-waits "### wait one\n# @for 100ms\n\n### wait two\n# @for 100ms\n")
 
 (def expected-ops
+  "The one deliberate change-detector of the op table (review 2026-10-25, R29): adding or renaming an op fails
+  `op-describe-lists-every-operation-with-its-schema` until the name is added here, on purpose, in the same commit as its
+  `dlb` help and docs. Every other test derives its expectations from `ops/table`."
   ["hello" "op.describe" "daemon.stop" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "session.note" "session.start" "session.end" "session.list" "session.current"
    "config.chain" "config.refresh"
    "env.list" "env.describe" "env.check" "env.save" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
@@ -142,7 +146,9 @@
     (with-client [c h]
       (let [{:keys [result]} (ok! c "op.describe" {})
             by (into {} (map (juxt :op identity)) result)]
-        (is (= (sort expected-ops) (sort (keys by))))
+        (is (= (sort (keys ops/table)) (sort (keys by))) "op.describe lists every op of the table")
+        (is (= (sort expected-ops) (sort (keys ops/table)))
+            "the op table changed: add the op to expected-ops (the one deliberate change-detector) with its dlb help and docs")
         (doseq [{:keys [op class doc args events]} result]
           (is (#{"read" "mutate"} class) op)
           (is (not (str/blank? doc)) op)
