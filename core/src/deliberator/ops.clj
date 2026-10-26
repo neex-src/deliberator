@@ -390,10 +390,46 @@
      :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
 (defn- env-save [_ {:keys [name record] :as args}]
   (let [ws (ws-of args)
+        _ (store/safe-name name)
         r (-> (keywordize record) (assoc :name name))
         r (cond-> r (string? (:kind r)) (update :kind keyword))
+        r (env/validate r)
+        sess (workspace/current-session ws)
+        ;; a remote record is written only for an account it really is in: the profile must exist, log in and say so
+        account (when (and (= :remote (:kind r)) (not (false? check)))
+                  (try (check-account! ws sess r)
+                       (catch Throwable t
+                         (env/forget! ws (:name r))      ; the client of the record that was refused is not kept
+                         (throw t))))
         e (env/save! ws r)]
-    {:env (:name e) :kind (:kind e) :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
+    (when account
+      (swap! (or (get-in ctx [:daemon :checked]) (atom #{})) conj (checked-key ws sess e)))
+    (cond-> {:env (:name e) :kind (:kind e) :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}
+      (= :remote (:kind e)) (assoc :account (get-in e [:aws :account]) :checked (boolean account)
+                                   :read-only (env/read-only? e)))))
+
+(defn- env-create [ctx {:keys [name profile account region read-only description endpoint targets check] :as args}]
+  (let [ws (ws-of args)
+        rec (cond-> {:kind :remote
+                     :read-only (if (nil? read-only) true read-only)
+                     :aws (cond-> {:profile profile :region region :account account}
+                            endpoint (assoc :endpoint endpoint))
+                     :targets (or targets {})}
+              description (assoc :description description))]
+    (store/safe-name name)
+    (env/validate (assoc rec :name name))
+    (when (contains? (set (env/names ws)) name)
+      (fail :env/exists (str "environment " name " exists already")
+            :hint (str "`dlb env remove " name "` first, or `dlb env save` to replace the whole record") :env name))
+    (env-save ctx {:ws (:ws args) :name name :check check :record rec})))
+
+(defn- env-remove [ctx {:keys [name] :as args}]
+  (let [ws (ws-of args)
+        e (env/remove! ws name)]
+    (when-let [c (get-in ctx [:daemon :checked])]
+      (swap! c (fn [s] (into #{} (remove (fn [k] (and (= (store/ws-name ws) (first k)) (= (:name e) (nth k 2))))) s))))
+    {:removed (:name e) :kind (:kind e)
+     :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
 
 (defn- runtime-set [_ {:keys [path value] :as args}]
   (runtime/set-config! (ws-of args)
@@ -523,17 +559,8 @@
     (let [k [(store/ws-name ws) sess (:name e) (get-in e [:aws :account])]
           checked (or (:checked d) (atom #{}))]
       (when-not (contains? @checked k)
-        (let [r (aws/check {:ws ws :session sess} e)]
-          (cond
-            (:ok? r) (swap! checked conj k)
-            (:error r) (fail :check-failed (str "cannot verify the account of environment " (:name e) ": "
-                                                (get-in r [:error :message]))
-                             :hint (get-in r [:error :hint]) :env (:name e))
-            :else (fail :account-mismatch
-                        (str "environment " (:name e) " expects account " (:expected r)
-                             " but the profile is in account " (:account r))
-                        :expected (:expected r) :found (:account r) :env (:name e)
-                        :hint "log in to the right account (aws sso login) or fix the record")))))))
+        (check-account! ws sess e)
+        (swap! checked conj k)))))
 
 
 (declare runs-dir run-edn)
