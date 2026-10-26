@@ -38,7 +38,7 @@ in 0.6 s)*. One repository, one plugin id, one distribution.
 | **Repository** | An attached checkout, recorded by `repo.attach` (name, path). A bare-clone store under `repos/<name>.git` is M5: planned, not built. | `workspace.edn :repos` |
 | **Worktree** | A disposable checkout of a repository at a branch or PR head; "start working" and "open PR" each make one and touch nothing else. M5: planned, not built. | `worktrees/<repo>/<name>/` (planned) |
 | **Session** | A unit of work, usually a ticket key. Owns every scenario, run, query, fetched log, config snapshot and scratch file made while it is current. Started and ended explicitly, never deleted, searchable. | `sessions/<key>/` |
-| **Environment** | Where operations go: `local` (Floci + Podman, fake credentials, structurally unable to reach AWS) or a remote (`dev`, `preprod`, …: SSO profile, read-only by default). Also names the logical targets a scenario refers to (service base URLs, queues, tables, log sources, Postgres DSN). | `environments/<env>.edn` |
+| **Environment** | Where operations go: `local` (Floci + Podman, fake credentials, an endpoint that may only be this machine or a private network: never AWS) or a remote (`dev`, `preprod`, …: a profile; read-only unless the record says `:read-only false`, then every mutation needs a confirmation). Also names the logical targets a scenario refers to (service base URLs, queues, tables, log sources, Postgres DSN). | `environments/<env>.edn` |
 | **Runtime** | Declarative desired state of the local infrastructure: Podman endpoint, network, Floci, Postgres, service containers. Reconciled lazily. | `runtime.edn` |
 | **Service** | A deployable unit (Spring Boot service, Node Lambda): repository, build, container spec, config chain, log pattern, ports. | `services/<name>.edn` |
 | **Topology** | Per environment and service: `local` (container on the runtime), `external {url}` or `off` (decision 46; `fake` is M6, planned). Switching one service and rerunning the same scenario is "bringing it in". | `environments/<env>.edn :topology` |
@@ -101,42 +101,88 @@ every operation records under the current one; `session.end` closes it (runs can
 and re-rendered). Scenarios committed in a repository are run *from* a session: the run lands
 in the session, the file stays where it is, and `run.edn` records the path and sha.
 
-**Environments.** The schema has two shapes and the daemon refuses anything else:
+**Environments.** The schema has two shapes and the daemon refuses anything else (`env/validate`):
 
 ```clojure
 {:name "local" :kind :local
- :aws {:endpoint "http://localhost:4566" :region "eu-central-1" :account "123456789012"
+ :aws {:endpoint "http://localhost:4566" :region "eu-central-1" :account "000000000000"
        :credentials {:access-key-id "test" :secret-access-key "test"}}
  :targets {:service/a "http://localhost:8081" :queue/inbox "estate-inbox"
            :table/messages "estate-messages" :bus/main "estate-bus"
-           :log/service-a {:container "estate-service-a"} :db/main "jdbc:postgresql://…"}}
+           :log/service-a {:container "deliberator-default-service-a"} :db/main "jdbc:postgresql://…"}}
 
 {:name "dev" :kind :remote :read-only true
  :aws {:profile "sso-dev" :region "eu-central-1" :account "123456789012"}
  :targets {:service/a "https://…" :log/service-a {:cloudwatch "/ecs/service-a"} …}}
 ```
 
-A `:local` environment cannot name a profile and must name an endpoint; its clients are built
-from the record only, never from `~/.aws` or ambient `AWS_*` variables. The fake account id
-matches the real one so hardcoded ARNs line up. Scenarios name targets (`service/a`,
-`queue/inbox`), not hosts, so the same file runs against any environment.
+A `:local` environment cannot name a profile and must name an endpoint whose host is this machine or a private
+network: loopback, an RFC 1918 / link-local / CGNAT address, a bare container name (`floci`), or
+`*.internal|*.local|*.localhost|*.lan|*.home.arpa|*.test`. AWS's own domains (`amazonaws.com`, `amazonaws.com.cn`,
+`api.aws`) and any other public name are refused at load time, with the reason. Its clients are built from the
+record only, never from `~/.aws` or ambient `AWS_*` variables. The account id of the local record is Floci's
+`000000000000`: the one in the emulator's ARNs and in the estate's Terraform. Making it match a real account (so
+hardcoded ARNs in a real repository line up) needs Floci's account-id setting and is roadmap piece M6.2, not done.
+A `:remote` environment takes its credentials from `:profile` (static keys from the shared credentials file, else
+`aws configure export-credentials` for SSO/assume-role profiles); `:read-only` defaults to true; an
+`:endpoint` is accepted on it only so tests can point a remote-shaped record at the emulator. Scenarios name targets
+(`service/a`, `queue/inbox`), not hosts, so the same file runs against any environment. Every operation that loads a
+remote environment (`scenario.run`, `config.refresh`, `aws.discover`, `terraform.drift`, `logs.fetch`,
+`service.start --secrets-from`) first asks STS who the profile is and refuses when the account is not the record's
+(`account-mismatch`; once per session, environment and account in a daemon's life).
 
-**Operation classes.** Every AWS operation the core can issue is listed once with a class,
-`:read` or `:mutate`. Against a `:remote` environment a `:mutate` call is refused with a
-confirmation token; the client re-sends the same request carrying the token, and the call and
-its confirmation go to `audit.log`. The CLI and the IDE show the same confirmation; an LLM agent
-sees mutating remote operations only when the workspace enables them.
+**Operation classes.** Every AWS operation the core issues is listed once with a class, `:read` or `:mutate`
+(`deliberator.env.ops/table`); an operation that is not in the table is `:mutate`, except that for the services only the
+generic `aws` kind reaches (s3 sns states kms kinesis monitoring cloudformation iam) `Get*`/`List*`/`Describe*`/`Head*`
+count as reads. Against a `:remote` environment every `:mutate` call is gated by `aws/invoke!`, which every AWS call
+goes through:
 
-**Secrets for local runs.** Default: the local Floci is seeded with the real parameter and secret
-*names* and fake values (Terraform does this from the same module). Fetching real values is a
-separate `:mutate`-class flow with its own confirmation, and the values go into the container's
-environment through the Podman API call only: never into `runtime.edn`, logs, the raw store or
-the run directory.
+- `:read-only true` (the default): the call is **refused flat**, no token, nothing runs; the error says to set
+  `:read-only false` in the record if mutations are wanted there.
+- `:read-only false`: the call is refused with a **confirmation token** bound to the exact workspace, environment,
+  account, service, operation and request; the client re-sends the same request carrying the token (the CLI prints the
+  `--confirm` line, the IDE asks), the token is single use and lives ten minutes in the daemon's memory. A step whose one
+  mutation has no request before it runs (`sqs receive @delete`: the receipt handles come from the receive) is confirmed
+  up front for its summary (`DeleteMessageBatch <queue>`) and the consumed token becomes a 60 s single-use pass for
+  that one call (`aws/gate!`).
 
-**Terraform.** `dlb tf <env> <args>` runs terraform with a scrubbed process environment (no
-`AWS_*`, an empty `AWS_CONFIG_FILE`), the per-repository gitignored override file (provider
-endpoints and backend pointed at Floci, `skip_*` validation flags, path-style S3) and fake keys.
-Real AWS is unreachable from that process by construction.
+Every attempt, run or refused, is one EDN line in the session's `audit.log` (`:at :env :account :service :op :class
+:outcome :confirmation :reason :bytes :status :request-sha :response-sha`). Local calls are neither gated nor audited.
+The switch that lets an LLM agent see mutating remote operations only when a workspace enables them is planned (brief
+§4.H), not built.
+
+**What a remote run persists.** Principle 1 holds for remote calls too: the serialised request and the raw response
+bytes go to `raw/` before anything is decoded, and the step links the same blobs as `request.edn` and
+`response.<json|xml>`. Secret values are the exception: on a remote environment (and on any environment when the caller
+asks, `:redact-secrets`) the persisted request and response have their secret members replaced by `<redacted>`
+(`&lt;redacted&gt;` inside an XML body). Two layers decide what is secret: a table per operation (Secrets Manager values,
+SSM values fetched with decryption, KMS plaintext, Cognito tokens; `aws/response-redactions`, `request-redactions`) and a
+name rule over every member of every redacted blob (`SecretAccessKey`, `SessionToken`, `Plaintext`, `*Password`, `*Secret`,
+`SecretString`, `SecretBinary`, `PrivateKey`, `AccessToken`, `IdToken`, `RefreshToken`: what STS and IAM return, and
+whatever service nobody classified yet). `:persist-secrets` keeps the values; the decoded map handed to the caller always
+has them. `GetSecretValue` on a local environment is stored in full.
+
+**Local only: `shell`, `op`, `terraform.local`.** The three ways a scenario or an operation reaches outside the daemon's
+own AWS client run only against a `:local` environment and cannot reach real AWS through it:
+
+- a `shell` step gets the daemon's environment **scrubbed**: no `AWS_*`, `AWS_CONFIG_FILE` and
+  `AWS_SHARED_CREDENTIALS_FILE` at `/dev/null`, IMDS and the pager off, and the run's local record exported as
+  `AWS_ENDPOINT_URL`, the fake `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` and `AWS_DEFAULT_REGION`, so `aws sqs
+  list-queues` in a step answers from the emulator (tour chapter 9);
+- an `op` step is refused on a remote environment and when its body names one (`env`, `secrets-from`, `name` of an
+  `env.*` operation), reads included;
+- `terraform.local` runs terraform with the same scrub (no `AWS_*`, empty config file) against a root whose provider
+  block points at the emulator; the per-repository override file that would let any root run locally is roadmap M6.1.
+
+**`sqs receive` on a remote environment is a peek**: `VisibilityTimeout 0`, nothing deleted (the remote question is what
+is in the queue, never consuming it); `# @delete` is the consuming receive, one mutation confirmed before the receive as
+above. On a local environment a receive deletes what it received unless `# @keep`.
+
+**Secrets for local runs.** Default: the local Floci is seeded with the real parameter and secret *names* and fake
+values (Terraform does this from the same module). Fetching real values is a separate gated flow (`service.start
+--secrets-from <env>`, two confirmations) and the values go into the container's environment through the
+Podman API call only: never into `runtime.edn`, logs, the raw store or the run directory; the fetching calls are
+persisted redacted and the container's `podman inspect` is scrubbed before it is persisted.
 
 ## 5. The daemon
 

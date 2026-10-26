@@ -1,5 +1,6 @@
 (ns deliberator.env-test
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [deliberator.env :as env]
             [deliberator.env.ops]
             [deliberator.store :as store]
@@ -107,3 +108,62 @@
   (let [e (env/validate env/default-local)]
     (doseq [s (keys deliberator.env.ops/table)]
       (is (some? (env/aws-client e s)) (str s)))))
+
+(deftest a-local-endpoint-never-names-aws
+  (let [base (assoc env/default-local :name "x")
+        with (fn [url] (invalid-problems (assoc-in base [:aws :endpoint] url)))]
+    (testing "accepted: loopback, private and link-local addresses, a container name, the local suffixes"
+      (doseq [u ["http://localhost:4566" "http://127.0.0.1:4566" "http://[::1]:4566" "http://10.0.0.5:4566" "http://172.20.3.4:4566"
+                 "http://192.168.1.10:4566" "http://169.254.169.254:4566" "http://100.100.1.2:4566" "http://floci:4566"
+                 "http://deliberator-tour-floci:4566" "http://host.containers.internal:4566" "http://box.local:4566"
+                 "http://floci.lan:4566" "http://x.home.arpa:4566" "https://emu.test"]]
+        (is (nil? (with u)) u)))
+    (testing "refused: AWS's own domains, with the reason"
+      (doseq [u ["https://sqs.eu-central-1.amazonaws.com" "https://s3.amazonaws.com" "https://sts.cn-north-1.amazonaws.com.cn"
+                 "https://sqs.eu-central-1.api.aws" "http://amazonaws.com:4566"]]
+        (is (mentions? (with u) "names AWS") u)
+        (is (mentions? (with u) "must never reach AWS") u)))
+    (testing "refused: any public address or name"
+      (is (mentions? (with "http://8.8.8.8:4566") "public address"))
+      (is (mentions? (with "https://floci.example.com") "public name"))
+      (is (mentions? (with "https://emulator.cloudprovider.io:4566") "public name")))
+    (testing "the rule is the local record's: a remote record may name AWS or an emulator"
+      (is (nil? (invalid-problems (assoc-in remote [:aws :endpoint] "https://sqs.eu-central-1.amazonaws.com"))))
+      (is (nil? (invalid-problems (assoc-in remote [:aws :endpoint] "http://localhost:14566")))))
+    (testing "env/load refuses such a file"
+      (with-temp-home
+        (store/write-edn! (store/path "w" "environments" "bad.edn")
+                          (assoc-in (assoc base :name "bad") [:aws :endpoint] "https://sqs.eu-central-1.amazonaws.com"))
+        (let [x (try (env/load "w" "bad") (catch clojure.lang.ExceptionInfo e e))]
+          (is (= :env/invalid (:type (ex-data x))))
+          (is (mentions? (:problems (ex-data x)) "names AWS")))))))
+
+(deftest child-env-scrubs-the-daemon-s-aws-and-exports-the-local-record
+  (let [base {"PATH" "/bin" "HOME" "/h" "AWS_PROFILE" "work" "AWS_ACCESS_KEY_ID" "AKIAREAL" "AWS_SECRET_ACCESS_KEY" "real"
+              "AWS_SESSION_TOKEN" "tok" "AWS_SHARED_CREDENTIALS_FILE" "/h/.aws/credentials" "AWS_DEFAULT_REGION" "us-east-1"
+              "AWS_ENDPOINT_URL" "https://sqs.eu-central-1.amazonaws.com" "DLB_X" "keep"}
+        e (env/validate (assoc-in env/default-local [:aws :endpoint] "http://localhost:14566"))
+        out (env/child-env base e)]
+    (testing "nothing of the daemon's AWS_* survives; everything else does"
+      (is (= "/bin" (get out "PATH")))
+      (is (= "keep" (get out "DLB_X")))
+      (is (not (contains? out "AWS_PROFILE")))
+      (is (not (contains? out "AWS_SESSION_TOKEN")))
+      (is (not-any? #(str/includes? (str %) "real") (vals out)))
+      (is (not-any? #(str/includes? (str %) "amazonaws") (vals out))))
+    (testing "the files are /dev/null, IMDS and the pager are off"
+      (is (= "/dev/null" (get out "AWS_CONFIG_FILE")))
+      (is (= "/dev/null" (get out "AWS_SHARED_CREDENTIALS_FILE")))
+      (is (= "true" (get out "AWS_EC2_METADATA_DISABLED")))
+      (is (= "" (get out "AWS_PAGER"))))
+    (testing "the local record is what the child's aws CLI sees"
+      (is (= "http://localhost:14566" (get out "AWS_ENDPOINT_URL")))
+      (is (= "test" (get out "AWS_ACCESS_KEY_ID")))
+      (is (= "test" (get out "AWS_SECRET_ACCESS_KEY")))
+      (is (= "eu-central-1" (get out "AWS_DEFAULT_REGION")))
+      (is (= "eu-central-1" (get out "AWS_REGION"))))
+    (testing "without a record (or a remote one, which shell refuses anyway): the scrub only"
+      (let [o (env/child-env base nil)]
+        (is (= #{"AWS_CONFIG_FILE" "AWS_SHARED_CREDENTIALS_FILE" "AWS_EC2_METADATA_DISABLED" "AWS_PAGER"}
+               (set (filter #(str/starts-with? % "AWS_") (keys o))))))
+      (is (not (contains? (env/child-env base (env/validate remote)) "AWS_ENDPOINT_URL"))))))

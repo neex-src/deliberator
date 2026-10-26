@@ -24,16 +24,21 @@
   `:aws/error` with `:category :confirmation`. Programmer errors (no `:ws`, invalid env) throw.
 
   Remote environments only. Every `:mutate` op (class table `deliberator.env.ops`; unknown ops are
-  mutate) needs a confirmation whatever the record's `:read-only` says; that flag only changes the
-  wording of the summary. A token is issued by the first call, is bound to the exact environment,
-  service, op and request, is single use and valid for ten minutes (in memory, in this process: a
-  daemon restart voids them). Every attempt appends one EDN line to `audit.log`: `:at :env :account
-  :service :op :class :outcome (:ok|:error|:confirm-required|:refused) :confirmation (:used|nil)
-  :bytes :status :request-sha :response-sha`. A response from `GetSecretValue`, or
-  `GetParameter(s)`/`GetParametersByPath` made with decryption, is persisted with its value fields
-  replaced by \"<redacted>\" unless `:persist-secrets`; so are the secret values in the requests of
-  `PutParameter`, `CreateSecret`, `PutSecretValue`, `UpdateSecret`. The decoded map returned to the
-  caller always keeps the real values. Local calls are neither gated, audited nor redacted."
+  mutate) is gated. On a record with `:read-only true` (the default) it is refused flat: `{:type
+  :aws/error :category :read-only}`, no token, nothing runs. With `:read-only false` it needs a
+  confirmation: a token is issued by the first call, is bound to the exact environment, service, op
+  and request, is single use and valid for ten minutes (in memory, in this process: a daemon restart
+  voids them); `gate!` is the same gate for a step whose one mutation has no request yet, and hands
+  back a 60 s single-use pass instead. Every attempt appends one EDN line to `audit.log`: `:at :env
+  :account :service :op :class :outcome (:ok|:error|:confirm-required|:refused|:confirmed) :confirmation
+  (:used|:pass|nil) [:reason (:read-only|:pass)] :bytes :status :request-sha :response-sha`.
+  Redaction (remote unless `:persist-secrets`; any environment with `:redact-secrets`): the persisted
+  request and response have their secret members replaced by \"<redacted>\" (`&lt;redacted&gt;` in an XML
+  body): the table rows of `response-redactions`/`request-redactions` (Secrets Manager and SSM values,
+  KMS plaintext, Cognito tokens) and, on every member of every redacted blob, the name rule
+  `ops/secret-member?` (`SecretAccessKey`, `SessionToken`, `Plaintext`, `Password`, `*Secret`, ...: what
+  STS, IAM and anything not yet named return). The decoded map returned to the caller always keeps
+  the real values. Local calls are neither gated, audited nor redacted."
   (:require [clojure.data.json :as json]
             [clojure.edn :as edn]
             [clojure.string :as str]
@@ -93,13 +98,35 @@
 ;; redaction ----------------------------------------------------------------------------------
 
 (def ^:private response-redactions
-  "[service op] -> {:when-decrypt? bool :paths [[json-key ... :*]]}"
+  "[service op] -> {:decrypt? bool :paths [[json-key ... :*]]}: the precise rows, for members whose name does not give
+  them away (`Value` of a decrypted parameter) or that the row makes explicit. The sts and iam rows of
+  `ops/secret-bearing` need no path: they answer in XML and their `SecretAccessKey`/`SessionToken`/`ServicePassword`
+  fall to the name rule (`ops/secret-member?`), which runs on every redacted blob, JSON or XML."
   {[:secretsmanager "GetSecretValue"] {:paths [["SecretString"] ["SecretBinary"]]}
    [:ssm "GetParameter"] {:decrypt? true :paths [["Parameter" "Value"]]}
    [:ssm "GetParameters"] {:decrypt? true :paths [["Parameters" :* "Value"]]}
-   [:ssm "GetParametersByPath"] {:decrypt? true :paths [["Parameters" :* "Value"]]}})
+   [:ssm "GetParametersByPath"] {:decrypt? true :paths [["Parameters" :* "Value"]]}
+   [:kms "Decrypt"] {:paths [["Plaintext"]]}
+   [:kms "GenerateDataKey"] {:paths [["Plaintext"]]}
+   [:kms "GenerateDataKeyPair"] {:paths [["PrivateKeyPlaintext"]]}
+   [:kms "GenerateRandom"] {:paths [["Plaintext"]]}
+   [:kms "DeriveSharedSecret"] {:paths [["SharedSecret"]]}
+   [:cognito-idp "InitiateAuth"] {:paths [["AuthenticationResult" "AccessToken"] ["AuthenticationResult" "IdToken"]
+                                          ["AuthenticationResult" "RefreshToken"]]}
+   [:cognito-idp "AdminInitiateAuth"] {:paths [["AuthenticationResult" "AccessToken"] ["AuthenticationResult" "IdToken"]
+                                               ["AuthenticationResult" "RefreshToken"]]}
+   [:cognito-idp "RespondToAuthChallenge"] {:paths [["AuthenticationResult" "AccessToken"] ["AuthenticationResult" "IdToken"]
+                                                    ["AuthenticationResult" "RefreshToken"]]}
+   [:cognito-idp "AdminRespondToAuthChallenge"] {:paths [["AuthenticationResult" "AccessToken"]
+                                                         ["AuthenticationResult" "IdToken"]
+                                                         ["AuthenticationResult" "RefreshToken"]]}
+   [:cognito-idp "GetTokensFromRefreshToken"] {:paths [["AuthenticationResult" "AccessToken"]
+                                                       ["AuthenticationResult" "IdToken"]
+                                                       ["AuthenticationResult" "RefreshToken"]]}})
 
 (def ^:private request-redactions
+  "[service op] -> paths of the request map (keywords) that carry a secret; the name rule covers the rest
+  (`Plaintext` of kms Encrypt, `Password` of iam CreateLoginProfile and cognito AdminSetUserPassword, ...)."
   {[:ssm "PutParameter"] [[:Value]]
    [:secretsmanager "CreateSecret"] [[:SecretString] [:SecretBinary]]
    [:secretsmanager "PutSecretValue"] [[:SecretString] [:SecretBinary]]
@@ -114,22 +141,54 @@
     (and (map? x) (contains? x step)) (update x step #(redact-path % more))
     :else x))
 
-(defn- redact-response
-  "Bytes to persist for a response of `[service op]`: the body with the secret fields replaced, or
-  the original bytes when nothing secret applies."
-  ^bytes [service op-name request ^bytes body]
-  (let [{:keys [decrypt? paths]} (get response-redactions [service op-name])]
-    (if (or (nil? paths) (and decrypt? (not (true? (:WithDecryption request)))))
-      body
-      (try
-        (let [parsed (json/read-str (String. body "UTF-8"))
-              out (reduce redact-path parsed paths)]
-          (if (= out parsed) body (->bytes (json/write-str out))))
-        (catch Exception _ (->bytes (json/write-str {"redacted" "response could not be parsed"})))))))
+(defn- redact-members
+  "Every value of `x` (nested maps with string or keyword keys) whose member name is a secret by the name rule."
+  [x]
+  (walk/postwalk (fn [v]
+                   (if (map? v)
+                     (reduce-kv (fn [m k val] (assoc m k (if (and (or (string? k) (keyword? k)) (ops/secret-member? k)) redacted val)))
+                                v v)
+                     v))
+                 x))
 
-(defn- redact-request [service op-name request]
-  (reduce (fn [r path] (if (get-in r path) (assoc-in r path redacted) r))
-          request (get request-redactions [service op-name])))
+(def ^:private xml-element #"(?s)<([A-Za-z_][\w.:-]*)>([^<]*)</\1>")
+
+(def xml-redacted
+  "What a redacted XML text node holds: `<redacted>` written as XML text."
+  "&lt;redacted&gt;")
+
+(defn- redact-xml
+  "A query-protocol body (sts, iam, sns, ...) with the text of every element named by the name rule replaced."
+  ^String [^String s]
+  (str/replace s xml-element (fn [[whole tag _]] (if (ops/secret-member? tag) (str "<" tag ">" xml-redacted "</" tag ">") whole))))
+
+(defn redact-body
+  "The bytes to persist for a response `body` of `[service op]` when the call is redacted: a JSON body is parsed, the
+  table row's paths (when the row applies: a decrypting read only with `WithDecryption`) and the name rule are applied
+  and it is re-serialised when something changed; an XML body gets its secret elements replaced; any other body is
+  kept, unless a table row applies and it cannot be parsed: then a note replaces it."
+  ^bytes [service op-name request ^bytes body]
+  (let [{:keys [decrypt? paths]} (get response-redactions [(ops/api-name service) (name op-name)])
+        paths (when-not (and decrypt? (not (true? (:WithDecryption request)))) paths)
+        s (String. body "UTF-8")
+        t (str/triml s)
+        note #(->bytes (json/write-str {"redacted" "response could not be parsed"}))]
+    (cond
+      (or (str/starts-with? t "{") (str/starts-with? t "["))
+      (try (let [parsed (json/read-str t)
+                 out (redact-members (reduce redact-path parsed paths))]
+             (if (= out parsed) body (->bytes (json/write-str out))))
+           (catch Exception _ (if paths (note) body)))
+      (str/starts-with? t "<")
+      (let [out (redact-xml s)] (if (= out s) body (->bytes out)))
+      :else (if paths (note) body))))
+
+(defn redact-request
+  "The request map with its secret members replaced: the table row's paths, then the name rule."
+  [service op-name request]
+  (redact-members
+   (reduce (fn [r path] (if (get-in r path) (assoc-in r path redacted) r))
+           request (get request-redactions [(ops/api-name service) (name op-name)]))))
 
 ;; confirmation tokens ------------------------------------------------------------------------
 
@@ -158,6 +217,25 @@
                                             :else m))))
         v (get old token)]
     (boolean (and v (= fp (:fp v)) (not (.isAfter ^Instant now (:expires v)))))))
+
+;; passes: what `gate!` hands a step whose one mutation was confirmed before its request existed ----------------
+
+(def pass-ttl (Duration/ofSeconds 60))
+
+(defonce ^:private passes (atom {}))
+
+(defn- issue-pass! [key now]
+  (let [p (new-token)]
+    (swap! passes (fn [m] (assoc (into {} (remove (fn [[_ v]] (.isAfter ^Instant now (:expires v))) m))
+                                 p {:key key :expires (.plus ^Instant now pass-ttl)})))
+    p))
+
+(defn- consume-pass!
+  "True (and the pass is gone) when `pass` is live and was issued for `key` ([ws env account service op])."
+  [pass key now]
+  (let [[old _] (swap-vals! passes (fn [m] (if (contains? m pass) (dissoc m pass) m)))
+        v (get old pass)]
+    (boolean (and v (= key (:key v)) (not (.isAfter ^Instant now (:expires v)))))))
 
 ;; audit --------------------------------------------------------------------------------------
 
@@ -195,32 +273,55 @@
   [r]
   (boolean (some-> r meta ::error)))
 
-(defn- hint
-  "A pointer derived from the environment record only: endpoint or profile, region, account."
-  [env category]
+(def ^:private credential-codes
+  "Error codes that mean the credentials themselves are bad or gone: log in again or fix the profile's keys."
+  #{"ExpiredToken" "ExpiredTokenException" "InvalidClientTokenId" "UnrecognizedClientException" "InvalidAccessKeyId"
+    "SignatureDoesNotMatch" "TokenRefreshRequired" "MissingAuthenticationToken" "InvalidIdentityToken"
+    "AuthFailure" "InvalidSignatureException" "IncompleteSignature"})
+
+(def ^:private policy-codes
+  "Error codes that mean the caller is authenticated and an IAM policy says no."
+  #{"AccessDenied" "AccessDeniedException" "UnauthorizedOperation" "AuthorizationError" "NotAuthorized"
+    "NotAuthorizedException" "UnauthorizedException" "AuthorizationErrorException"})
+
+(defn hint
+  "A pointer derived from the environment record (endpoint or profile, region, account) and the failure: the error
+  code first (expired or wrong keys: log in again; an IAM policy denial: the policy, not the login), then the anomaly
+  category."
+  [env category code service op]
   (let [{:keys [endpoint profile region account]} (:aws env)
         local? (= :local (:kind env))
+        code (some-> code str)
         where (if local? (str "endpoint " endpoint) (str "profile " profile " (" region ")"
                                                          (when endpoint (str ", endpoint " endpoint))))]
-    (case category
-      (:unavailable :interrupted)
-      (if local?
-        (str "cannot reach " endpoint "; is the local runtime up? (bb runtime:up)")
-        (str "cannot reach AWS through " where "; check the network"))
-      :forbidden
-      (if local?
-        (str "the runtime at " endpoint " refused the request of environment " (:name env))
-        (str "credentials of " where " were refused or have expired (account " account
-             "); log in again: aws sso login --profile " profile))
-      :not-found
-      (str "not found via " where ", account " account "; check the targets of environment "
-           (:name env))
-      :incorrect
-      (str "rejected by " where ", account " account)
-      (if local?
-        (str "failed talking to " endpoint " (environment " (:name env) ")")
-        (str "failed talking to " where ", account " account
-             "; if credentials are the cause: aws sso login --profile " profile)))))
+    (cond
+      (and (not local?) (contains? credential-codes code))
+      (str "credentials of " where " were refused or have expired (" code ", account " account
+           "); log in again (aws sso login --profile " profile ") or fix the profile's keys")
+      (and (not local?) (contains? policy-codes code))
+      (str "the IAM policy of " where " (account " account ") denies " (name service) ":" (name op)
+           " (" code "): a permission, not an expired login")
+      :else
+      (case category
+        (:unavailable :interrupted)
+        (if local?
+          (str "cannot reach " endpoint "; is the local runtime up? (bb runtime:up)")
+          (str "cannot reach AWS through " where "; check the network"))
+        :forbidden
+        (if local?
+          (str "the runtime at " endpoint " refused the request of environment " (:name env))
+          (str (name service) ":" (name op) " was refused by " where " (account " account
+               (when code (str ", " code)) "); an IAM policy or expired credentials: aws sso login --profile " profile
+               " if the latter"))
+        :not-found
+        (str "not found via " where ", account " account "; check the targets of environment "
+             (:name env))
+        :incorrect
+        (str "rejected by " where ", account " account)
+        (if local?
+          (str "failed talking to " endpoint " (environment " (:name env) ")")
+          (str "failed talking to " where ", account " account
+               "; if credentials are the cause: aws sso login --profile " profile))))))
 
 (defn- throwable [r]
   (or (:cognitect.aws.client.impl/throwable r) (:cognitect.aws/throwable r)))
@@ -237,17 +338,19 @@
   (let [t (throwable r)
         cat (if (and t (connection-failure? t))
               :unavailable
-              (keyword (name (:cognitect.anomalies/category r))))]
+              (keyword (name (:cognitect.anomalies/category r))))
+        code (or (:cognitect.aws.error/code r) (some-> (:__type r) str)
+                 ;; query-protocol services (iam, sts, sns...) nest it: <ErrorResponse><Error><Code>
+                 (get-in r [:ErrorResponse :Error :Code]) (get-in r [:Error :Code]))
+        code (some-> code str (str/replace #"^.*#" ""))]
     (with-meta
-      (cond-> {:type :aws/error :category cat
-               :code (or (:cognitect.aws.error/code r) (some-> (:__type r) str))
-               ;; query-protocol services (iam, sts, sns...) nest it: <ErrorResponse><Error><Message>
-               :message (or (:message r) (:Message r) (get-in r [:ErrorResponse :Error :Message]) (get-in r [:Error :Message])
-                            (:cognitect.anomalies/message r)
-                            (some-> t ex-message) (str cat))
-               :hint (hint env cat)
-               :service service :op op-name :env (:name env) :raw raw}
-        (:cognitect.aws.error/code r) (assoc :code (:cognitect.aws.error/code r)))
+      {:type :aws/error :category cat
+       :code code
+       :message (or (:message r) (:Message r) (get-in r [:ErrorResponse :Error :Message]) (get-in r [:Error :Message])
+                    (:cognitect.anomalies/message r)
+                    (some-> t ex-message) (str cat))
+       :hint (hint env cat code service op-name)
+       :service service :op op-name :env (:name env) :raw raw}
       {::error true})))
 
 ;; invoke! ------------------------------------------------------------------------------------
@@ -263,12 +366,58 @@
 
 (defn- summary [env op-name request]
   (str op-name (when-let [t (summary-target request)] (str " " t))
-       " on " (:name env) " (account " (get-in env [:aws :account]) ")"
-       (when (env/read-only? env) " [environment is read-only]")))
+       " on " (:name env) " (account " (get-in env [:aws :account]) ")"))
 
 (defn- body-bytes ^bytes [r]
   (let [b (some-> r meta :http-response :body)]
     (if (instance? InputStream b) (.readAllBytes ^InputStream b) (byte-array 0))))
+
+(defn- read-only-refusal
+  "The error of a mutation on a read-only remote environment: no token, nothing runs."
+  [env api op-name]
+  (with-meta {:type :aws/error :category :read-only :service api :op op-name :env (:name env)
+              :message (str op-name " refused: environment " (:name env) " is read-only")
+              :hint (str "environments/" (:name env) ".edn has :read-only true (the default of a remote record); "
+                         "set :read-only false to allow mutations, each then needs a confirmation")}
+    {::error true}))
+
+(defn- token-refusal [env api op-name request]
+  (with-meta {:type :aws/error :category :confirmation :service api :op op-name :env (:name env)
+              :message "confirmation token is unknown, expired, already used, or was issued for a different request"
+              :hint (str "repeat the call without a token to get a new one for " (summary env op-name request))}
+    {::error true}))
+
+(defn- fingerprint [ws env api op-name request]
+  (store/sha256 (->bytes (pr-str [(store/ws-name ws) (:name env) (get-in env [:aws :account])
+                                  api op-name (fingerprint-request request)]))))
+
+(defn- pass-key [ws env api op-name]
+  [(store/ws-name ws) (:name env) (get-in env [:aws :account]) api op-name])
+
+(defn- gate
+  "The remote `:mutate` gate for one call: `[:refused error]`, `[:confirm-required error]` or `[:run confirmation]`
+  (the confirmation to audit: `:used` for a token, `:pass` for a pass of `gate!`). `line` audits."
+  [ctx env api op-name request fp line]
+  (cond
+    (env/read-only? env)
+    (do (line {:outcome :refused :confirmation nil :reason :read-only})
+        [:refused (read-only-refusal env api op-name)])
+    (:pass ctx)
+    (if (consume-pass! (:pass ctx) (pass-key (:ws ctx) env api op-name) (store/now))
+      [:run :pass]
+      (do (line {:outcome :refused :confirmation nil :reason :pass})
+          [:refused (token-refusal env api op-name request)]))
+    (:confirm ctx)
+    (if (consume-token! (:confirm ctx) fp (store/now))
+      [:run :used]
+      (do (line {:outcome :refused :confirmation nil})
+          [:refused (token-refusal env api op-name request)]))
+    :else
+    (let [{:keys [token expires]} (issue-token! fp (store/now))]
+      (line {:outcome :confirm-required :confirmation nil})
+      [:confirm-required (with-meta {:type :confirm-required :token token :expires expires
+                                     :summary (summary env op-name request)}
+                           {::error true})])))
 
 (defn invoke!
   "See the namespace docstring."
@@ -286,8 +435,7 @@
                                         :request (if redact? (redact-request api op-name request) request)}))
                       {:op op-name :service api :role :request :class class
                        :content-type "application/edn"})
-        fp (store/sha256 (->bytes (pr-str [(store/ws-name ws) (:name env) (get-in env [:aws :account])
-                                           api op-name (fingerprint-request request)])))
+        fp (fingerprint ws env api op-name request)
         line (fn [m] (when remote?
                        (audit! ctx (merge {:at (store/now) :env (:name env) :account (get-in env [:aws :account])
                                            :service api :op op-name :class class
@@ -301,7 +449,7 @@
                     http (some-> r meta :http-response)
                     body (body-bytes r)
                     resp-ref (if (and (some? http) (:status http))
-                               (put! ws env (if redact? (redact-response api op-name request body) body)
+                               (put! ws env (if redact? (redact-body api op-name request body) body)
                                      {:op op-name :service api :role :response :class class
                                       :status (:status http)
                                       :content-type (or (get-in http [:headers "content-type"])
@@ -319,20 +467,40 @@
                   (assoc (->error env api op-name r raw) :elapsed-ms elapsed)
                   (with-meta r {::raw raw ::elapsed-ms elapsed}))))]
     (if (and remote? (= class :mutate))
-      (if-let [token (:confirm ctx)]
-        (if (consume-token! token fp (store/now))
-          (run :used)
-          (do (line {:outcome :refused :confirmation nil})
-              (with-meta {:type :aws/error :category :confirmation :service api :op op-name :env (:name env)
-                          :message "confirmation token is unknown, expired, already used, or was issued for a different request"
-                          :hint (str "repeat the call without a token to get a new one for " (summary env op-name request))}
-                {::error true})))
-        (let [{:keys [token expires]} (issue-token! fp (store/now))]
-          (line {:outcome :confirm-required :confirmation nil})
-          (with-meta {:type :confirm-required :token token :expires expires
-                      :summary (summary env op-name request)}
-            {::error true})))
+      (let [[verdict x] (gate ctx env api op-name request fp line)]
+        (if (= :run verdict) (run x) x))
       (run nil))))
+
+(defn gate!
+  "The confirmation gate alone, for a step that is one mutation whose request does not exist before it runs (`sqs
+  receive @delete`: the receipt handles come from the receive, so a token bound to the delete request could never be
+  re-presented). `summary-request` stands for the mutation (`{:QueueUrl url}`); it is persisted and audited like a
+  request. Local environment: nil, nothing is gated. Remote: read-only -> the `:aws/error` of a refused mutation; no
+  token -> `{:type :confirm-required ...}` (the step shows it as any confirmation); the matching token -> consumed, and
+  the result is `{:pass p}`: a single-use pass, valid for `pass-ttl` (60 s), bound to [workspace env account service
+  op], that `invoke!` accepts as ctx `:pass` in place of a token for that one call (audited `:confirmation :pass`)."
+  [ctx env service op summary-request]
+  (let [ws (or (:ws ctx) (throw (ex-info "ctx needs :ws" {:type :aws/bad-ctx})))
+        env (env/validate env)
+        api (ops/api-name service)
+        op-name (name op)
+        request (or summary-request {})]
+    (when (= :remote (:kind env))
+      (let [class (ops/op-class api op-name)
+            req-ref (put! ws env
+                          (->bytes (pr-edn {:service api :op op-name :env (:name env) :request request :gate true}))
+                          {:op op-name :service api :role :request :class class :gate true
+                           :content-type "application/edn"})
+            fp (fingerprint ws env api op-name request)
+            line (fn [m] (audit! ctx (merge {:at (store/now) :env (:name env) :account (get-in env [:aws :account])
+                                             :service api :op op-name :class class :gate true
+                                             :request-sha (:sha req-ref)}
+                                            m)))
+            [verdict x] (gate (dissoc ctx :pass) env api op-name request fp line)]
+        (if (= :run verdict)
+          (do (line {:outcome :confirmed :confirmation x})
+              {:pass (issue-pass! (pass-key ws env api op-name) (store/now))})
+          x)))))
 
 (defn raw-refs
   "The persisted request and response blobs of a result of `invoke!` (success or error)."

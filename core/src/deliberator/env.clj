@@ -101,6 +101,43 @@
                   [(str ":topology " n " :log must be {:container \"name\"}")])))]
        p))))
 
+(def ^:private aws-host-suffixes
+  "Where real AWS answers; a `:local` endpoint may never name one of these."
+  [".amazonaws.com" ".amazonaws.com.cn" ".api.aws" ".aws.dev" ".amazonwebservices.com"])
+
+(defn- ip-literal? [^String h] (boolean (re-matches #"[0-9.]+|[0-9a-fA-F:]*:[0-9a-fA-F:.]*" h)))
+
+(defn- private-ip?
+  "Loopback, link-local, RFC 1918, CGNAT (100.64/10, Tailscale), site-local v6, and IPv4-mapped forms of those."
+  [^String h]
+  (try (let [a (java.net.InetAddress/getByName h)]            ; a literal: no DNS lookup
+         (or (.isLoopbackAddress a) (.isLinkLocalAddress a) (.isSiteLocalAddress a) (.isAnyLocalAddress a)
+             (let [bs (.getAddress a)]
+               (and (= 4 (alength bs)) (= 100 (bit-and 0xff (aget bs 0))) (<= 64 (bit-and 0xff (aget bs 1)) 127)))))
+       (catch Exception _ false)))
+
+(defn local-host-problem
+  "Why `host` is not an acceptable endpoint host of a `:local` environment, or nil. Accepted: loopback, a private or
+  link-local address (RFC 1918, 169.254/16, 100.64/10, fc00::/7, fe80::/10), a bare name (a container, `floci`), and
+  the local suffixes `.internal .local .localhost .lan .home.arpa .test`. Refused: AWS's own domains, and any other
+  public name: a `:local` environment must be structurally unable to reach AWS."
+  [^String host]
+  (let [h (str/lower-case (str/replace (or host "") #"^\[|\]$" ""))]
+    (cond
+      (str/blank? h) "endpoint has no host"
+      (some #(or (= h (subs % 1)) (str/ends-with? h %)) aws-host-suffixes)
+      (str "endpoint host " host " names AWS: a :local environment must never reach AWS (make it :remote with a :profile)")
+      (= h "localhost") nil
+      (ip-literal? h) (when-not (private-ip? h)
+                        (str "endpoint host " host " is a public address: a :local endpoint must be on this machine or a private network"))
+      (not (str/includes? h ".")) nil
+      (some #(str/ends-with? h %) [".internal" ".local" ".localhost" ".lan" ".home.arpa" ".test"]) nil
+      :else (str "endpoint host " host " is a public name: a :local endpoint must be loopback, a private address, "
+                 "a container name or *.internal/*.local/*.lan"))))
+
+(defn- endpoint-host [^String url]
+  (try (.getHost (URI. url)) (catch Exception _ nil)))
+
 (defn problems
   "The list of problems of the raw environment record `m` (empty when valid)."
   [m]
@@ -133,6 +170,8 @@
            (when (and (nonblank? (:endpoint aws))
                       (not (re-matches #"https?://[^/\s]+(:\d+)?/?" (:endpoint aws))))
              [":aws :endpoint must look like http://host:port"])
+           (when (and (nonblank? (:endpoint aws)) (re-matches #"https?://[^/\s]+(:\d+)?/?" (:endpoint aws)))
+             (when-let [p (local-host-problem (endpoint-host (:endpoint aws)))] [(str ":local :aws " p)]))
            (let [c (:credentials aws)]
              (when-not (and (map? c) (nonblank? (:access-key-id c)) (nonblank? (:secret-access-key c)))
                [":local :aws :credentials needs non-blank :access-key-id and :secret-access-key"]))))
@@ -154,7 +193,27 @@
                       {:type :env/invalid :problems ps})))
     (cond-> m (= :remote (:kind m)) (update :read-only #(if (nil? %) true %)))))
 
-(defn read-only? [env] (boolean (:read-only env)))
+(defn read-only?
+  "The policy flag of a remote record (default true): `deliberator.aws/invoke!` refuses every `:mutate` on it flat,
+  no token; `:read-only false` makes each mutation a confirmation instead. Local records have no flag."
+  [env] (boolean (:read-only env)))
+
+(defn child-env
+  "The process environment of a child a LOCAL run starts (`shell` steps): `base` (the daemon's environment) without
+  any `AWS_*`, the AWS config and credentials files pointed at /dev/null, IMDS and the pager off, and the record's
+  own endpoint, fake keys and region exported (`AWS_ENDPOINT_URL AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  AWS_DEFAULT_REGION AWS_REGION`), so `aws` in a step talks to the local emulator and nothing else. `env` nil: the
+  scrub only."
+  [base env]
+  (let [aws (:aws env)]
+    (cond-> (into {} (remove (fn [[k _]] (str/starts-with? (str k) "AWS_"))) base)
+      true (assoc "AWS_CONFIG_FILE" "/dev/null" "AWS_SHARED_CREDENTIALS_FILE" "/dev/null"
+                  "AWS_EC2_METADATA_DISABLED" "true" "AWS_PAGER" "")
+      (and aws (= :local (:kind env)))
+      (assoc "AWS_ENDPOINT_URL" (str (:endpoint aws))
+             "AWS_ACCESS_KEY_ID" (str (get-in aws [:credentials :access-key-id]))
+             "AWS_SECRET_ACCESS_KEY" (str (get-in aws [:credentials :secret-access-key]))
+             "AWS_DEFAULT_REGION" (str (:region aws)) "AWS_REGION" (str (:region aws))))))
 
 ;; loading ------------------------------------------------------------------------------------
 

@@ -10,7 +10,8 @@
   into a thrown ERROR (message = AWS code and message, `:hint` from the error, bytes of the failed
   call in the ex-data); a confirmation request (remote mutate) becomes an ERROR too, and the token and summary go out as a `:confirm.required` event on the run's
   sink (never into the ERROR, step.edn or run.edn); `call!` passes the run's `:confirm` token (ctx,
-  from the daemon's `scenario.run` `confirm`) on to `invoke!`, which lets exactly that request through.
+  from the daemon's `scenario.run` `confirm`) on to `invoke!`, which lets exactly that request through; a `:pass` of
+  `aws/gate!` (sqs receive `@delete`) goes the same way.
 
   Targets: `target-value` takes an `http(s)://` URL, an `arn:` or a bare name (no `/`) as written
   and sends every other word (`queue/inbox`, `table/messages`) through `:resolve-target`; the
@@ -110,7 +111,7 @@
 (defn call!
   "`aws/invoke!` through the step's context; an error map is thrown as a step ERROR."
   [ctx service op request]
-  (let [r (aws/invoke! (select-keys ctx [:ws :session :confirm]) (:env ctx) service op request)]
+  (let [r (aws/invoke! (select-keys ctx [:ws :session :confirm :pass]) (:env ctx) service op request)]
     (if (aws/error? r) (throw (failure ctx r)) r)))
 
 (defn elapsed [r] (:deliberator.aws/elapsed-ms (meta r)))

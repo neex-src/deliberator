@@ -6,15 +6,33 @@
   `ok` (\"true\"/\"false\"), `error.type`, `error.message`. An operation error is a step error unless an
   `@assert`/`@until` names `ok` or `error.type`/`error.message`, then the checks decide (`confirm-required` of
   `service.start --secrets-from` is walked that way). Not offered: `scenario.run`, `scenario.cancel`, `daemon.stop`.
-  Refused for a `:remote` environment."
+  Local only: refused for a `:remote` environment, and refused when the body names one (`env`, `secrets-from`, or `name`
+  of an `env.*` operation): a local run reaches no remote environment, not even for a read."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
+            [deliberator.env :as env]
             [deliberator.ops :as ops]
             [deliberator.scenario.kinds :as kinds]
             [deliberator.steps.common :as c]
             [deliberator.steps.shell :as shell]))
 
 (def excluded #{"scenario.run" "scenario.cancel" "daemon.stop"})
+
+(defn- named-envs
+  "The environment names an op body may point an operation at: `env`, `secrets-from`, and `name` of an `env.*` op."
+  [op args]
+  (keep #(let [v (get args %)] (when (string? v) v))
+        (cond-> ["env" "secrets-from"] (str/starts-with? op "env.") (conj "name"))))
+
+(defn- refuse-remote-body!
+  "Throws `op/remote-env` when a named environment exists and is `:remote` (an unknown name is left to the operation)."
+  [ctx op args]
+  (doseq [n (named-envs op args)]
+    (let [e (try (env/load (:ws ctx) n) (catch Exception _ nil))]
+      (when (= :remote (:kind e))
+        (throw (ex-info (str "op steps reach only local environments; the body of " op " names " n ", which is remote")
+                        {:type :op/remote-env :env n
+                         :hint "run remote operations with dlb or the IDE, where a mutation can be confirmed"}))))))
 
 (defn- scalar? [v] (or (string? v) (number? v) (boolean? v) (keyword? v)))
 
@@ -61,6 +79,7 @@
   (let [op (:verb step)
         host (or (:host ctx) (throw (ex-info "op steps need the daemon (run the scenario through it)" {:type :op/no-daemon})))
         args (args-of ctx step op)
+        _ (refuse-remote-body! ctx op args)
         req (c/utf8 (pretty args))
         cancels (atom [])
         line! (or (:line! ctx) (fn [_]))

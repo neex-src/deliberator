@@ -174,7 +174,7 @@
 ;; --- the confirmation flow through the daemon ---------------------------------------------------------------
 
 (defn- remote-env []
-  (env/validate {:name "dlbdev" :kind :remote
+  (env/validate {:name "dlbdev" :kind :remote :read-only false
                  :aws {:profile "dlbaudit" :region "eu-central-1" :account "000000000000" :endpoint fu/url}
                  :targets {:function/logger "estate-logger"}}))
 

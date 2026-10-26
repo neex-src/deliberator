@@ -6,8 +6,10 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [deliberator.aws :as aws]
             [deliberator.env :as env]
+            [deliberator.env.ops :as ops]
             [deliberator.floci-util :as fu :refer [deftest-floci]]
             [deliberator.session :as session]
+            [deliberator.steps.sqs :as sqs]
             [deliberator.store :as store]
             [deliberator.test-util :refer [fixed-clock temp-home with-temp-home]])
   (:import (java.time Instant)
@@ -25,7 +27,12 @@
          :endpoint fu/url}
    :targets {:service/a "https://a.example.test"}})
 
-(defn remote [& {:as over}] (env/validate (merge remote-base over)))
+(defn remote
+  "A remote-shaped record pointed at the test Floci. `:read-only true` (the default of a record) refuses every
+  mutation flat, so the tests that mutate pass `:read-only false` and go through the token flow."
+  [& {:as over}] (env/validate (merge remote-base over)))
+
+(defn writable [& {:as over}] (remote :read-only false over))
 
 (defn uniq [prefix] (str "dlbtest-" prefix "-" (subs (str (UUID/randomUUID)) 0 8)))
 
@@ -144,10 +151,41 @@
                (some-> line read-string))
             "the child saw AWS_PROFILE and the local client still talked to Floci")))))
 
-(deftest-floci confirmation-flow-on-a-remote-environment
+(deftest-floci read-only-refuses-mutations-flat
   (with-temp-home
     (with-profile
       (let [e (remote)
+            c (assoc ctx :session (:key (session/start! "w" "RO-1")))
+            p (str "/dlbtest/" (uniq "ro"))
+            r (aws/invoke! c e :ssm :PutParameter {:Name p :Value "on" :Type "String"})]
+        (is (true? (:read-only e)) "the default of a remote record")
+        (testing "no token, nothing runs, the error says why"
+          (is (aws/error? r))
+          (is (= :read-only (:category r)))
+          (is (nil? (:token r)))
+          (is (str/includes? (:message r) "read-only"))
+          (is (str/includes? (:hint r) ":read-only false"))
+          (is (aws/error? (aws/invoke! c e :ssm :GetParameter {:Name p})) "the parameter was never written")
+          (is (= :not-found (:category (aws/invoke! c e :ssm :GetParameter {:Name p})))))
+        (testing "a token presented to a read-only record is refused too, unused"
+          (let [w (writable) r1 (aws/invoke! c w :ssm :PutParameter {:Name p :Value "on" :Type "String"})]
+            (is (= :confirm-required (:type r1)))
+            (is (= :read-only (:category (aws/invoke! (assoc c :confirm (:token r1)) e :ssm :PutParameter {:Name p :Value "on" :Type "String"}))))
+            (is (not (aws/error? (aws/invoke! (assoc c :confirm (:token r1)) w :ssm :PutParameter {:Name p :Value "on" :Type "String"})))
+                "the same token still works on the writable record: the refusal did not burn it")
+            (confirmed! c w :ssm :DeleteParameter {:Name p})))
+        (testing "reads pass, the gate is for mutations"
+          (is (not (aws/error? (aws/invoke! c e :sts :GetCallerIdentity {})))))
+        (testing "audit: the refusal is one line with its reason"
+          (let [ls (aws/audit-lines c)
+                refused (filter #(= :read-only (:reason %)) ls)]
+            (is (= 2 (count refused)) (pr-str ls))
+            (is (every? #(and (= :refused (:outcome %)) (= :mutate (:class %)) (nil? (:confirmation %))) refused))))))))
+
+(deftest-floci confirmation-flow-on-a-remote-environment
+  (with-temp-home
+    (with-profile
+      (let [e (writable)
             c (assoc ctx :session (:key (session/start! "w" "T-1")))
             p (str "/dlbtest/" (uniq "flag"))
             req {:Name p :Value "on" :Type "String"}
@@ -159,8 +197,7 @@
           (is (re-find #"PutParameter" (:summary r1)))
           (is (str/includes? (:summary r1) p))
           (is (str/includes? (:summary r1) "dlbdev"))
-          (is (str/includes? (:summary r1) "111111111111"))
-          (is (str/includes? (:summary r1) "read-only") "the default is read-only and the summary says so"))
+          (is (str/includes? (:summary r1) "111111111111")))
         (testing "a token for another request is refused and not burnt"
           (let [r (aws/invoke! (assoc c :confirm (:token r1)) e :ssm :PutParameter (assoc req :Value "off"))]
             (is (= :confirmation (:category r)))))
@@ -184,10 +221,9 @@
             (is (= [:mutate :mutate :mutate :mutate :read] (map :class ls)))
             (is (pos? (:bytes (nth ls 2))))
             (is (.endsWith (str (aws/audit-path c)) "sessions/T-1/audit.log"))))
-        (testing "read-only false does not bypass the gate"
-          (let [r (aws/invoke! c (remote :read-only false) :ssm :PutParameter (assoc req :Overwrite true))]
-            (is (= :confirm-required (:type r)))
-            (is (not (str/includes? (:summary r) "read-only")))))
+        (testing "read-only false is the token flow, never a bypass"
+          (let [r (aws/invoke! c (writable) :ssm :PutParameter (assoc req :Overwrite true))]
+            (is (= :confirm-required (:type r)))))
         (testing "an unknown op is gated as a mutate"
           (is (= :confirm-required (:type (aws/invoke! c e :ssm :SomethingNew {})))))
         (confirmed! c e :ssm :DeleteParameter {:Name p})))))
@@ -195,7 +231,7 @@
 (deftest-floci tokens-expire-after-ten-minutes
   (with-temp-home
     (with-profile
-      (let [e (remote)
+      (let [e (writable)
             p (str "/dlbtest/" (uniq "exp"))
             req {:Name p :Value "v" :Type "String"}
             t0 "2026-10-16T10:00:00Z"
@@ -209,7 +245,7 @@
 (deftest-floci secrets-are-redacted-from-remote-persistence
   (with-temp-home
     (with-profile
-      (let [e (remote)
+      (let [e (writable)
             n (uniq "secret")
             secret "s3cr3t-value-123"
             put-ref (aws/raw-refs (confirmed! ctx e :secretsmanager :CreateSecret {:Name n :SecretString secret}))
@@ -245,7 +281,7 @@
 (deftest-floci decrypted-parameters-are-redacted
   (with-temp-home
     (with-profile
-      (let [e (remote)
+      (let [e (writable)
             p (str "/dlbtest/" (uniq "param"))
             secret "p4ss-123"
             _ (confirmed! ctx e :ssm :PutParameter {:Name p :Value secret :Type "SecureString"})
@@ -287,3 +323,187 @@
     (let [r (aws/check ctx (assoc-in local [:aws :account] "999999999999"))]
       (is (false? (:ok? r)))
       (is (= "000000000000" (:account r))))))
+
+;; --- the generic kind's secrets (R2), the hint (R18), sqs receive on remote (R6) -----------------------------------
+
+(deftest redaction-rows-and-the-name-rule
+  (let [js (fn [m] (.getBytes (json/write-str m) "UTF-8"))
+        out (fn [svc op req body] (String. ^bytes (aws/redact-body svc op req body) "UTF-8"))]
+    (testing "kms rows: Plaintext goes, the key id and ciphertext stay"
+      (let [b (out :kms "Decrypt" {} (js {"KeyId" "k1" "Plaintext" "c2VjcmV0" "EncryptionAlgorithm" "SYMMETRIC_DEFAULT"}))]
+        (is (not (str/includes? b "c2VjcmV0")))
+        (is (= {"KeyId" "k1" "Plaintext" "<redacted>" "EncryptionAlgorithm" "SYMMETRIC_DEFAULT"} (json/read-str b))))
+      (is (= "<redacted>" (get (json/read-str (out :kms "GenerateDataKeyPair" {} (js {"PrivateKeyPlaintext" "p" "PublicKey" "pub"}))) "PrivateKeyPlaintext")))
+      (is (= "pub" (get (json/read-str (out :kms "GenerateDataKeyPair" {} (js {"PrivateKeyPlaintext" "p" "PublicKey" "pub"}))) "PublicKey"))))
+    (testing "cognito rows (a service that is not on the classpath: the rule needs no client)"
+      (let [b (json/read-str (out :cognito-idp "InitiateAuth" {} (js {"ChallengeParameters" {} "AuthenticationResult" {"AccessToken" "a.b.c" "ExpiresIn" 3600 "IdToken" "i" "RefreshToken" "r" "TokenType" "Bearer"}})))]
+        (is (= {"AccessToken" "<redacted>" "ExpiresIn" 3600 "IdToken" "<redacted>" "RefreshToken" "<redacted>" "TokenType" "Bearer"}
+               (get b "AuthenticationResult")))))
+    (testing "sts and iam answer in XML: the name rule redacts the elements, the rest of the document stays"
+      (let [xml (str "<AssumeRoleResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\"><AssumeRoleResult>"
+                     "<Credentials><AccessKeyId>ASIAEXAMPLE</AccessKeyId><SecretAccessKey>wJalrXUtnFEMI/K7MDENG</SecretAccessKey>"
+                     "<SessionToken>FwoGZXIvYXdzEBYaD</SessionToken><Expiration>2026-10-26T01:00:00Z</Expiration></Credentials>"
+                     "<AssumedRoleUser><Arn>arn:aws:sts::111111111111:assumed-role/r/s</Arn></AssumedRoleUser>"
+                     "</AssumeRoleResult></AssumeRoleResponse>")
+            b (out :sts "AssumeRole" {} (.getBytes xml "UTF-8"))]
+        (is (not (str/includes? b "wJalrXUtnFEMI")))
+        (is (not (str/includes? b "FwoGZXIvYXdz")))
+        (is (str/includes? b "<SecretAccessKey>&lt;redacted&gt;</SecretAccessKey>"))
+        (is (str/includes? b "<AccessKeyId>ASIAEXAMPLE</AccessKeyId>") "the key id is not a secret")
+        (is (str/includes? b "<Expiration>2026-10-26T01:00:00Z</Expiration>"))
+        (is (str/includes? b "assumed-role/r/s")))
+      (let [b (out :iam "CreateAccessKey" {} (.getBytes "<CreateAccessKeyResponse><CreateAccessKeyResult><AccessKey><UserName>u</UserName><AccessKeyId>AKIA1</AccessKeyId><Status>Active</Status><SecretAccessKey>s3cr3t</SecretAccessKey></AccessKey></CreateAccessKeyResult></CreateAccessKeyResponse>" "UTF-8"))]
+        (is (not (str/includes? b "s3cr3t")))
+        (is (str/includes? b "<AccessKeyId>AKIA1</AccessKeyId>"))))
+    (testing "the name rule alone, on a service nobody classified: Password, *Secret, SessionToken, nested and in lists"
+      (let [b (json/read-str (out :rds "ModifyDBInstance" {} (js {"DBInstance" {"MasterUserPassword" "pw" "DBName" "d"}
+                                                                  "Items" [{"ClientSecret" "cs" "ClientId" "id"} {"SessionToken" "t"}]})))]
+        (is (= {"DBInstance" {"MasterUserPassword" "<redacted>" "DBName" "d"}
+                "Items" [{"ClientSecret" "<redacted>" "ClientId" "id"} {"SessionToken" "<redacted>"}]} b))))
+    (testing "what is not a secret is not touched: NextToken, ClientToken, a Value without decryption, the ids"
+      (let [body (js {"NextToken" "n" "ClientToken" "c" "Parameter" {"Name" "/x" "Value" "v" "ARN" "arn:x"}})]
+        (is (identical? body (aws/redact-body :ssm "GetParameter" {:WithDecryption false} body)) "untouched bytes, not a copy")
+        (is (= "<redacted>" (get-in (json/read-str (out :ssm "GetParameter" {:WithDecryption true} body)) ["Parameter" "Value"])))))
+    (testing "requests: the table paths and the name rule, keys as keywords"
+      (is (= {:Name "/x" :Value "<redacted>" :Type "SecureString"} (aws/redact-request :ssm "PutParameter" {:Name "/x" :Value "s" :Type "SecureString"})))
+      (is (= {:KeyId "k" :Plaintext "<redacted>"} (aws/redact-request :kms "Encrypt" {:KeyId "k" :Plaintext "hello"})))
+      (is (= {:UserName "u" :Password "<redacted>" :PasswordResetRequired true}
+             (aws/redact-request :iam "CreateLoginProfile" {:UserName "u" :Password "pw" :PasswordResetRequired true})))
+      (is (= {:QueueUrl "u" :MaxNumberOfMessages 1} (aws/redact-request :sqs "ReceiveMessage" {:QueueUrl "u" :MaxNumberOfMessages 1}))))
+    (testing "the secret-bearing table names the sts, iam, kms and cognito rows"
+      (doseq [[s o] [[:sts "AssumeRole"] [:sts "GetSessionToken"] [:iam "CreateAccessKey"] [:kms "Decrypt"] [:cognito-idp "InitiateAuth"]]]
+        (is (ops/secret-bearing? s o) (str s " " o))))))
+
+(deftest hints-tell-a-policy-denial-from-expired-credentials
+  (let [e (remote)
+        h (fn [cat code] (aws/hint e cat code :sqs "SendMessage"))]
+    (testing "an IAM denial names the policy and the operation, never a login"
+      (doseq [code ["AccessDenied" "AccessDeniedException" "UnauthorizedOperation"]]
+        (let [t (h :forbidden code)]
+          (is (str/includes? t "IAM policy") t)
+          (is (str/includes? t "sqs:SendMessage") t)
+          (is (not (str/includes? t "sso login")) t)))
+      (is (str/includes? (h :incorrect "AccessDeniedException") "IAM policy") "SSM and DynamoDB deny with a 400"))
+    (testing "bad or expired keys say log in"
+      (doseq [code ["ExpiredToken" "InvalidClientTokenId" "UnrecognizedClientException" "SignatureDoesNotMatch"]]
+        (is (str/includes? (h :forbidden code) "aws sso login --profile dlbtest") code)))
+    (testing "an unknown code falls back to the category, both causes named"
+      (let [t (h :forbidden nil)]
+        (is (str/includes? t "IAM policy or expired credentials") t)))
+    (testing "local records never mention a login"
+      (is (not (str/includes? (aws/hint local :forbidden "AccessDenied" :sqs "SendMessage") "sso"))))))
+
+(deftest-floci sts-and-kms-secrets-are-redacted-from-remote-persistence
+  (with-temp-home
+    (with-profile
+      (let [e (writable)
+            raw-blob #(blob (-> (aws/raw-refs %) :response :sha))]
+        (testing "sts GetSessionToken (a mutate: confirmed) persists no SecretAccessKey or SessionToken"
+          (let [r (confirmed! ctx e :sts :GetSessionToken {:DurationSeconds 900})]
+            (is (not (aws/error? r)) (pr-str (dissoc r :raw)))
+            (let [{:keys [SecretAccessKey SessionToken AccessKeyId]} (:Credentials r)
+                  b (raw-blob r)]
+              (is (string? SecretAccessKey) "the caller has the real credentials")
+              (is (not (str/includes? b SecretAccessKey)))
+              (is (not (str/includes? b SessionToken)))
+              (is (str/includes? b aws/xml-redacted) b)
+              (is (str/includes? b AccessKeyId) "the key id stays readable"))))
+        (testing "kms Decrypt and GenerateDataKey persist no Plaintext; the caller decodes it"
+          (let [k (confirmed! ctx e :kms :CreateKey {:Description "dlbtest redaction"})
+                kid (get-in k [:KeyMetadata :KeyId])
+                _ (is (string? kid) (pr-str (dissoc k :raw)))
+                secret (.getBytes "the plaintext secret 42" "UTF-8")
+                enc (confirmed! ctx e :kms :Encrypt {:KeyId kid :Plaintext secret})
+                dec (confirmed! ctx e :kms :Decrypt {:KeyId kid :CiphertextBlob (:CiphertextBlob enc)})
+                gdk (confirmed! ctx e :kms :GenerateDataKey {:KeyId kid :KeySpec "AES_256"})
+                b64 (fn [^bytes bs] (.encodeToString (java.util.Base64/getEncoder) bs))]
+            (is (not (aws/error? dec)) (pr-str (dissoc dec :raw)))
+            (is (= "the plaintext secret 42" (String. ^bytes (:Plaintext dec) "UTF-8")))
+            (is (not (str/includes? (raw-blob dec) (b64 (:Plaintext dec)))))
+            (is (str/includes? (raw-blob dec) "<redacted>"))
+            (is (str/includes? (blob (-> (aws/raw-refs enc) :request :sha)) "<redacted>") "the Encrypt request's Plaintext too")
+            (is (not (str/includes? (blob (-> (aws/raw-refs enc) :request :sha)) (b64 secret))))
+            (is (not (aws/error? gdk)) (pr-str (dissoc gdk :raw)))
+            (is (not (str/includes? (raw-blob gdk) (b64 (:Plaintext gdk)))))
+            (is (str/includes? (raw-blob gdk) (b64 (:CiphertextBlob gdk))) "the ciphertext stays")
+            (confirmed! ctx e :kms :ScheduleKeyDeletion {:KeyId kid :PendingWindowInDays 7})))))))
+
+(defn- sqs-ctx
+  "A step context for the sqs kind outside the engine."
+  [e sess & {:as over}]
+  (merge {:ws "w" :session sess :env e :step-correlation "c-1" :step {:n 1}
+          :resolve-target (fn [k] (env/target e (keyword k)))
+          :deadline (.plusSeconds (Instant/now) 30)
+          :attempt-cancelled? (constantly false)}
+         over))
+
+(defn- step [verb target & dirs]
+  {:kind "sqs" :verb verb :target target :directives (vec (for [d dirs] {:name d}))})
+
+(deftest-floci sqs-receive-on-a-remote-environment-is-a-peek-unless-delete-is-confirmed-first
+  (with-temp-home
+    (with-profile
+      (let [q (uniq "peek")
+            _ (is (not (aws/error? (aws/invoke! ctx local :sqs :CreateQueue {:QueueName q}))))
+            url (:QueueUrl (aws/invoke! ctx local :sqs :GetQueueUrl {:QueueName q}))
+            _ (aws/invoke! ctx local :sqs :SendMessage {:QueueUrl url :MessageBody "m-1"})
+            sess (:key (session/start! "w" "P-1"))
+            ro (remote :targets {:queue/q q})
+            rw (writable :targets {:queue/q q})
+            run (fn [e st & {:as over}] (sqs/run (sqs-ctx e sess over) (assoc st :directives (conj (:directives st) {:name "wait" :value "1s"}))))
+            depth (fn [] (Integer/parseInt (get-in (aws/invoke! ctx local :sqs :GetQueueAttributes {:QueueUrl url :AttributeNames ["ApproximateNumberOfMessages"]})
+                                                   [:Attributes :ApproximateNumberOfMessages])))]
+        (testing "read-only remote: a plain receive peeks (visibility 0), the message stays, nothing is deleted or gated"
+          (let [r (run ro (step "receive" "queue/q"))]
+            (is (= 1 (get-in r [:facts "count"])))
+            (is (= ["m-1"] (:body-json r)))
+            (is (= 1 (get-in (run ro (step "receive" "queue/q")) [:facts "count"])) "still visible to the next receive")
+            (is (= 1 (depth)))))
+        (testing "read-only remote: @delete is refused flat before anything is received"
+          (let [x (try (run ro (step "receive" "queue/q" "delete")) (catch clojure.lang.ExceptionInfo x x))]
+            (is (instance? Exception x))
+            (is (str/includes? (ex-message x) "read-only") (ex-message x))
+            (is (= 1 (depth)) "the message is still there and visible")
+            (is (= 1 (get-in (run ro (step "receive" "queue/q")) [:facts "count"])))))
+        (testing "writable remote: @delete asks for a confirmation up front: no receive happened"
+          (let [events (atom [])
+                x (try (run rw (step "receive" "queue/q" "delete") :sink (fn [ev] (swap! events conj ev)))
+                       (catch clojure.lang.ExceptionInfo x x))
+                ev (first (filter #(= :confirm.required (:event %)) @events))]
+            (is (= :aws/confirm-required (:type (ex-data x))) (pr-str x))
+            (is (some? ev) (pr-str @events))
+            (is (str/includes? (:summary ev) "DeleteMessageBatch"))
+            (is (str/includes? (:summary ev) q))
+            (is (= 1 (get-in (run ro (step "receive" "queue/q")) [:facts "count"])) "not received, so visible")
+            (testing "the confirmed run receives and deletes on the pass"
+              (let [r (run rw (step "receive" "queue/q" "delete") :confirm (:token ev))]
+                (is (= 1 (get-in r [:facts "count"])) (pr-str r))
+                (is (= ["m-1"] (:body-json r)))
+                (is (= 0 (depth)))
+                (is (= 0 (get-in (run ro (step "receive" "queue/q")) [:facts "count"])))))
+            (testing "audit: the gate's confirm-required and confirmation, then the delete on the pass"
+              (let [ls (filter #(= "DeleteMessageBatch" (:op %)) (aws/audit-lines {:ws "w" :session sess}))]
+                (is (= [:refused :confirm-required :confirmed :ok] (map :outcome ls)) (pr-str ls))
+                (is (= [nil nil :used :pass] (map :confirmation ls)))
+                (is (= [:read-only nil nil nil] (map :reason ls)))))))
+        (testing "a pass is single use and bound to the op: presented again it is refused"
+          (aws/invoke! ctx local :sqs :SendMessage {:QueueUrl url :MessageBody "m-2"})
+          (let [g (aws/gate! {:ws "w" :session sess} rw :sqs :DeleteMessageBatch {:QueueUrl url})
+                g (aws/gate! {:ws "w" :session sess :confirm (:token g)} rw :sqs :DeleteMessageBatch {:QueueUrl url})
+                pass (:pass g)]
+            (is (string? pass) (pr-str g))
+            (is (= :confirmation (:category (aws/invoke! {:ws "w" :session sess :pass pass} rw :sqs :PurgeQueue {:QueueUrl url}))) "another op")
+            (let [msg (first (:Messages (aws/invoke! ctx local :sqs :ReceiveMessage {:QueueUrl url :WaitTimeSeconds 1})))
+                  r (aws/invoke! {:ws "w" :session sess :pass pass} rw :sqs :DeleteMessageBatch
+                                 {:QueueUrl url :Entries [{:Id "0" :ReceiptHandle (:ReceiptHandle msg)}]})]
+              (is (not (aws/error? r)) (pr-str (dissoc r :raw)))
+              (is (= :confirmation (:category (aws/invoke! {:ws "w" :session sess :pass pass} rw :sqs :DeleteMessageBatch
+                                                           {:QueueUrl url :Entries [{:Id "0" :ReceiptHandle (:ReceiptHandle msg)}]})))
+                  "used once"))))
+        (testing "local: a receive deletes, as before"
+          (aws/invoke! ctx local :sqs :SendMessage {:QueueUrl url :MessageBody "m-3"})
+          (let [e (env/validate (assoc-in (fu/local-env) [:targets :queue/q] q))
+                r (run e (step "receive" "queue/q"))]
+            (is (= 1 (get-in r [:facts "count"])))
+            (is (= 0 (depth)))))
+        (aws/invoke! ctx local :sqs :DeleteQueue {:QueueUrl url})))))

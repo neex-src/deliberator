@@ -9,14 +9,18 @@
 
   `receive`: one `ReceiveMessage` per attempt (`@until` repeats it): `# @max n` (default 1, up to 10),
   `# @wait <duration>` the long-poll window (default: what is left of the attempt's deadline, which `@until` shortens to its window, at most
-  20 s, rounded down to whole seconds). Received messages are deleted afterwards (one
+  20 s, rounded down to whole seconds). On a LOCAL environment received messages are deleted afterwards (one
   `DeleteMessageBatch`), unless `# @keep`, which also receives with `VisibilityTimeout 0` so that a
-  kept message is a peek and stays visible to the next attempt. A failed delete is a step ERROR (the
+  kept message is a peek and stays visible to the next attempt. On a REMOTE environment a receive is that peek by
+  default (the question there is what is in the queue, not consuming it); `# @delete` asks for the consuming receive,
+  which is one mutation confirmed BEFORE the receive (`aws/gate!`: the token is for `DeleteMessageBatch <queue>`, the
+  delete that follows the receive runs on the pass it hands back; read-only refuses it). A failed delete is a step ERROR (the
   receive response is kept). Facts: `count elapsed`; `$` is the JSON array of the received bodies,
   each parsed when it is JSON and the string otherwise; the whole `ReceiveMessage` response
   (attributes included) is `response.json`."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
+            [deliberator.aws :as aws]
             [deliberator.scenario.expr :as expr]
             [deliberator.scenario.kinds :as kinds]
             [deliberator.steps.aws :as sa]
@@ -68,15 +72,26 @@
 (defn- body-value [s]
   (try (json/read-str s) (catch Exception _ s)))
 
+(defn- gate-delete!
+  "Remote `@delete`: the confirmation of the consuming receive, before anything is received. -> the pass for the
+  DeleteMessageBatch, or a thrown step ERROR (confirm-required with the token on the run's sink, read-only, ...)."
+  [ctx url]
+  (let [g (aws/gate! (select-keys ctx [:ws :session :confirm]) (:env ctx) :sqs :DeleteMessageBatch {:QueueUrl url})]
+    (if (aws/error? g) (throw (sa/failure ctx g)) (:pass g))))
+
 (defn- receive! [ctx step]
   (let [url (queue-url ctx step)
-        keep? (sa/flag? step "keep")
+        remote? (= :remote (some-> ctx :env :kind))
+        delete? (sa/flag? step "delete")
+        _ (when (and delete? (sa/flag? step "keep")) (sa/fail "@delete and @keep contradict each other" "keep one of them"))
+        peek? (if remote? (not delete?) (sa/flag? step "keep"))
+        pass (when (and remote? delete?) (gate-delete! ctx url))
         r (sa/call! ctx :sqs :ReceiveMessage
                     (cond-> {:QueueUrl url
                              :MaxNumberOfMessages (int-dir step "max" 1 1 10)
                              :WaitTimeSeconds (wait-seconds ctx step)
                              :AttributeNames ["All"] :MessageAttributeNames ["All"]}
-                      keep? (assoc :VisibilityTimeout 0)))
+                      peek? (assoc :VisibilityTimeout 0)))
         msgs (vec (:Messages r))
         res (sa/result ctx r "ReceiveMessage"
                        {:facts {"count" (count msgs) "elapsed" (sa/elapsed r)}
@@ -84,8 +99,8 @@
                         :lines (count msgs)})]
     ;; an attempt the engine gave up on (timeout, cancel) must not act: nothing is deleted, the messages
     ;; become visible again after their visibility timeout, the reply is already a raw blob
-    (when (and (seq msgs) (not keep?) (not ((:attempt-cancelled? ctx (constantly false)))))
-      (let [d (try (sa/call! ctx :sqs :DeleteMessageBatch
+    (when (and (seq msgs) (not peek?) (not ((:attempt-cancelled? ctx (constantly false)))))
+      (let [d (try (sa/call! (cond-> ctx pass (assoc :pass pass)) :sqs :DeleteMessageBatch
                              {:QueueUrl url
                               :Entries (vec (map-indexed (fn [i m] {:Id (str i) :ReceiptHandle (:ReceiptHandle m)}) msgs))})
                    (catch clojure.lang.ExceptionInfo e
@@ -110,7 +125,8 @@
    :directives [{:name "attr" :hint "k=v" :repeatable? true :doc "send: a String message attribute"}
                 {:name "max" :hint "<1-10>" :values ["1" "10"] :doc "receive: messages per call (default 1)"}
                 {:name "wait" :hint "<duration>" :values ["1s" "5s" "20s"] :doc "receive: long-poll window (default: the deadline, at most 20s)"}
-                {:name "keep" :doc "receive: do not delete; peek (VisibilityTimeout 0)"}]
+                {:name "keep" :doc "receive: do not delete; peek (VisibilityTimeout 0). The default on a remote environment"}
+                {:name "delete" :doc "receive on a remote environment: consume what is received (one mutation, confirmed before the receive)"}]
    :facts [{:name "messageId" :type :id} {:name "md5" :type :string} {:name "count" :type :number}]
    :capture-roots #{"$"} :concurrent? false
    :run run})
