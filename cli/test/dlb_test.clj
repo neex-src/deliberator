@@ -544,3 +544,62 @@
     (is (= 3 (count rows)) out)
     (is (every? #(not (str/blank? %)) rows) "no blank rows")
     (is (some #(str/includes? % "\"name\":\"X\"") rows) out)))
+
+;; M4: deployed, logs insights, named queries ------------------------------------------------------------
+
+(deftest logs-insights-arguments-come-from-the-op-schema
+  (let [entry {:op "logs.insights" :order ["groups" "query" "env" "since" "until" "name" "budget-ms" "limit" "session" "ws"]
+               :args {:groups {:type "string[]" :required true} :query {:type "string" :required true} :env {:type "string"}
+                      :since {:type "string"} :until {:type "string"} :name {:type "string"} :budget-ms {:type "int"}
+                      :limit {:type "int"} :session {:type "string"} :ws {:type "string"}}}]
+    (is (= {:groups ["/aws/lambda/a" "log/service-b"] :query "fields @message | limit 5" :env "dev" :since "30m" :budget-ms 60000}
+           (args/parse entry ["/aws/lambda/a,log/service-b" "fields @message | limit 5" "--env" "dev" "--since" "30m" "--budget-ms" "60000"])))))
+
+(deftest deployed-and-insights-results-print-their-age-and-their-bytes
+  (let [shown (with-out-str
+                (render/print-result "deployed.show"
+                                     {:env "dev" :fetched-at "2026-10-26T12:00:00Z" :age "7 min" :path "/c/deployed.edn" :text "/c/deployed.txt"
+                                      :services [{:kind "ecs" :cluster "prod" :name "svc" :revision 7 :desired 2 :running 2
+                                                  :containers [{:name "app" :tag "v1"}] :deployments [{:updated-at "2026-10-26T11:00:00Z"}]}
+                                                 {:kind "lambda" :name "fn" :version "$LATEST" :code-sha256 "abc=" :last-modified "2026-10-15"}]
+                                      :errors {:codedeploy [{:op "ListDeployments" :code "AccessDenied" :message "no"}]}}))
+        insights (with-out-str
+                   (render/print-result "logs.insights"
+                                        {:status "Complete" :rows 5 :bytes-scanned 737 :bytes-scanned-text "737 B" :took-ms 2100
+                                         :path "/s/logs/insights-q.txt" :query-id "q-1" :raw [{} {}] :groups ["/g"] :since "a" :until "b"
+                                         :statistics {:bytesScanned 737 :resultCount 5}}))]
+    (is (= ["dev: 2 services, fetched 2026-10-26T12:00:00Z (7 min ago; dlb deployed refresh fetches again)"
+            "  ecs    prod/svc  rev 7  app:v1  2/2 running  updated 2026-10-26T11:00:00Z"
+            "  lambda fn  $LATEST  abc=  updated 2026-10-15"
+            "error codedeploy ListDeployments: AccessDenied no"
+            "path: /c/deployed.edn"
+            "text: /c/deployed.txt"]
+           (str/split-lines shown)))
+    (is (= "COMPLETE  5 rows, 737 B scanned (bytes-scanned: 737), 2.1 s" (first (str/split-lines insights))))
+    (is (some #(= "statistics: bytesScanned=737 resultCount=5" %) (str/split-lines insights)))))
+
+(deftest named-queries-are-one-step-scenarios-under-queries
+  (dlb *home* "session" "start" "DEMO")
+  (let [dir (fs/path *home* "workspaces" "default" "sessions" "DEMO" "queries")]
+    (fs/create-dirs dir)
+    (spit (str (fs/path dir "pause.scn")) "# @env local\n\n### wait pause\n# @for 100ms\n")
+    (testing "a relative queries/<name>.scn runs from the session, and the run is listed under --scenario <name>"
+      (let [r (dlb *home* "run" "queries/pause.scn" "--session" "DEMO")]
+        (is (zero? (:exit r)) (:err r))
+        (is (re-find #"OK  1 steps, 0 failed" (:out r))))
+      (let [l (json-line (:out (dlb *home* "runs" "list" "--scenario" "pause" "--session" "DEMO" "--json")))
+            runs (get-in l [:result :runs])]
+        (is (= 1 (count runs)))
+        (is (str/ends-with? (:scenario (first runs)) "queries/pause.scn"))
+        (is (empty? (get-in (json-line (:out (dlb *home* "runs" "list" "--scenario" "nothing-like-it" "--session" "DEMO" "--json")))
+                            [:result :runs])))))
+    (testing "the help says so"
+      (is (str/includes? (:out (dlb *home* "help" "runs" "list")) "queries/<name>.scn"))
+      (is (str/includes? (:out (dlb *home* "help" "logs" "insights")) "bytes scanned"))
+      (is (str/includes? (:out (dlb *home* "help" "logs" "insights")) "queries/<name>.insights")))))
+
+(deftest deployed-show-without-a-cache-says-how-to-fetch
+  (let [r (dlb *home* "deployed" "show" "--env" "local")]
+    (is (= 2 (:exit r)))
+    (is (str/includes? (:err r) "deployed/no-cache"))
+    (is (str/includes? (:err r) "dlb deployed refresh --env local"))))
