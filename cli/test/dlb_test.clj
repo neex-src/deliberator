@@ -640,3 +640,76 @@
     (is (= 2 (:exit r)))
     (is (str/includes? (:err r) "deployed/no-cache"))
     (is (str/includes? (:err r) "dlb deployed refresh --env local"))))
+
+;; --- M5: repo.clone, worktrees and CI as text -------------------------------------------------------------------------
+
+(defn- git! [dir & args]
+  (let [r (apply p/shell {:out :string :err :string :continue true :dir (str dir)}
+                 "git" "-c" "user.name=t" "-c" "user.email=t@t" "-c" "commit.gpgsign=false" "-c" "protocol.file.allow=always" args)]
+    (when-not (zero? (:exit r)) (throw (ex-info (str "git " (str/join " " args) ": " (:err r)) {})))
+    (str/trim (:out r))))
+
+(deftest repo-clone-and-worktrees-from-the-shell
+  (let [t (fs/create-temp-dir {:prefix "m5-" :path (str (fs/path root "cli" "target"))})
+        origin (str (fs/path t "origin.git")) work (str (fs/path t "work"))]
+    (try
+      (git! t "init" "--bare" "-b" "main" origin)
+      (git! t "clone" "--quiet" origin work)
+      (spit (str (fs/path work "a.txt")) "one\n")
+      (git! work "add" ".") (git! work "commit" "-m" "one") (git! work "branch" "-M" "main") (git! work "push" "-u" "origin" "main")
+      (is (zero? (:exit (dlb *home* "workspace" "open" "m5"))))
+      (testing "help comes from the op schema"
+        (is (str/includes? (:out (dlb *home* "help" "repo" "clone")) "dlb repo clone <url>"))
+        (is (str/includes? (:out (dlb *home* "help" "worktree")) "dlb worktree start <repo>")))
+      (testing "dlb repo clone <url> <name>"
+        (let [r (dlb *home* "repo" "clone" origin "proj" "--ws" "m5" "--json")
+              m (json-line (:out r))]
+          (is (zero? (:exit r)) (:err r))
+          (is (= "proj" (get-in m [:result :name])))
+          (is (true? (get-in m [:result :bare])))
+          (is (fs/exists? (fs/path *home* "workspaces" "m5" "repos" "proj.git" "HEAD")))))
+      (testing "dlb worktree start <repo> <branch>: from the latest main, no questions"
+        (spit (str (fs/path work "b.txt")) "two\n")
+        (git! work "add" ".") (git! work "commit" "-m" "two") (git! work "push" "origin" "main")
+        (let [r (dlb *home* "worktree" "start" "proj" "feat/x" "--ws" "m5" "--json")
+              m (json-line (:out r))]
+          (is (zero? (:exit r)) (:err r))
+          (is (= "feat/x" (get-in m [:result :branch])))
+          (is (= (git! work "rev-parse" "HEAD") (get-in m [:result :base-sha])) "the commit pushed after the clone is there")
+          (is (fs/exists? (fs/path *home* "workspaces" "m5" "worktrees" "proj" "feat-x" "b.txt")))))
+      (testing "dlb worktree list, and remove refuses changes"
+        (let [out (:out (dlb *home* "worktree" "list" "--ws" "m5"))]
+          (is (str/includes? out "1 row") out)
+          (is (str/includes? out "feat/x")))
+        (spit (str (fs/path *home* "workspaces" "m5" "worktrees" "proj" "feat-x" "dirty.txt")) "x")
+        (let [r (dlb *home* "worktree" "remove" "proj" "feat-x" "--ws" "m5")]
+          (is (= 2 (:exit r)))
+          (is (str/includes? (:err r) "worktree/dirty") (:err r))
+          (is (str/includes? (:err r) "force")))
+        (let [r (dlb *home* "worktree" "remove" "proj" "feat-x" "--force" "--ws" "m5")]
+          (is (zero? (:exit r)) (:err r)))
+        (is (str/includes? (:out (dlb *home* "worktree" "list" "--ws" "m5")) "0 rows")))
+      (finally (fs/delete-tree t)))))
+
+(deftest ci-help-and-typed-errors
+  (is (str/includes? (:out (dlb *home* "help" "ci")) "dlb ci runs <repo>"))
+  (is (str/includes? (:out (dlb *home* "help" "ci" "diff")) "dlb ci diff <run>"))
+  (dlb *home* "workspace" "open" "ci5")
+  (dlb *home* "session" "start" "C1" "--ws" "ci5")
+  (let [r (dlb *home* "ci" "log" "12345" "--ws" "ci5")]
+    (is (= 2 (:exit r)))
+    (is (str/includes? (:err r) "ci/bad-repo") (:err r))))
+
+(deftest ci-against-real-github-when-there-is-a-token
+  ;; read-only: babashka/fs (public) has failed and green runs of workflow ci; a job's log download needs a token
+  (let [tok (:out (p/shell {:out :string :err :string :continue true} "gh" "auth" "token"))]
+    (if (str/blank? tok)
+      (clojure.test/do-report {:type :skip :message "ci-against-real-github-when-there-is-a-token: no gh auth token"})
+      (do
+        (dlb *home* "workspace" "open" "ci6")
+        (dlb *home* "session" "start" "C2" "--ws" "ci6")
+        (let [r (dlb *home* "ci" "runs" "babashka/fs" "ci" "--status" "failure" "--limit" "5" "--ws" "ci6")]
+          (is (zero? (:exit r)) (:err r))
+          (is (re-find #"path: .*/sessions/C2/ci/runs-babashka-fs-ci-" (:out r)) (:out r))
+          (is (str/includes? (:out r) "rows: 5") "the rows are printed")
+          (is (not (str/includes? (str (:out r) (:err r)) (str/trim tok))) "the token is never printed"))))))
