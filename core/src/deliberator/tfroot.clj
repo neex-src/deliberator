@@ -208,7 +208,8 @@
   [a {:keys [endpoint region access-key secret-key state-path remote-states]}]
   (let [eps (into (sorted-map) (map (fn [k] [k endpoint])) (conj (:services a) "sts"))]
     (cond-> {"//" (str generated-marker ", M6.1: provider endpoints and a local state for running this root on the local runtime. "
-                       "Do not commit it (gitignore). Delete this line to take the file over: it is then never rewritten.")
+                       "Do not commit it (gitignore) and do not leave it where Terraform runs against the real account: it redirects the providers and the state. "
+                       "Delete this line to take the file over: it is then never rewritten.")
              "terraform" {"backend" {"local" {"path" state-path}}}}
       (seq (:providers a))
       (assoc "provider" {"aws" (vec (for [{:keys [alias block]} (:providers a)]

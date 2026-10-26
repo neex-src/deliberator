@@ -167,7 +167,8 @@
   ([ws env-name]
    (let [descs (description/list ws)
          rows (rt-rows ws nil)
-         e (if (= "local" env-name) (topology/local-env ws) (env/load ws env-name))]
+         e (if (= "local" env-name) (topology/local-env ws) (env/load ws env-name))
+         targets (env/read-targets ws env-name)]
      (mapv (fn [d] (let [ent (env/service-entry e (:name d))]
                      (cond-> (merge (let [hp (host-ports ws d rows)]
                                       (cond-> (select-keys d [:name :kind :repo :module :port :jdwp])
@@ -180,9 +181,9 @@
                                                     (store/container-name ws (role-label (:name d))))})
                        (= :external (:mode ent)) (assoc :url (:url ent))
                        ;; the `log/` target of the environment for this service (a container or a CloudWatch group), M6.4
-                       (get-in e [:targets (keyword "log" (role-label (:name d)))])
+                       (get targets (keyword "log" (role-label (:name d))))
                        (assoc :log-target (str "log/" (role-label (:name d)))
-                              :log (get-in e [:targets (keyword "log" (role-label (:name d)))])))))
+                              :log (get targets (keyword "log" (role-label (:name d))))))))
            descs))))
 
 (defn show

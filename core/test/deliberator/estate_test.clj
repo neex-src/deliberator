@@ -209,6 +209,9 @@
       (is (= #{"a" "b"} (set (description/names ws))))
       (is (empty? (filter #(= "service" (namespace %)) (keys (:containers (runtime/read-config ws))))) "runtime.edn holds no service role")
       (is (= {"a" "running" "b" "running"} (into {} (map (juxt :name :status)) (service/list ws))))
+      (testing "the rows link each service to its runtime container and its log/ target (M6.4)"
+        (is (= {"a" [(first (:Names (ctr ws "service-a"))) "log/service-a"] "b" [(first (:Names (ctr ws "service-b"))) "log/service-b"]}
+               (into {} (map (juxt :name (juxt :container :log-target))) (service/list ws)))))
       (testing "stop keeps the container, start brings the same one back"
         (is (= "stopped" (:status (service/stop! ws "a" {}))))
         (is (= "stopped" (:status (first (service/status ws "a")))))

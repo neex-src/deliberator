@@ -292,6 +292,11 @@
   [ws name]
   (or (:topology (store/read-edn (env-file ws name))) {}))
 
+(defn read-targets
+  "The `:targets` of environment `name` read raw ({} when the file or the key is absent); never creates the default environment."
+  [ws name]
+  (or (:targets (store/read-edn (env-file ws name))) {}))
+
 (defn- topology-target
   "The topology's answer for `k` (`service/<n>` url or off error; `log/service-<n>` of an external instance
   that names its log container), or nil when the topology has nothing to say (local)."

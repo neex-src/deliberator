@@ -6,6 +6,7 @@
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
+            [deliberator.env :as env]
             [deliberator.ops :as ops]
             [deliberator.runtime :as runtime]
             [deliberator.service :as service]
@@ -70,6 +71,16 @@
       (testing "list and show without a runtime answer"
         (is (= ["a" "q"] (mapv :name (call "service.list" {:ws "w"}))))
         (is (= "local" (:mode (first (call "service.list" {:ws "w"})))))
+        (testing "each row names the service's runtime container and its log/ target (M6.4)"
+          (let [rows (call "service.list" {:ws "w"})
+                a (first (filter #(= "a" (:name %)) rows))
+                q (first (filter #(= "q" (:name %)) rows))]
+            (is (= "deliberator-w-service-a" (:container a)) "the name the runtime gives it, before any container exists")
+            (is (= "deliberator-w-service-q" (:container q)))
+            (is (= "log/service-a" (:log-target a)) "the log/ target the local environment has for it")
+            (is (= {:container "deliberator-w-service-a"} (:log a)))
+            (env/save! "w" (assoc-in (env/load "w" "local") [:targets :log/service-a] {:cloudwatch "/ecs/a"}))
+            (is (= {:cloudwatch "/ecs/a"} (:log (first (filter #(= "a" (:name %)) (call "service.list" {:ws "w"}))))))))
         (is (= "a" (:name (call "service.show" {:ws "w" :name "a"}))))
         (is (= "service/not-found" (:type (thrown-type #(call "service.show" {:ws "w" :name "zz"}))))))
       (testing "adopting wrote no role into runtime.edn"

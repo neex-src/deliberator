@@ -7,6 +7,7 @@
             [clojure.test :refer [deftest is testing]]
             [cognitect.aws.client.api :as aws]
             [cognitect.aws.credentials :as creds]
+            [deliberator.env :as env]
             [deliberator.podman :as podman]
             [deliberator.podman-test-support :as sup :refer [when-podman]]
             [deliberator.runtime :as runtime]
@@ -16,6 +17,7 @@
            (java.time Instant)))
 
 (def floci-port 14566)
+(def real-account "000000000000")
 (def pg-port 15432)
 
 (defn- test-config [id]
@@ -71,7 +73,16 @@
         (is (= "http://localhost:14566" (get-in moved [:env "FLOCI_BASE_URL"])))
         (is (not= (:hash floci) (:hash moved)))
         (is (= (:hash floci) (:hash (first (runtime/desired-all "w" cfg)))))))
-    (is (= "service-a" (runtime/role-name :service/a))))))
+    (is (= "service-a" (runtime/role-name :service/a)))
+    (testing "the account of the local environment goes to Floci (M6.2); Floci's own fake one sets nothing"
+      (is (not (contains? (:env floci) "FLOCI_DEFAULT_ACCOUNT_ID")))
+      (env/save! "w" (assoc-in (env/load "w" "local") [:aws :account] "000000000000"))
+      (let [[f2 p2] (runtime/desired-all "w" cfg)]
+        (is (= "000000000000" (get-in f2 [:env "FLOCI_DEFAULT_ACCOUNT_ID"])))
+        (is (not= (:hash floci) (:hash f2)) "a new account recreates Floci")
+        (is (not (contains? (:env p2) "FLOCI_DEFAULT_ACCOUNT_ID")) "only Floci"))
+      (let [over (first (runtime/desired-all "w" (assoc-in cfg [:containers :floci :env "FLOCI_DEFAULT_ACCOUNT_ID"] "111111111111")))]
+        (is (= "111111111111" (get-in over [:env "FLOCI_DEFAULT_ACCOUNT_ID"])) "an explicit env of the role in runtime.edn wins"))))))
 
 (deftest podman-down-is-reported
   (tu/with-temp-home
@@ -99,6 +110,7 @@
          (io/make-parents f)
          (spit f "create table t(x int); insert into t values (42);"))
        (write-config! ws cfg)
+       (env/save! ws (assoc-in (env/load ws "local") [:aws :account] real-account))   ; M6.2: Floci answers as this account
        (try
          (let [s1 (runtime/ensure! ws opts)
                ev1 (map :event @events)]
@@ -125,7 +137,11 @@
                                     :credentials-provider (creds/basic-credentials-provider {:access-key-id "test" :secret-access-key "test"})
                                     :endpoint-override {:protocol :http :hostname "localhost" :port floci-port}})
                    r (aws/invoke sqs {:op :CreateQueue :request {:QueueName "rt-q"}})]
-               (is (= (str "http://localhost:" floci-port "/000000000000/rt-q") (:QueueUrl r)) (pr-str r))
+               (is (= (str "http://localhost:" floci-port "/" real-account "/rt-q") (:QueueUrl r)) (pr-str r))
+               (is (str/includes? (str (:QueueUrl (aws/invoke sqs {:op :GetQueueUrl :request {:QueueName "rt-q"}}))) real-account))
+               (is (= (str "arn:aws:sqs:us-east-1:" real-account ":rt-q")
+                      (get-in (aws/invoke sqs {:op :GetQueueAttributes :request {:QueueUrl (:QueueUrl r) :AttributeNames ["QueueArn"]}})
+                              [:Attributes :QueueArn])) "the ARNs of the emulator carry the account")
                (is (some? (:MessageId (aws/invoke sqs {:op :SendMessage
                                                        :request {:QueueUrl (:QueueUrl r) :MessageBody "hi"}}))))))
            (testing "postgres ran the :init script"

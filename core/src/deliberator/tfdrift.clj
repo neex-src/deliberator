@@ -8,7 +8,8 @@
             [clojure.string :as str]
             [deliberator.awsdiscover :as discover]
             [deliberator.env :as env]
-            [deliberator.store :as store]))
+            [deliberator.store :as store]
+            [deliberator.tfroot :as tfroot]))
 
 (def ^:private type->kind
   "Terraform resource type -> [discover kind, attribute holding the name]."
@@ -90,15 +91,17 @@
 
 (defn read-doc
   "The Terraform JSON document: `file` when given, else `terraform show -json [plan]` run in `dir` (read-only; a scrubbed
-  environment without AWS credentials). Throws `{:type :tf/unreadable}`."
-  [{:keys [file dir plan]}]
+  environment without AWS credentials; `data-dir` is `TF_DATA_DIR`, for a root that `terraform.local` ran through its override
+  file, whose backend metadata lives under the workspace). Throws `{:type :tf/unreadable}`."
+  [{:keys [file dir plan data-dir]}]
   (let [txt (cond
               file (slurp (io/file file))
               dir (let [_ (when-not (and (.isDirectory (io/file dir)) (some #(str/ends-with? (.getName ^java.io.File %) ".tf") (.listFiles (io/file dir))))
                             (throw (ex-info (str "no Terraform files in " dir) {:type :tf/no-root :dir (str dir)})))   ; B18: not "no drift"
                         env (into {} (remove (fn [[k _]] (str/starts-with? k "AWS_"))) (System/getenv))
                         r (shell/with-sh-dir dir
-                            (shell/with-sh-env (assoc env "AWS_CONFIG_FILE" "/dev/null" "AWS_SHARED_CREDENTIALS_FILE" "/dev/null" "TF_IN_AUTOMATION" "1")
+                            (shell/with-sh-env (cond-> (assoc env "AWS_CONFIG_FILE" "/dev/null" "AWS_SHARED_CREDENTIALS_FILE" "/dev/null" "TF_IN_AUTOMATION" "1")
+                                                   data-dir (assoc "TF_DATA_DIR" data-dir))
                               (apply shell/sh "terraform" "show" "-json" "-no-color" (when plan [plan]))))]
                     (when-not (zero? (:exit r))
                       (throw (ex-info (str "terraform show failed in " dir ": " (str/trim (:err r))) {:type :tf/unreadable :dir dir})))
@@ -112,7 +115,10 @@
   computed from that extract: the full document holds the state's secret values (B1)."
   [ws env-name {:keys [file dir plan] :as src}]
   (let [e (env/load ws env-name)
-        doc (extract (read-doc src))
+        ;; a local environment and a root that terraform.local ran through its override file: its data dir is under the workspace
+        data-dir (when (and dir (= :local (:kind e)) (.exists (io/file (str dir) tfroot/override-name)))
+                   (let [dd (tfroot/data-dir ws dir)] (when (.isDirectory (io/file dd)) dd)))
+        doc (extract (read-doc (cond-> src data-dir (assoc :data-dir data-dir))))
         _ (store/raw-put! ws (.getBytes (json/write-str doc) "UTF-8")
                           {:source :file :op "terraform.show" :extract :tf-declared :env (:name e) :at (java.time.Instant/now)
                            :content-type "application/json" :path (str (or file dir))})

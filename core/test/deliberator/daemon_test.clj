@@ -16,7 +16,7 @@
             [deliberator.test-util :as tu])
   (:import (java.util UUID)))
 
-(use-fixtures :once (fn [f] (f) (env/close-clients!)))
+(use-fixtures :once (fn [f] (try (f) (finally (fu/drop-queues! "dlbtest-") (env/close-clients!)))))
 
 (defmacro with-daemon
   "Starts a daemon on a fresh short home (opts map), binds `h` to its handle and `home`; stops it."

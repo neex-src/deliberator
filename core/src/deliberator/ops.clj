@@ -62,9 +62,9 @@
     aws.discover env ws                            -> {env resources{kind [{name ref}]} errors}
     terraform.drift env file dir plan ws           -> {env source region declared matching missing[] undeclared[] errors}
     terraform.local dir* action env vars ws         -> {action dir env ok exit summary sha path output vars [override warnings]}   [tf.line]   (action vars: {action dir env vars} only; override: writes the override file, runs nothing)
-    terraform.graph roots* ws                       -> {roots[{name dir}] edges[{from to via ref file line}] order[dir] unresolved[]}   (reads .tf files, evaluates nothing)
+    terraform.graph roots*                          -> {roots[{name dir}] edges[{from to via ref file line}] order[dir] unresolved[]}   (reads .tf files, evaluates nothing)
     terraform.apply-all roots* action env vars ws   -> {action env order ok failed skipped results[{dir ok exit summary sha path}]}   [tf.root tf.line]
-    terraform.locate root* address* ws              -> {file line address root}   (where a drift row's address is declared)
+    terraform.locate root* address*                 -> {file line address root}   (where a drift row's address is declared)
     aws.describe service* op*                      -> {service op class input}   (input = shape tree: type required members member enum)
     scenario.parse path text ws                    -> {header steps errors}   (a syntax error is data in errors, not an op error)
     runs.list ws session scenario limit            -> {session runs}
@@ -1058,7 +1058,7 @@
                                        :plan {:type :string :doc "saved plan file in dir"})}
    "terraform.graph" {:fn terraform-graph :class :read
                       :doc "The order of several Terraform roots, read from their .tf files and never evaluated: root B comes after root A when B has a `terraform_remote_state` that reads A's state (an s3 backend key or a local path that A's backend names) or a `data` source that looks up, by a literal name, a resource A declares (`data \"aws_iam_role\"` with `name = \"x\"` and A's `resource \"aws_iam_role\"` with the same). Answers the roots, the edges (with the file and line that made each), the order (directories, dependencies first, otherwise as given) and the remote states that point at no given root. A cycle is an error."
-                      :args (ws-schema :roots {:type :strings :required true :positional true :doc "Terraform root directories, comma separated"})}
+                      :args {:roots {:type :strings :required true :positional true :doc "Terraform root directories, comma separated"}}}
    "terraform.apply-all" {:fn terraform-apply-all :class :mutate
                           :doc "terraform.local of every given root in the order terraform.graph finds (apply; destroy runs in reverse), each with its override file; stops at the first root that fails and lists the rest as skipped. A terraform_remote_state of one root that reads another given root is redirected to that root's local state. Explicit vars go to the roots that declare them."
                           :events ["tf.root" "tf.line"]
@@ -1068,8 +1068,8 @@
                                            :vars {:type :object :doc "explicit -var name value pairs for the roots that declare them"})}
    "terraform.locate" {:fn terraform-locate :class :read
                        :doc "Where a Terraform address is declared in a root: the .tf file and the line (a cheap read of the files, no Terraform run). The address is a drift row's (aws_sqs_queue.inbox, module.stack.aws_sqs_queue.inbox[0], data.aws_vpc.default); a module with a local source is followed, a registry module answers its own block with module-only."
-                       :args (ws-schema :root {:type :string :required true :positional true :doc "Terraform root directory"}
-                                        :address {:type :string :required true :positional true :doc "resource address, e.g. module.stack.aws_sqs_queue.inbox"})}
+                       :args {:root {:type :string :required true :positional true :doc "Terraform root directory"}
+                              :address {:type :string :required true :positional true :doc "resource address, e.g. module.stack.aws_sqs_queue.inbox"}}}
    "terraform.local" {:fn terraform-local :class :mutate
                       :doc "terraform plan, apply or destroy of a root directory onto a local environment (refused for a remote one): writes <root>/deliberator_override.tf.json first (the root's provider \"aws\" blocks point at the emulator with fake keys, the state is local under the workspace; never removed afterwards, a missing gitignore entry is a loud warning, a root the override cannot cover is refused), then init and the action, output streamed as tf.line events and persisted raw. Action override only writes the file. Variables the root declares are filled from the workspace: `endpoint` (the environment's), `container_endpoint`, `service_a_url`, `db_url` (the runtime's container names); `vars` overrides. The result lists the final `vars`."
                       :events ["tf.line"]

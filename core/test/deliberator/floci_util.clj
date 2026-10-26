@@ -6,6 +6,8 @@
   passes silently. `local-env` is the default local environment record pointed at that URL."
   (:require [clojure.string :as str]
             [clojure.test :as t]
+            [cognitect.aws.client.api :as aws]
+            [cognitect.aws.credentials :as creds]
             [deliberator.env :as env])
   (:import (java.net URI)
            (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)
@@ -53,3 +55,17 @@
      (if (floci-up?)
        (do ~@body)
        (t/do-report {:type :skip :message (str '~name ": runtime down: bb estate:up (Floci at " url ")")}))))
+
+(defn drop-queues!
+  "Deletes the SQS queues of the test Floci (eu-central-1, the region of `local-env`) whose names start with `prefix`
+  (BUGS B22: pass B ran against the estate's Floci and left the `dlbtest-` queues of the tests there). Quiet when Floci is down."
+  [prefix]
+  (when (floci-up?)
+    (let [u (URI. url)
+          c (aws/client {:api :sqs :region "eu-central-1"
+                         :credentials-provider (creds/basic-credentials-provider {:access-key-id "test" :secret-access-key "test"})
+                         :endpoint-override {:protocol :http :hostname (.getHost u) :port (.getPort u)}})]
+      (try
+        (doseq [q (:QueueUrls (aws/invoke c {:op :ListQueues :request {:QueueNamePrefix prefix}}))]
+          (aws/invoke c {:op :DeleteQueue :request {:QueueUrl q}}))
+        (finally (aws/stop c))))))
