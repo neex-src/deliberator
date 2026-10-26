@@ -65,14 +65,16 @@
               {:kind :ecs :cluster "stage" :name "svc" :revision 3 :desired 0 :running 0 :containers [] :deployments []}
               {:kind :lambda :name "fn" :version "$LATEST" :code-sha256 "abc=" :last-modified "2026-10-15T18:47:31.056+0000"}]
    :deployments [{:id "d-1" :application "app" :group "g" :status "Succeeded" :created-at (Instant/parse "2026-10-25T00:00:00Z")}]
-   :errors {:codedeploy [{:op "ListDeployments" :code "AccessDenied" :message "no"}]}})
+   :errors {:codedeploy [{:op "ListDeployments" :code "AccessDenied" :message "no"}]}
+   :absent {:ecs "SubscriptionRequiredException"}})
 
 (deftest the-text-view-is-one-row-per-service
   (let [lines (str/split-lines (d/text-view snap))]
     (is (some #(= "ecs\tprod\tsvc\trev 7\tapp:v1\t2/2\t2026-10-26T11:00:00Z" %) lines))
     (is (some #(= "lambda\t-\tfn\t$LATEST\tabc=\t\t2026-10-15T18:47:31.056+0000" %) lines))
     (is (some #(str/includes? % "deployment\tapp/g\td-1\tSucceeded") lines))
-    (is (some #(str/includes? % "codedeploy\tListDeployments\tAccessDenied no") lines))))
+    (is (some #(str/includes? % "codedeploy\tListDeployments\tAccessDenied no") lines))
+    (is (some #(= "# absent: ecs (SubscriptionRequiredException)" %) lines))))
 
 (defn- thrown-data [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))
 
@@ -85,6 +87,7 @@
     (store/write-edn! (d/cache-path "w" "dev") snap)
     (let [now (Instant/parse "2026-10-26T12:07:00Z")
           all (d/show "w" "dev" {:now now})]
+      (is (= "dev" (:env all)))
       (is (= 3 (:count all)))
       (is (= 420000 (:age-ms all)))
       (is (= "7 min" (:age all)))
