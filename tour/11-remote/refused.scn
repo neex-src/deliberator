@@ -1,0 +1,8 @@
+# Two steps that are refused for a remote environment; run one at a time (--steps 1, --steps 2).
+# @env tour-remote
+
+### shell not-here
+echo "this never runs"
+
+### op session.list not-here-either
+{}

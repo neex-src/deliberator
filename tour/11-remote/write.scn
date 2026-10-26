@@ -1,0 +1,5 @@
+# One mutation: on a remote record it needs a confirmation (read-only false) or is refused (read-only true).
+# @env tour-remote
+
+### aws ssm.PutParameter note
+{"Name": "/tour/remote-note", "Value": "written through a confirmation", "Type": "String", "Overwrite": true}
