@@ -290,7 +290,7 @@
    [#"(?i)(runner name:? ?['\"]?)[^'\"\n]+" "$1<runner>"]
    [#"GitHub[ -]Actions[ -]\d+" "GitHub Actions <id>"]
    [#"(?i)(runner (?:group )?id:? ?)\d+" "$1<id>"]
-   [#"^(\s*)(Version|Commit|Build Date|Image Release|Included Software):.*$" "$1$2: <varies>"]    ; the runner image header
+   [#"^(\s*)(Version|Commit|Build Date|Image Release|Included Software|Azure Region):.*$" "$1$2: <varies>"]    ; the runner image header
    [#"(Current runner version: ')[^']*'" "$1<varies>'"]])
 
 (defn normalise-line
