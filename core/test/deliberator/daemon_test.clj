@@ -50,6 +50,7 @@
    "audit.show" "config.chain" "config.refresh" "deployed.refresh" "deployed.show" "logs.insights"
    "env.list" "env.describe" "env.check" "env.save" "env.create" "env.remove" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
    "aws.describe" "aws.discover" "terraform.drift" "terraform.local" "terraform.graph" "terraform.apply-all" "terraform.locate"
+   "aws.describe" "aws.discover" "terraform.drift" "terraform.local"
    "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "repo.attach" "repo.detach" "repo.list" "repo.clone" "worktree.start" "worktree.list" "worktree.remove" "ci.runs" "ci.log" "ci.tail" "ci.diff" "logs.fetch" "logs.match" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
 
 ;; --- lifecycle ----------------------------------------------------------------------------------
