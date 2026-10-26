@@ -352,6 +352,17 @@
 (defonce ^:private http-client (delay (-> (HttpClient/newBuilder) (.version HttpClient$Version/HTTP_1_1)
                                    (.connectTimeout (Duration/ofSeconds 2)) (.build))))
 
+(defonce ^:private probe-persisted (atom {}))   ; [ws url] -> sha of the last health body persisted for it
+
+(defn- persist-probe!
+  "A health body goes to the raw store when it differs from the last one persisted for this URL, or when the probe is not
+  2xx (review 2026-10-25, R26: the IDE's 15 s status tick wrote a meta sidecar per probe; the bodies are the same)."
+  [ws url ^bytes body status content-type]
+  (let [sha (store/sha256 body) k [(store/ws-name ws) url]]
+    (when (or (not (<= 200 status 299)) (not= sha (get @probe-persisted k)))
+      (store/raw-put! ws body {:source :http :op (str "GET " url) :env nil :at (store/now) :content-type content-type})
+      (swap! probe-persisted assoc k sha))))
+
 (defn- http-probe [c ws d {:keys [http port]}]
   (let [cp (or port (first (keys (:ports d))))
         hp (get (:ports d) cp)
@@ -362,8 +373,7 @@
             body ^bytes (.body resp)
             status (.statusCode resp)]
         (when (pos? (alength body))
-          (store/raw-put! ws body {:source :http :op (str "GET " url) :env nil :at (store/now)
-                                   :content-type (or (.orElse (.firstValue (.headers resp) "content-type") nil) "application/octet-stream")}))
+          (persist-probe! ws url body status (or (.orElse (.firstValue (.headers resp) "content-type") nil) "application/octet-stream")))
         (if-not (<= 200 status 299)
           {:health :unhealthy :detail (str "HTTP " status)}
           (let [j (try (json/read-str (String. body StandardCharsets/UTF_8)) (catch Exception _ nil))
@@ -680,6 +690,35 @@
   (load-config! ws nil)
   (sync-local-env! ws (read-config ws))
   {:ws (store/ws-name ws) :path (str (config-path ws))})
+
+(defn set-config!
+  "Sets the key path `ks` of the workspace's `runtime.edn` (created with the defaults when absent) to `v` and points the
+  `local` environment at the result (as `sync-env!`). The one way a task or client changes runtime.edn (review 2026-10-25,
+  R33). -> `{:ws :path :keys :value}`."
+  [ws ks v]
+  (when (empty? ks) (throw (ex-info "runtime.set needs a key path" {:type :runtime/bad-path :hint "e.g. containers postgres init"})))
+  (let [cfg (assoc-in (load-config! ws nil) (vec ks) v)]
+    (store/write-edn! (config-path ws) cfg)
+    (sync-local-env! ws cfg)
+    {:ws (store/ws-name ws) :path (str (config-path ws)) :keys (vec ks) :value v}))
+
+(defn endpoint-holder
+  "Who publishes the host port of a local `http://host:port` endpoint: `{:port :container :ours?}` when a running container
+  does (`:ours?` when it carries this workspace's label), nil when none does, when the host is not local, or when Podman
+  does not answer. Review 2026-10-25, R31: a sandbox AWS account's emulator on 4566 is where a default `local` environment talks to."
+  [ws url]
+  (try
+    (let [u (java.net.URI. (str url))
+          host (.getHost u)
+          port (let [p (.getPort u)] (if (neg? p) (if (= "https" (.getScheme u)) 443 80) p))]
+      (when (contains? #{"localhost" "127.0.0.1" "::1" "0.0.0.0" "[::1]"} host)
+        (let [c (podman-client ws (read-config ws) :persist? false)]
+          (some (fn [ctr]
+                  (when (some #(= port (:host_port %)) (:Ports ctr))
+                    {:port port :container (first (:Names ctr))
+                     :ours? (= (store/ws-name ws) (label ctr "deliberator.workspace"))}))
+                (podman/list-containers c :all false)))))
+    (catch Throwable _ nil)))
 
 ;; ---------------------------------------------------------------------------------------------
 ;; Command line

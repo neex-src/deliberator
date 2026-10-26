@@ -23,6 +23,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [deliberator.jdwp :as jdwp]
+            [deliberator.process :as process]
             [deliberator.runtime :as runtime]
             [deliberator.service :as service]
             [deliberator.service.description :as description]
@@ -64,17 +65,18 @@
     {:lines (if (seq errs) errs (vec (take-last 15 lines))) :errors parsed}))
 
 (defn- run-cmd!
-  "Runs argv in `dir` with JAVA_HOME `java-home`, appends every line to `logf`. -> `{:exit :lines}`."
-  [argv ^File dir java-home ^File logf]
-  (let [pb (doto (ProcessBuilder. ^java.util.List (mapv str argv)) (.directory dir) (.redirectErrorStream true))
-        _ (when java-home (.put (.environment pb) "JAVA_HOME" java-home))
-        proc (try (.start pb)
-                  (catch java.io.IOException e
-                    (fail :service/compile-failed (str "cannot run " (str/join " " argv) ": " (.getMessage e))
-                          :lines [(.getMessage e)] :hint "is the build tool on the daemon's PATH?")))
-        lines (with-open [rdr (io/reader (.getInputStream proc)) w (io/writer logf :append true)]
-                (doall (for [l (line-seq rdr)] (do (.write w l) (.write w "\n") (.flush w) l))))]
-    {:exit (.waitFor proc) :lines (vec lines)}))
+  "Runs argv in `dir` with JAVA_HOME `java-home`, appends every line to `logf`; the process tree is killed when the request
+  is cancelled (`on-cancel!`) or after `process/default-budget-ms`. -> `{:exit :lines}`."
+  [argv ^File dir java-home ^File logf on-cancel!]
+  (with-open [w (io/writer logf :append true)]
+    (try
+      (process/run! argv {:dir dir :on-cancel! on-cancel! :what (str/join " " argv)
+                          :extra-env (when java-home {"JAVA_HOME" java-home})
+                          :line! (fn [l] (.write w l) (.write w "\n") (.flush w))})
+      (catch clojure.lang.ExceptionInfo e
+        (if (= :process/cannot-start (:type (ex-data e)))
+          (fail :service/compile-failed (ex-message e) :lines [(ex-message e)] :hint "is the build tool on the daemon's PATH?")
+          (throw e))))))
 
 ;; hotswap path ----------------------------------------------------------------------------------
 
@@ -167,8 +169,9 @@
 
 (defn reload!
   "Compiles and reloads service `name` in its running container. See the namespace docstring.
-  `opts`: `:sink`, `:budget-ms` (15000), `:quiet-ms` (2500)."
-  [ws name {:keys [sink budget-ms quiet-ms] :or {budget-ms default-budget-ms quiet-ms default-quiet-ms}}]
+  `opts`: `:sink`, `:budget-ms` (15000, the wait for the agent), `:quiet-ms` (2500), `:on-cancel!` (the protocol's: a cancelled
+  request kills the compile's process tree)."
+  [ws name {:keys [sink budget-ms quiet-ms on-cancel!] :or {budget-ms default-budget-ms quiet-ms default-quiet-ms}}]
   (let [d (or (description/read ws name)
               (fail :service/not-found (str "no service " (pr-str name) " in workspace " (store/ws-name ws))
                     :known (description/names ws) :hint "service.adopt a module, or dlb service list"))
@@ -204,7 +207,7 @@
             dir (.getCanonicalFile (io/file mod (:dir rc)))
             _ (step! {:step "compiling" :detail (str/join " " (:cmd rc))})
             jh (some-> (get-in d [:build :java]) service/jdk)
-            {:keys [exit lines]} (run-cmd! (:cmd rc) dir jh logf)]
+            {:keys [exit lines]} (run-cmd! (:cmd rc) dir jh logf on-cancel!)]
         (when-not (zero? exit)
           (let [{:keys [lines errors]} (compile-errors lines)]
             (persist-raw!)
@@ -275,7 +278,7 @@
               fallback (:fallback result)]
           (when fallback
             (step! {:step "fallback restart" :detail fallback})
-            (when (= :plain kind) (service/build! ws name {:sink sink}))
+            (when (= :plain kind) (service/build! ws name {:sink sink :on-cancel! on-cancel!}))
             (service/restart! ws name {:sink sink}))
           (let [row2 (or (row-of ws role) row)
                 out (cond-> {:name name :mechanism (:mechanism result) :changed (:changed result) :redefined (vec (:redefined result))

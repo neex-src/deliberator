@@ -44,7 +44,7 @@
 (def expected-ops
   ["hello" "op.describe" "daemon.stop" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "session.note" "session.start" "session.end" "session.list" "session.current"
    "config.chain" "config.refresh"
-   "env.list" "env.describe" "env.check" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs"
+   "env.list" "env.describe" "env.check" "env.save" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
    "aws.describe" "aws.discover" "terraform.drift" "terraform.local"
    "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "repo.attach" "repo.detach" "repo.list" "logs.fetch" "logs.match" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
 
@@ -268,7 +268,7 @@
       (let [e (:error (:terminal (tc/request c "runtime.logs" {:ws "w1" :role "nosuchrole"})))]
         (is (string? (:message e)))
         (is (string? (:type e))))
-      (is (= "bad-args" (get-in (tc/request c "runtime.logs" {:ws "w1" :role "x" :since "yesterday"})
+      (is (= "logs/bad-arg" (get-in (tc/request c "runtime.logs" {:ws "w1" :role "x" :since "yesterday"})
                                 [:terminal :error :type]))))))
 
 ;; --- scenarios ----------------------------------------------------------------------------------

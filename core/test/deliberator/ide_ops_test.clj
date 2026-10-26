@@ -3,15 +3,19 @@
   `runs.list scenario`, `repo.*`, `logs.fetch`, `marker.*`, `logs.match`), called through `ops/call!` on a
   temporary home. Pure and file-based tests run in pass A; the container and CloudWatch fetches need the
   estate (Floci at `floci-util/url`, container `deliberator-$ESTATE_WS-floci`) and skip loudly without it."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [deliberator.aws :as aws]
+            [deliberator.awsdiscover :as awsdiscover]
             [deliberator.env :as env]
             [deliberator.floci-util :as fu :refer [deftest-floci]]
             [deliberator.logfetch :as logfetch]
             [deliberator.markers :as markers]
             [deliberator.ops :as ops]
+            [deliberator.protocol :as protocol]
+            [deliberator.runtime :as runtime]
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.test-util :as tu]
@@ -590,3 +594,123 @@
             (is (= :podman (:source (store/raw-meta ws (:sha r)))))
             (is (= (:bytes r) (count (.getBytes (slurp (:path r)) "UTF-8"))))
             (is (pos? (:lines (call "logs.fetch" {:target "log/floci" :for "300ms"}))) "history plus a short listen")))))))
+
+;; --- aws.discover pages, terraform.drift sees past the first page (review 2026-10-25, R5) ---------------------
+
+(deftest-floci discover-pages-through-sixty-parameters-and-drift-reports-none-missing
+  (tu/with-temp-home
+    (let [ws "default"
+          _ (call "workspace.open" {:ws ws})
+          e (fu/local-env)
+          _ (env/save! ws e)
+          ctx {:ws ws}
+          prefix (str "/dlb-discover-" (subs (str (random-uuid)) 0 8) "/")
+          names (mapv #(str prefix "p" (format "%02d" %)) (range 60))
+          ok! (fn [r] (is (not (aws/error? r)) (pr-str r)) r)]
+      (try
+        (doseq [n names] (ok! (aws/invoke! ctx e :ssm :PutParameter {:Name n :Value "v" :Type "String" :Overwrite true})))
+        (let [first-page (aws/invoke! ctx e :ssm :DescribeParameters {:MaxResults 50})
+              r (call "aws.discover" {:ws ws :env "local"})
+              found (set (map :name (get-in r [:resources "ssm"])))]
+          (is (some? (:NextToken first-page)) "Floci pages DescribeParameters at 50, so the second page is real")
+          (is (every? found names) (str "missing from discover: " (pr-str (remove found names))))
+          (is (nil? (get-in r [:errors "ssm"])))
+          (is (nil? (:truncated r)) "60 is far below the cap")
+          (testing "terraform.drift of a document declaring all 60: none missing"
+            (let [region (get-in e [:aws :region])
+                  doc {:format_version "1.0"
+                       :values {:root_module
+                                {:resources (vec (for [n names]
+                                                   {:address (str "aws_ssm_parameter.p" n) :mode "managed" :type "aws_ssm_parameter"
+                                                    :name "p" :values {:name n :arn (str "arn:aws:ssm:" region ":000000000000:parameter" n)}}))}}}
+                  f (write! (tu/temp-home) "state.json" (json/write-str doc))
+                  d (call "terraform.drift" {:ws ws :env "local" :file f})]
+              (is (= 60 (:declared d)))
+              (is (= 60 (:matching d)))
+              (is (= [] (:missing d)) (pr-str (take 5 (:missing d)))))))
+        (finally
+          (doseq [chunk (partition-all 10 names)]
+            (aws/invoke! ctx e :ssm :DeleteParameters {:Names (vec chunk)})))))))
+
+(deftest the-cap-truncates-a-kind-and-says-so
+  ;; pure: the section loop over a fake invoke that always has a next page
+  (let [pages (atom 0)]
+    (with-redefs [aws/invoke! (fn [_ _ svc _ req]
+                                (if (= :ssm svc)
+                                  (let [from (or (:NextToken req) 0)]
+                                    (swap! pages inc)
+                                    {:Parameters (mapv (fn [i] {:Name (str "/p/" i) :Type "String"}) (range from (+ from 50)))
+                                     :NextToken (+ from 50)})
+                                  {}))
+                  env/load (fn [_ _] (fu/local-env))]
+      (let [r (awsdiscover/discover! "w" "local")]
+        (is (= awsdiscover/cap (count (get-in r [:resources "ssm"]))))
+        (is (= {"ssm" awsdiscover/cap} (:truncated r)))
+        (is (= (/ awsdiscover/cap 50) @pages) "stops at the cap, no page more")
+        (is (= [] (get-in r [:resources "sqs"])) "a kind with nothing answers an empty list")
+        (is (= {} (:errors r)))))))
+
+;; --- env.save and runtime.set: the daemon writes environments/ and runtime.edn, tasks do not (review R33) ----------
+
+(deftest env-save-validates-and-writes-the-record
+  (tu/with-temp-home
+    (let [ws "w"
+          _ (call "workspace.open" {:ws ws})
+          local (:env (call "env.describe" {:ws ws :name "local"}))
+          ;; what a client sends: JSON, so nested keys are strings and kind is a string
+          json-round (fn [m] (json/read-str (protocol/encode m)))
+          record (json-round {:kind "local" :description "second region"
+                              :aws (assoc (:aws local) :region "eu-west-1")
+                              :targets (:targets local)})
+          r (call "env.save" {:ws ws :name "local2" :record record})]
+      (is (= {:env "local2" :kind :local} (select-keys r [:env :kind])))
+      (is (str/ends-with? (:path r) "/environments/local2.edn"))
+      (let [e (env/load ws "local2")]
+        (is (= :local (:kind e)))
+        (is (= "eu-west-1" (get-in e [:aws :region])))
+        (is (= (:targets local) (:targets e)) "namespaced target keys survive the JSON round trip")
+        (is (= "second region" (:description e))))
+      (is (some #{"local2"} (map :name (:environments (call "env.list" {:ws ws})))))
+      (testing "an invalid record is refused by env/validate, nothing is written"
+        (is (= :env/invalid (thrown-type #(call "env.save" {:ws ws :name "bad" :record (json-round {:kind "local" :aws {} :targets {}})}))))
+        (is (not (some #{"bad"} (map :name (:environments (call "env.list" {:ws ws})))))))
+      (testing "name wins over the record's"
+        (call "env.save" {:ws ws :name "local3" :record (assoc record "name" "other")})
+        (is (= "local3" (:name (env/load ws "local3"))))))))
+
+(deftest runtime-set-changes-one-value-of-runtime-edn
+  (tu/with-temp-home
+    (let [ws "w"
+          _ (call "workspace.open" {:ws ws})
+          r (call "runtime.set" {:ws ws :path ["containers" "postgres" "init"] :value "/repo/estate/sql"})]
+      (is (= [:containers :postgres :init] (:keys r)))
+      (is (= "/repo/estate/sql" (get-in (store/read-edn (runtime/config-path ws)) [:containers :postgres :init])))
+      (is (= "/repo/estate/sql" (:value r)))
+      (testing "digits in the path are number keys (host ports), and the local environment follows"
+        (call "runtime.set" {:ws ws :path ["containers" "floci" "ports" "4566"] :value 24566})
+        (is (= {4566 24566} (get-in (store/read-edn (runtime/config-path ws)) [:containers :floci :ports])))
+        (is (= "http://localhost:24566" (get-in (env/load ws "local") [:aws :endpoint])) "sync-env ran"))
+      (is (= :runtime/bad-path (thrown-type #(call "runtime.set" {:ws ws :path [] :value 1})))))))
+
+;; --- an active follow is work in flight (review R32) ---------------------------------------------------------------
+
+(deftest a-follow-counts-as-work-in-flight-for-hello
+  (tu/with-temp-home
+    (let [ws "w"
+          _ (call "workspace.open" {:ws ws})
+          _ (call "session.start" {:ws ws :key "S"})
+          f (write! (tu/temp-home) "app.log" "one\n")
+          d {:runs (atom {}) :follows (atom 0) :checked (atom #{}) :version "x" :pid 1 :home "h" :endpoint "e"}
+          hello #(ops/call! "hello" {:daemon d} {})
+          cancelled (atom false)
+          fut (future (ops/call! "logs.fetch" {:daemon d :emit! (fn [_]) :cancelled? #(deref cancelled)}
+                                 {:ws ws :target f :follow true}))]
+      (is (loop [n 0] (cond (= 1 @(:follows d)) true (> n 100) false :else (do (Thread/sleep 50) (recur (inc n)))))
+          "the follow is counted while it runs")
+      (is (= {:runs 1 :scenario-runs 0 :follows 1} (select-keys (hello) [:runs :scenario-runs :follows])))
+      (reset! cancelled true)
+      (is (true? (:follow (deref fut 10000 nil))))
+      (is (= {:runs 0 :scenario-runs 0 :follows 0} (select-keys (hello) [:runs :scenario-runs :follows])))
+      (testing "a one-shot fetch is not counted"
+        (call "logs.fetch" {:ws ws :target f})
+        (is (= 0 @(:follows d)))))))

@@ -20,6 +20,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [deliberator.env :as env]
+            [deliberator.process :as process]
             [deliberator.repo :as repo]
             [deliberator.runtime :as runtime]
             [deliberator.service.description :as description]
@@ -195,9 +196,11 @@
 (defn build!
   "Runs the description's build command in the module (JDK of `:build :java` via `ESTATE_JAVA_HOME`,
   `/usr/lib/jvm/java-<n>*`, else `JAVA_HOME`), streaming `service.build.line` events, the output also appended
-  as it arrives to `logs/build/<name>-<ts>.log` and, when the build ends, stored raw (source `:build`).
+  as it arrives to `logs/build/<name>-<ts>.log` and, when the build ends, stored raw (source `:build`). `on-cancel!` (the
+  protocol's) kills the build's process tree when the request is cancelled; `budget-ms` bounds it (default 10 min,
+  `:process/timeout`; the log file holds what was printed).
   -> `{:artifact :bytes :took-ms :log :sha}`; a non-zero exit is `service/build-failed` (data `:log :exit`)."
-  [ws name {:keys [sink]}]
+  [ws name {:keys [sink on-cancel! budget-ms]}]
   (let [d (require-description ws name)
         b (cond-> (:build d)
             (and (= :hotswap (description/image-kind d)) (= "mvn" (first (get-in d [:build :cmd]))))
@@ -210,20 +213,20 @@
         ts (str/replace (str (store/now)) #"[:]" "")
         logf (.toFile (store/path ws "logs" "build" (str name "-" ts ".log")))
         _ (io/make-parents logf)
-        pb (doto (ProcessBuilder. ^java.util.List (mapv str (:cmd b)))
-             (.directory dir) (.redirectErrorStream true))
-        _ (when-let [j (and (:java b) (jdk (:java b)))]
-            (.put (.environment pb) "JAVA_HOME" j))
         sb (StringBuilder.)
-        proc (try (.start pb)
-                  (catch java.io.IOException e
-                    (fail :service/build-failed (str "cannot run " (str/join " " (:cmd b)) ": " (.getMessage e)) :hint "is the build tool on the daemon's PATH?")))
-        exit (with-open [rdr (io/reader (.getInputStream proc)) w (io/writer logf :append true)]
-               (doseq [l (line-seq rdr)]
-                 (.append sb l) (.append sb "\n")
-                 (.write w l) (.write w "\n") (.flush w)
-                 (when sink (sink {:event "service.build.line" :name name :stream "build" :text l})))
-               (.waitFor proc))
+        {:keys [exit]} (with-open [w (io/writer logf :append true)]
+                         (try
+                           (process/run! (:cmd b)
+                                         {:dir dir :on-cancel! on-cancel! :budget-ms budget-ms :what (str "build of " name)
+                                          :extra-env (when-let [j (and (:java b) (jdk (:java b)))] {"JAVA_HOME" j})
+                                          :line! (fn [l]
+                                                   (.append sb l) (.append sb "\n")
+                                                   (.write w l) (.write w "\n") (.flush w)
+                                                   (when sink (sink {:event "service.build.line" :name name :stream "build" :text l})))})
+                           (catch clojure.lang.ExceptionInfo e
+                             (if (= :process/cannot-start (:type (ex-data e)))
+                               (fail :service/build-failed (ex-message e) :hint "is the build tool on the daemon's PATH?")
+                               (throw (ex-info (ex-message e) (assoc (ex-data e) :log (str logf)) e))))))
         raw (store/raw-put! ws (.getBytes (str sb) "UTF-8")
                             {:source :build :op (str/join " " (:cmd b)) :env nil :at (store/now) :content-type "text/plain"})]
     (when-not (zero? exit)

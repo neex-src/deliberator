@@ -268,6 +268,18 @@
                (step-file res 1 "response.log"))
             "armed at the offset: the line from before the run is absent; entries verbatim")
         (is (= "2026 ERROR boom\n\tat Foo.bar(CORR-1)\n" (step-file res 2 "response.log")))
+        (testing "the unfiltered window is persisted beside the filtered lines (principle 1, review R7)"
+          (let [src (step-file res 1 "source.log")
+                rec (step-edn res 1)]
+            (is (str/includes? src "2026 INFO other line\n") "a line no filter kept is in source.log")
+            (is (str/includes? src "2026 INFO order CORR-2 created\n"))
+            (is (str/includes? src "partial-without-newline CORR-1 finished\n"))
+            (is (not (str/includes? src "before the run")) "armed at the offset: the window starts at arm time")
+            (is (= "source.log" (:source-file rec)))
+            (let [m (store/raw-meta "l" (:raw-sha (last (:attempts rec))))]
+              (is (= :file (:source m)) (pr-str m))
+              (is (= "logs log/app (unfiltered)" (:op m))))
+            (is (= :file (:source (store/raw-meta "l" (:response-sha (last (:attempts rec)))))))))
         (is (str/includes? (:text res) "(no lines matched"))))))
 
 (deftest logs-unknown-target-is-a-step-error
@@ -331,9 +343,13 @@
                            "### logs log/pg none\n# @filter NEVER-HAPPENS-" (random-uuid) "\n# @for 1s\n# @assert lines == 0\n"))]
      @writer
      (is (= :ok (:status res)) (:text res))
-     (let [out (step-file res 1 "response.log")]
+     (let [out (step-file res 1 "response.log")
+           rec (step-edn res 1)]
        (is (re-find #"execute <unnamed>: select 'MARK-A'" out))
-       (is (re-find #"execute <unnamed>: select 'MARK-B', 1" out))))))
+       (is (re-find #"execute <unnamed>: select 'MARK-B', 1" out))
+       (is (= :podman (:source (store/raw-meta ws (:raw-sha (last (:attempts rec)))))) "the blob meta names the source kind (review R26)")
+       (is (= :podman (:source (store/raw-meta ws (:response-sha (last (:attempts rec)))))))
+       (is (>= (count (str/split-lines (step-file res 1 "source.log"))) (count (str/split-lines out))) "source.log holds the whole window")))))
 
 (deftest logs-cloudwatch-kind
   (when-runtime

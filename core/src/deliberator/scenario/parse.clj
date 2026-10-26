@@ -19,7 +19,9 @@
   without it nothing is checked against kinds. `# @name x` overrides the name.
 
   Directives are the lines `# @name value` right after the step line (blank lines and plain `#` comment
-  lines between them are skipped: prose about the step). The BODY runs from after the last
+  lines between them are skipped: prose about the step; for a `shell` or `sql` step such
+  comment lines earn a warning, since a shebang or a script comment written there is not in the body:
+  `:warnings [{:line :message :step}]` on the step and on the result). The BODY runs from after the last
   directive or comment line of that block (right after the step line when there is none) to the next `###` step line or EOF, with trailing blank lines removed but the newline of
   the last non-blank line kept: `{...}\\n\\n###` yields `{...}\\n`, `{...}` at EOF without a newline
   yields `{...}`. A separator blank line is layout, not payload (the PoC lost final newlines the
@@ -62,6 +64,11 @@
 (def ^:private engine-names (set (map :name kinds/engine-directives)))
 (def ^:private engine-body-re
   (re-pattern (str "#\\s*@(" (str/join "|" (sort engine-names)) ")(\\s.*)?\\s*")))
+
+(def ^:private script-kinds
+  "Kinds whose body is a script in which a `#` line means something (a shebang, a comment): a `#` line
+  swallowed as prose before such a body is worth a warning (review 2026-10-25, R10)."
+  #{"shell" "sql"})
 
 (defn- blank? [{:keys [text]}] (str/blank? text))
 (defn- comment-line? [{:keys [text]}] (and (str/starts-with? text "#") (not (str/starts-with? text "###"))))
@@ -196,15 +203,21 @@
                                  (str/join ", " (sort (keys kinds)))))))
         {:keys [verb target name]} (split-words no kind (map u8 words) kmap)
         ;; directives
-        [dirs last-i]
-        (loop [i (inc hi) dirs [] last-i hi]
+        [dirs last-i prose]
+        (loop [i (inc hi) dirs [] last-i hi prose []]
           (if-let [l (and (< i end-start) (nth lines i))]
             (cond
-              (blank? l) (recur (inc i) dirs last-i)
-              (directive l) (recur (inc i) (conj dirs (directive l)) i)
-              (comment-line? l) (recur (inc i) dirs i)   ; prose about the step, among its directives
-              :else [dirs last-i])
-            [dirs last-i]))
+              (blank? l) (recur (inc i) dirs last-i prose)
+              (directive l) (recur (inc i) (conj dirs (directive l)) i prose)
+              (comment-line? l) (recur (inc i) dirs i (conj prose l))   ; prose about the step, among its directives
+              :else [dirs last-i prose])
+            [dirs last-i prose]))
+        warnings (when (and (seq prose) (contains? script-kinds kind))
+                   [{:line (:no (first prose)) :step n
+                     :message (str (count prose) " comment line" (when (> (count prose) 1) "s") " before the body of this " kind
+                                   " step " (if (> (count prose) 1) "are" "is") " prose about the step, not part of the script"
+                                   " (a `#` line right after the step line or its directives is a comment);"
+                                   " start the body with a non-# line (`:` or `true` in bash) to keep a shebang or comment in it")}])
         allowed (when kmap (set (map :name (kinds/directive-specs kmap))))
         _ (when allowed
             (doseq [{dn :name dl :line} dirs]
@@ -243,7 +256,8 @@
     (cond-> {:n n :kind kind :verb verb :target target :name name :directives dirs :line no
              :body body}
       body-file (assoc :body-file body-file)
-      inline? (assoc :body-range [body-start body-end]))))
+      inline? (assoc :body-range [body-start body-end])
+      (seq warnings) (assoc :warnings (vec warnings)))))
 
 (defn parse
   [text & {:keys [path kinds]}]
@@ -254,11 +268,13 @@
         heads (find-heads lines)
         first-head (or (first heads) (count lines))
         header (parse-header (subvec lines 0 first-head))
-        ends (conj (vec (rest heads)) (count lines))]
+        ends (conj (vec (rest heads)) (count lines))
+        steps (vec (map-indexed
+                    (fn [k [hi end]] (parse-step bs s (inc k) lines hi end path kinds))
+                    (map vector heads ends)))]
     {:header header
-     :steps (vec (map-indexed
-                  (fn [k [hi end]] (parse-step bs s (inc k) lines hi end path kinds))
-                  (map vector heads ends)))}))
+     :steps steps
+     :warnings (vec (mapcat :warnings steps))}))
 
 (defn describe
   "Parse for editors (`scenario.parse`): `{:header {:env :vars [{:name :value :line}]} :steps [{:index
@@ -275,10 +291,11 @@
           total (if (str/ends-with? s "\n") total (max total 1))
           line-at (fn [off] (inc (count (filter #(= \newline %)
                                                 (String. bs 0 (int off) StandardCharsets/ISO_8859_1)))))
-          {:keys [header steps]} (parse bs :path path :kinds kinds)
+          {:keys [header steps warnings]} (parse bs :path path :kinds kinds)
           ends (conj (mapv #(dec (:line %)) (rest steps)) (max total (or (:line (last steps)) 1)))]
       {:header {:env (:env header)
                 :vars (mapv #(select-keys % [:name :value :line]) (:vars header))}
+       :warnings (vec warnings)
        :steps (vec (map-indexed
                     (fn [i st]
                       (let [[from to] (:body-range st)]
@@ -295,6 +312,6 @@
     (catch clojure.lang.ExceptionInfo e
       (if (= :scenario/parse (:type (ex-data e)))
         (let [d (ex-data e)]
-          {:header nil :steps []
+          {:header nil :steps [] :warnings []
            :errors [{:line (:line d) :message (or (:message d) (ex-message e))}]})
         (throw e)))))

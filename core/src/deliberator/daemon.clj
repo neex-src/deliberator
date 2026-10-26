@@ -165,9 +165,10 @@
               last-activity (atom (System/currentTimeMillis))
               inflight (atom 0)
               runs (atom {})
+              follows (atom 0)                 ; active logs.fetch follows: work in flight like a run (hello counts them, R32)
               stop-ref (atom nil)
               dstate {:version (version) :pid (.pid (ProcessHandle/current)) :home home
-                      :endpoint endpoint :runs runs :checked (atom #{})
+                      :endpoint endpoint :runs runs :follows follows :checked (atom #{})
                       ;; `daemon.stop`: the same `stop!`, started after the answer has been written
                       :stop-later! (fn [] (protocol/spawn! (fn [] (Thread/sleep 150) (@stop-ref :requested))))}
               stopping (atom false)

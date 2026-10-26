@@ -24,7 +24,8 @@
    "logs" {:kind "logs" :verbs #{nil} :target :required
            :directives [{:name "filter"} {:name "for"}]}
    "wait" {:kind "wait" :verbs #{nil} :target :none :directives [{:name "for"}]}
-   "sql" {:kind "sql" :verbs #{nil} :target :required}})
+   "sql" {:kind "sql" :verbs #{nil} :target :required}
+   "shell" {:kind "shell" :verbs #{nil} :target :none :directives [{:name "cwd"}]}})
 
 (deftest header-forms
   (let [{:keys [header steps]} (parse/parse (fx "shapes.scn") :path "test/fixtures/shapes.scn")]
@@ -177,3 +178,27 @@
     (is (= [["assert" "ok == true"] ["capture" "id = $[0].id"]] (map (juxt :name :value) (:directives a))))
     (is (= "{\"line\": 2}\n" (body-str a)) "prose is not body")
     (is (= "echo one\n# a bash comment in the script stays script\necho two\n" (body-str b)) "a # line after the body started is body")))
+
+(deftest a-script-body-that-shed-comment-lines-gets-a-warning
+  ;; review 2026-10-25 R10: a shebang or a comment written right under `### shell` vanished silently
+  (let [p (parse/parse "### shell x\n# first comment\n#!/bin/bash\necho hi\n" :kinds kinds)
+        [w] (:warnings p)]
+    (is (= "echo hi\n" (body-str (first (:steps p)))) "the rule stands")
+    (is (= 1 (count (:warnings p))))
+    (is (= [2 1] [(:line w) (:step w)]))
+    (is (str/includes? (:message w) "2 comment lines"))
+    (is (str/includes? (:message w) "shell"))
+    (is (= (:warnings p) (:warnings (first (:steps p)))) "the step carries it too (the engine prints it)"))
+  (testing "directives among the prose: still one warning, the directives still parse"
+    (let [p (parse/parse "### sql db/main\n# @timeout 2s\n# -- not a sql comment either\nselect 1\n" :kinds kinds)]
+      (is (= 1 (count (:warnings p))))
+      (is (= 3 (:line (first (:warnings p)))))
+      (is (str/includes? (:message (first (:warnings p))) "1 comment line before the body of this sql step is prose"))))
+  (testing "no warning: a shell body that starts with a non-# line, prose on an http step, a shell step without prose"
+    (is (= [] (:warnings (parse/parse "### shell\n:\n# a comment in the script\necho hi\n" :kinds kinds))))
+    (is (= [] (:warnings (parse/parse "### http x\n# not a directive\nGET http://h/p\n" :kinds kinds))))
+    (is (= [] (:warnings (parse/parse "### shell\necho hi\n" :kinds kinds))))
+    (is (= [] (:warnings (parse/parse "### op marker.add mark\n# prose\n{\"line\": 2}\n")))))
+  (testing "describe (the editor's view) returns the same warnings, and [] when a parse error stops it"
+    (is (= [{:line 2 :step 1}] (mapv #(select-keys % [:line :step]) (:warnings (parse/describe "### shell x\n# first\necho hi\n" :kinds kinds)))))
+    (is (= [] (:warnings (parse/describe "### nope\n" :kinds kinds))))))

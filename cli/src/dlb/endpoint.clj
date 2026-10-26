@@ -179,7 +179,8 @@
             running (str "daemon pid " (:pid hello) " runs " (:version hello) " but this dlb ships " want)]
         (cond
           (pos? (or (:runs hello) 0))
-          (refuse (str running " and has " (:runs hello) " run(s) in flight")
+          (refuse (str running " and has " (:runs hello) " request(s) in flight"
+                       (when (pos? (or (:follows hello) 0)) (str " (" (:follows hello) " log follow(s))")))
                   "wait for them or cancel them, then `dlb daemon stop`; dlb restarts the daemon on its next call")
           (not (version-newer? want (:version hello)))
           (refuse (str running " (the daemon is newer than this dlb)")
