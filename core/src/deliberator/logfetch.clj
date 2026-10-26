@@ -69,10 +69,10 @@
         (if r (:path r) (recur (inc n)))))))
 
 (defn- new-answer-file!
-  "Creates (atomically, empty) the next free `logs/<target>-<ts>[-n].log` of the session; -> Path."
-  [ws sess target]
+  "Creates (atomically, empty) the next free `<sub>/<target>-<ts>[-n].log` of the session (`sub` default `logs`); -> Path."
+  [ws sess target & [sub]]
   (let [base (str (str/replace (str target) #"[^A-Za-z0-9._-]+" "-") "-" (.format stamp (store/now)))
-        dir (.resolve (session/dir ws sess) "logs")]
+        dir (.resolve (session/dir ws sess) (or sub "logs"))]
     (Files/createDirectories dir (make-array java.nio.file.attribute.FileAttribute 0))
     (loop [n 1]
       (let [p (.resolve dir (str base (when (> n 1) (str "-" n)) ".log"))]
@@ -128,20 +128,25 @@
                     (catch Throwable _ nil))
                (:answer m))))))
 
-(defn- follow!
-  [ws e source kind target since-i pred session emit! cancelled? ctx now]
+(defn follow-run!
+  "The follow machinery of `logs.fetch`, for any source that can push lines on a queue: ONE session file for the whole follow,
+  raw lines appended (flushed per line) and streamed as `logs.line` events, the file adopted as a raw blob at the end (see the
+  namespace doc). `start!` is `(fn [q])` -> a stop fn; it feeds `q` strings, `::end` or a Throwable (`drain!`'s protocol).
+  Keys: `:target :session :pred :emit! :cancelled? :start! :src-kind` (a `store/sources` member) `:env-key :op-label :kind
+  :now :filter :hint` and `:sub` (the session subdirectory of the file, default `logs`). -> `{:path :lines :bytes :sha
+  :target :source :follow true}`."
+  [ws {:keys [target session pred emit! cancelled? start! src-kind env-key op-label kind now filter hint sub]}]
   (let [id (subs (str (java.util.UUID/randomUUID)) 0 8)
         dir (.toFile (follow-dir ws))
         _ (.mkdirs dir)
-        answer (.toFile (new-answer-file! ws session target))
+        answer (.toFile (new-answer-file! ws session target sub))
         filtered? (boolean pred)
         work (if filtered? (io/file dir (str id ".log")) answer)
         sidecar (io/file dir (str id ".edn"))
-        src-kind (case kind "container" :podman "file" :file :aws)
-        mk-meta (fn [suffix] {:source src-kind :op (str "logs.fetch " target " (follow)" suffix) :env (keyword (:name e))
+        mk-meta (fn [suffix] {:source src-kind :op (str op-label suffix) :env env-key
                               :at now :content-type "text/plain"})
         side {:work (str work) :answer (str answer) :filtered? filtered? :target target
-              :raw-meta (mk-meta "") :answer-meta (mk-meta (str " (filter " (:filter ctx) ")"))
+              :raw-meta (mk-meta "") :answer-meta (mk-meta (str " (filter " filter ")"))
               :owner (owner) :started now :sidecar (str sidecar)}
         _ (store/write-edn! (.toPath sidecar) side)
         opts (into-array OpenOption [StandardOpenOption/CREATE StandardOpenOption/APPEND])
@@ -151,13 +156,13 @@
         kept (volatile! 0)
         write! (fn [out ^String l] (.write out (.getBytes (str l "\n") "UTF-8")) (.flush out))
         q (LinkedBlockingQueue.)
-        stop (logs/start-source ctx source 0 since-i nil q)]
+        stop (start! q)]
     (try
       (logs/drain! q Long/MAX_VALUE cancelled? (if pred [pred] [])
                    (fn [l] (when ans-out (write! ans-out l))
                      (vswap! kept inc)
                      (when emit! (emit! {:event "logs.line" :target target :n (vswap! n inc) :text l :at (str (Instant/now))})))
-                   (str "check the log target " target " in environment " (:name e))
+                   hint
                    {:raw! (fn [l] (write! raw-out l))
                     :gap! (fn [l] (when emit! (emit! {:event "logs.line" :target target :n (vswap! n inc) :text l :at (str (Instant/now)) :gap true})))
                     :collect? false})
@@ -165,9 +170,18 @@
         (stop)
         (.close raw-out)
         (when ans-out (.close ans-out))))
-    (let [{:keys [answer] :as r} (finish-follow! ws side)]
+    (let [{:keys [answer]} (finish-follow! ws side)]
       {:path (str (.toAbsolutePath (.toPath (io/file (:answer side))))) :lines @kept :bytes (:bytes answer) :sha (:sha answer)
        :target target :source kind :follow true})))
+
+(defn- follow!
+  [ws e source kind target since-i pred session emit! cancelled? ctx now]
+  (follow-run! ws {:target target :session session :pred pred :emit! emit! :cancelled? cancelled?
+                   :start! (fn [q] (logs/start-source ctx source 0 since-i nil q))
+                   :src-kind (case kind "container" :podman "file" :file :aws)
+                   :env-key (keyword (:name e)) :op-label (str "logs.fetch " target " (follow)")
+                   :kind kind :now now :filter (:filter ctx)
+                   :hint (str "check the log target " target " in environment " (:name e))}))
 
 (declare fetch-window!)
 
