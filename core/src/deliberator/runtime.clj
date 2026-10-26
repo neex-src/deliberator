@@ -38,7 +38,7 @@
   `(down! ws)` removes only containers labelled with the workspace. `(logs ws role opts)` reads a
   container's logs through `podman/logs` and mirrors them to `logs/services/<role>/<date>.log`.
   Health per role (overridable with `:health {:http path :port cp}` or `{:exec [cmd…]}`): Floci
-  `GET /_floci/health` with every service `running`, Postgres `pg_isready` via exec, `service-*`
+  `GET /_floci/health` with every service `running`, Postgres `pg_isready -h 127.0.0.1` via exec (TCP: the image's temporary init server has no TCP, B16), `service-*`
   `GET /actuator/health`. `opts`: `:sink`, `:timeout-ms` (health wait per container, default 120 s), `:infra-only` (skip
   the `:jar` service roles).
   Home resolution is the store's (`store/*home*`, `$DELIBERATOR_HOME`). `-main`: `up|status|down
@@ -345,7 +345,10 @@
   (let [r (:role d)]
     (cond
       (= r "floci") {:http "/_floci/health" :port 4566}
-      (= r "postgres") {:exec ["pg_isready" "-U" (get (:env d) "POSTGRES_USER" "postgres")]}
+      ;; over TCP, not the unix socket (B16): the image's entrypoint first runs a TEMPORARY server that listens on the
+      ;; socket only (`listen_addresses=''`), stops it and starts the real one; a socket probe answers "accepting" for
+      ;; the temporary server, `runtime.ready` fires, and the next probe lands in the gap ("no response", exit 2)
+      (= r "postgres") {:exec ["pg_isready" "-h" "127.0.0.1" "-U" (get (:env d) "POSTGRES_USER" "postgres")]}
       (str/starts-with? r "service-") {:http "/actuator/health"}
       :else nil)))
 

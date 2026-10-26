@@ -1,0 +1,15 @@
+# Reads against the remote-shaped record `tour-remote`: no confirmation, every call in audit.log.
+# @env tour-remote
+
+### aws ssm.GetParameter table-name
+# @assert $.Parameter.Value == estate-messages
+{"Name": "/estate/common/table-name"}
+
+### aws secretsmanager.GetSecretValue api-key
+# The decoded answer has the value, the persisted response does not: `$` reads what was persisted.
+# @assert $.SecretString == <redacted>
+{"SecretId": "estate/api-key"}
+
+### aws sqs.ListQueues queues
+# @assert $.QueueUrls[0] contains estate-
+{}

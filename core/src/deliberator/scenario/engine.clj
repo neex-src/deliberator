@@ -199,7 +199,7 @@
         planned
         (loop [ss (:steps parsed) defined (conj base "step.correlation") out []]
           (if-let [s (first ss)]
-            (let [kmap (kinds/get-kind (:kind s))
+            (let [kmap (kinds/for-verb (kinds/get-kind (:kind s)) (:verb s))
                   _ (validate-step! kmap s)
                   _ (check-vars! s (if (:concurrent? kmap) base defined) resolve-target)
                   caps (map #(:name (with-expr (:line s) (fn [] (expr/parse-capture %)))) (dir-values s "capture"))]

@@ -179,7 +179,7 @@
                        (do (when (and kmap (not (contains? verbs nil)))
                              (perr no (verb-error kind (first words) real)))
                            [nil words]))
-        mode (if kmap (:target kmap :optional) :optional)
+        mode (if kmap (:target (kinds/for-verb kmap verb) :optional) :optional)
         n (count words)]
     (when (> n 2) (perr no (str "too many words in the step line after " kind " (verb target name)")))
     (let [[target name]
@@ -218,7 +218,7 @@
                                    " step " (if (> (count prose) 1) "are" "is") " prose about the step, not part of the script"
                                    " (a `#` line right after the step line or its directives is a comment);"
                                    " start the body with a non-# line (`:` or `true` in bash) to keep a shebang or comment in it")}])
-        allowed (when kmap (set (map :name (kinds/directive-specs kmap))))
+        allowed (when kmap (set (map :name (kinds/directive-specs (kinds/for-verb kmap verb)))))
         _ (when allowed
             (doseq [{dn :name dl :line} dirs]
               (when-not (contains? allowed dn)

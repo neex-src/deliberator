@@ -1,0 +1,151 @@
+# Chapter 11: a remote environment, at Floci's address
+#
+# A `:remote` environment is how Deliberator looks at a real account: credentials from a profile (never ambient), the account
+# checked against the record before anything is sent, every mutation behind a confirmation (or refused outright when the record
+# is `:read-only`), every call written to `audit.log`, secret values redacted before they reach the disk. This chapter proves
+# all of it without leaving the machine: the record `tour-remote` is remote in every respect except its `:endpoint`, which
+# points at the Floci of this tour (the test hook of decision 53; the real endpoint is the profile's region). Static keys
+# come from the profile `tour-remote` of the credentials file `bb tour` writes next to the home and hands the daemon it starts
+# (`AWS_SHARED_CREDENTIALS_FILE`; `bb tour` replaces a running daemon of this home that lacks it). A daemon started any other way
+# (the IDE's, a `dlb` of yours) does not have the profile: `env.create` below then says `check-failed`; `dlb daemon stop` and run `bb tour --only 11`.
+# The real account (a sandbox AWS account) is checked by hand: docs/walkthrough.md, a sandbox AWS account chapter.
+#
+# A run has one environment, so this chapter (local) writes the records with `op` steps and then runs three small scenarios
+# of tour/11-remote/ against them with `dlb run`, from `shell` steps; what it asserts is what `dlb` printed and what the
+# session's `audit.log` and the run directories hold. Each of those scenarios is a file you can open and run yourself:
+# `dlb run tour/11-remote/read.scn --env tour-remote`.
+#
+# In the IDE: the Environments view and the "New environment..." form come with the IDE half of M4; `env.create` is the same
+# operation; the red banner on a scenario that targets a remote environment is the one thing the editor already shows.
+# @env local
+
+### shell paths
+# Where this checkout is, for the `dlb` of this checkout.
+# @cwd ..
+# @capture root = out
+pwd | tr -d '\n'
+
+### op env.describe floci-address
+# The record of `local` in this workspace: its endpoint is Floci's address, which the remote-shaped records borrow.
+# @capture endpoint = $.env.aws.endpoint
+{"name": "local"}
+
+### shell start-clean
+# A record an earlier run of this chapter left. Whether there was one does not matter. (`dlb` removes it: an `op` step may not even
+# name a remote environment, which is the point of a later step.)
+# @cwd ..
+./cli/dlb env remove tour-remote --ws "$DLB_WS" >/dev/null 2>&1
+./cli/dlb env remove tour-readonly --ws "$DLB_WS" >/dev/null 2>&1
+echo "no tour-remote or tour-readonly record left"
+
+### op env.create tour-remote
+# `dlb env create tour-remote --profile tour-remote --account 000000000000 --region eu-central-1 --read-only false --endpoint ...`.
+# The record is written only after STS has said which account the profile is in (Floci's is 000000000000): `checked` is true.
+# If this step fails with `check-failed`, the daemon does not see the profile (see the top of this file).
+# @assert $.kind == remote
+# @assert $.checked == true
+# @assert $.read-only == false
+{"name": "tour-remote", "profile": "tour-remote", "account": "000000000000", "region": "eu-central-1",
+ "read-only": false, "endpoint": "{{endpoint}}"}
+
+### op env.create tour-readonly
+# The same account with the default: read-only. A mutation here is refused flat, no token.
+# @assert $.read-only == true
+{"name": "tour-readonly", "profile": "tour-remote", "account": "000000000000", "region": "eu-central-1",
+ "endpoint": "{{endpoint}}"}
+
+### op env.create wrong-account
+# The guard: the profile is in 000000000000, the record claims another account, nothing is written.
+# @assert ok == false
+# @assert error.type == account-mismatch
+{"name": "tour-wrong", "profile": "tour-remote", "account": "123456789012", "region": "eu-central-1",
+ "endpoint": "{{endpoint}}"}
+
+### op env.check op-is-local-only
+# `op` steps call the daemon as this run, with this run's rights: they reach only local environments, not even for a read.
+# A remote operation is run with `dlb` or the IDE, where a mutation can be confirmed.
+# @assert ok == false
+# @assert error.type == op/remote-env
+{"name": "tour-remote"}
+
+### shell reads-are-open
+# Reads run without ceremony. read.scn asks for a parameter (an `aws` step), for the secret `estate/api-key` and for the queues; the
+# secret is the interesting one: the step's own `$` shows what was persisted.
+# @cwd ..
+# @assert exit == 0
+# @assert out contains OK  3 steps, 0 failed
+# @assert out contains ✓ 002 aws secretsmanager.GetSecretValue api-key
+./cli/dlb run tour/11-remote/read.scn --env tour-remote --ws "$DLB_WS" --session "$DLB_SESSION" 2>&1
+
+### shell the-secret-is-not-on-disk
+# The value of the secret as Floci has it (this shell's `aws` is the local emulator) must be nowhere in the run that read it through
+# the remote record: the response was persisted with `SecretString` redacted, the request and the audit never had it. One script, so
+# the value never becomes a variable of this run.
+# @cwd ..
+# @assert out contains the persisted response says <redacted>
+# @assert out contains the value is not in the run directory
+value=$(aws secretsmanager get-secret-value --secret-id estate/api-key --query SecretString --output text)
+[ -n "$value" ] || { echo "no value from Floci"; exit 1; }
+run=$(ls -d "$DELIBERATOR_HOME/workspaces/$DLB_WS/sessions/$DLB_SESSION/runs/"*-read | tail -1)
+grep -q '<redacted>' "$run"/steps/002-*/response.json && echo "the persisted response says <redacted>"
+if grep -rlqF -- "$value" "$run"; then echo "the value IS in the run directory"; exit 1; fi
+echo "the value is not in the run directory"
+if grep -rlqF -- "$value" "$DELIBERATOR_HOME/workspaces/$DLB_WS/sessions/$DLB_SESSION/audit.log"; then echo "the value IS in audit.log"; exit 1; fi
+
+### shell the-confirmation-walk
+# A mutation on `tour-remote` (read-only false) stops before it is sent: the run ends `confirm-required` with a token and the exact
+# command to approve it. Re-running with the token lets exactly that request through, once; a second use is refused.
+# @cwd ..
+# @assert out contains confirmation required (step 1): PutParameter
+# @assert out contains to approve: dlb run tour/11-remote/write.scn
+# @assert out contains approved: OK  1 steps, 0 failed
+# @assert out contains used twice: the token is refused
+# @assert out contains the token is not in audit.log
+cmd=(./cli/dlb run tour/11-remote/write.scn --env tour-remote --ws "$DLB_WS" --session "$DLB_SESSION")
+first=$("${cmd[@]}" 2>&1); echo "$first"
+approve=$(printf '%s\n' "$first" | sed -n 's/^to approve: dlb //p')
+[ -n "$approve" ] || { echo "no 'to approve' line"; exit 1; }
+second=$(./cli/dlb $approve 2>&1); echo "approved: $(printf '%s\n' "$second" | grep -E '^(OK|FAILED) ')"
+third=$(./cli/dlb $approve 2>&1); printf '%s\n' "$third" | grep -qiE 'unknown, expired, already used' && echo "used twice: the token is refused"
+token=$(printf '%s\n' "$approve" | sed -n 's/.*--confirm \([^ ]*\).*/\1/p')
+[ -n "$token" ] && ! grep -rqF -- "$token" "$DELIBERATOR_HOME/workspaces/$DLB_WS/sessions/$DLB_SESSION/audit.log" && echo "the token is not in audit.log"
+
+### shell read-only-is-refused-flat
+# `tour-readonly` has `:read-only true`: the same mutation gets no token at all.
+# @cwd ..
+# @assert out contains refused: environment tour-readonly is read-only
+./cli/dlb run tour/11-remote/write.scn --env tour-readonly --ws "$DLB_WS" --session "$DLB_SESSION" 2>&1 | grep -m1 -o 'refused: environment tour-readonly is read-only'
+
+### shell shell-and-op-are-refused
+# The other two kinds that run code or call the daemon are refused for a remote environment, with the reason and the way out.
+# @cwd ..
+# @assert out contains shell steps run only against a local environment
+# @assert out contains op steps run only against a local environment
+./cli/dlb run tour/11-remote/refused.scn --env tour-remote --steps 1 --ws "$DLB_WS" --session "$DLB_SESSION" 2>&1 | grep -m1 -o 'shell steps run only against a local environment'
+./cli/dlb run tour/11-remote/refused.scn --env tour-remote --steps 2 --ws "$DLB_WS" --session "$DLB_SESSION" 2>&1 | grep -m1 -o 'op steps run only against a local environment'
+
+### shell the-audit-log
+# Every remote call of the session is one EDN line in sessions/<key>/audit.log: time, environment, account, service, operation,
+# class, outcome (ok, error, confirm-required, refused, confirmed), whether a confirmation was used, bytes and the sha of the request and
+# the response. Never a token, never a value. (The log of the session grows with every tour of the day, so the counts are "at least".)
+# @cwd ..
+# @assert out contains audit: a confirmation was asked for
+# @assert out contains audit: a confirmation was used
+# @assert out contains audit: a mutation was refused as read-only
+# @assert out contains audit: the reads are there, class read
+# @assert out contains audit: the account was asked first
+# @assert out contains audit: no secret value in the log
+log="$DELIBERATOR_HOME/workspaces/$DLB_WS/sessions/$DLB_SESSION/audit.log"
+n() { grep -c -- "$1" "$log"; }
+[ "$(n ':outcome :confirm-required')" -ge 1 ] && echo "audit: a confirmation was asked for"
+[ "$(n ':confirmation :used')" -ge 1 ] && echo "audit: a confirmation was used"
+[ "$(n ':reason :read-only')" -ge 1 ] && echo "audit: a mutation was refused as read-only"
+[ "$(n ':class :read')" -ge 4 ] && echo "audit: the reads are there, class read"
+[ "$(n ':op "GetCallerIdentity"')" -ge 1 ] && echo "audit: the account was asked first"
+if grep -qi 'secretstring' "$log"; then echo "the log has a value"; exit 1; fi
+echo "audit: no secret value in the log"
+tail -n 3 "$log" | cut -c1-160
+
+### shell clean-up
+# Floci is shared with the other chapters: take back the parameter the walk wrote.
+aws ssm delete-parameter --name /tour/remote-note >/dev/null 2>&1; echo "removed /tour/remote-note"

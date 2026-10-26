@@ -153,10 +153,51 @@
       (sequential? v) (println (str ind (name k) ": " (str/join ", " (map #(if (scalar? %) (str %) (json/generate-string %)) v))))
       :else (println (str ind (name k) ": " (json/generate-string v))))))
 
+(defn- service-line [{:keys [kind cluster name revision version containers desired running image code-sha256 deployments last-modified]}]
+  (let [kind (str (clojure.core/name (keyword kind)))]
+    (str "  " (format "%-7s" kind)
+         (if (= "ecs" kind) (str cluster "/" name "  rev " revision) (str name "  " version))
+         "  "
+         (if (= "ecs" kind)
+           (str (str/join "," (for [c containers] (str (:name c) ":" (or (:tag c) (:digest c) (:image c)))))
+                "  " desired "/" running " running")
+           (str (or image code-sha256 "")))
+         (when-let [u (if (= "ecs" kind) (->> deployments (keep :updated-at) sort last) last-modified)] (str "  updated " u)))))
+
+(defn- print-deployed
+  "`deployed.show`: the age first (it is a cached view), a line per service, the CodeDeploy deployments, the section errors."
+  [{:keys [env fetched-at age services deployments errors absent path text]}]
+  (println (str env ": " (count services) " service" (when (not= 1 (count services)) "s")
+                ", fetched " fetched-at " (" age " ago; dlb deployed refresh fetches again)"))
+  (doseq [s services] (println (service-line s)))
+  (when (seq deployments)
+    (println (str "codedeploy: " (count deployments)))
+    (doseq [d deployments]
+      (println (str "  " (:id d) "  " (:application d) "/" (:group d) "  " (:status d) "  " (:created-at d)))))
+  (doseq [[sec es] errors, e es]
+    (println (str "error " (name sec) " " (:op e) ": " (or (:code e) (:category e)) " " (:message e))))
+  (doseq [[sec code] absent] (println (str "absent " (name sec) ": " code " (the service is not there for this account)")))
+  (println (str "path: " path))
+  (println (str "text: " text)))
+
+(defn- print-insights
+  "`logs.insights`: the status, rows and bytes scanned (what Insights bills) on the first line, then the files."
+  [{:keys [status rows bytes-scanned bytes-scanned-text took-ms path query-file query-id raw groups since until] :as r}]
+  (println (str (str/upper-case (str status)) "  " rows " row" (when (not= 1 rows) "s") ", "
+                bytes-scanned-text " scanned (bytes-scanned: " bytes-scanned ")"
+                (when took-ms (str ", " (format "%.1f" (/ took-ms 1000.0)) " s"))))
+  (println (str "groups: " (str/join ", " groups) "   window: " since " .. " until))
+  (println (str "path: " path))
+  (when query-file (println (str "query-file: " query-file)))
+  (println (str "query-id: " query-id "   raw calls: " (count raw)))
+  (when-let [s (:statistics r)] (println (str "statistics: " (str/join " " (for [[k v] (sort-by key s)] (str (name k) "=" v)))))))
+
 (defn print-result
   "Prints an ok result generically: run summaries, `diff`, `label: path` lines, scalars and rows."
   [op result]
   (cond
+    (and (= "deployed.show" op) (map? result) (contains? result :services)) (print-deployed result)
+    (and (= "logs.insights" op) (map? result) (contains? result :bytes-scanned)) (print-insights result)
     (and (sequential? result) (every? map? result))
     (do (println (str (count result) (if (= 1 (count result)) " row" " rows")))
         (doseq [row result] (println (str "  " (compact row)))))

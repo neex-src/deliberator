@@ -27,7 +27,8 @@
             [deliberator.podman :as podman]
             [deliberator.runtime :as runtime]
             [deliberator.scenario.kinds :as kinds]
-            [deliberator.steps.common :as c])
+            [deliberator.steps.common :as c]
+            [deliberator.steps.insights :as insights])
   (:import (java.io RandomAccessFile)
            (java.nio.file Files Path Paths)
            (java.time Instant)
@@ -327,7 +328,8 @@
                                             " in " (quot window 1000) " s)"))))))
 
 (def kind
-  {:kind "logs" :verbs #{nil} :target :required
+  {:kind "logs" :verbs #{nil "insights"} :target :required
+   :verb-kinds {"insights" insights/verb-kind}
    :directives [{:name "filter" :hint "<text|/regex/>" :values ["{{correlation}}"] :repeatable? true
                  :doc "an entry must match every filter; default: the run's correlation id"}
                 {:name "for" :hint "<duration>" :values ["5s" "10s" "30s" "1m"] :doc "tail window (default 10s)"}]
