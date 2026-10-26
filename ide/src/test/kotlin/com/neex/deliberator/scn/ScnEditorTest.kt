@@ -107,9 +107,9 @@ class ScnEditorTest : BasePlatformTestCase() {
         val doc = myFixture.editor.document
         val regions = ScnFoldingBuilder().buildFoldRegions(psi, doc, false)
         val steps = psi.steps
-        assertEquals(9, steps.size)
+        assertEquals(20, steps.size)
         val stepRegions = regions.filter { it.element.psi is ScnStep }
-        assertEquals(9, stepRegions.size)
+        assertEquals(20, stepRegions.size)
         for ((i, r) in stepRegions.withIndex()) {
             val headLine = doc.getLineNumber(steps[i].textRange.startOffset)
             assertEquals("region $i starts on the head line, after its text", headLine, doc.getLineNumber(r.range.startOffset))
@@ -125,11 +125,12 @@ class ScnEditorTest : BasePlatformTestCase() {
         val model = ScnStructureViewModel(psi, myFixture.editor)
         try {
             val kids = model.root.children.map { it.presentation.presentableText }
-            assertEquals(9, kids.size)
+            assertEquals(20, kids.size)
             assertEquals("sqs send queue/inbox send-order", kids[0])
             assertEquals("dynamodb get table/messages stored", kids[1])
             assertEquals("http publish", kids[2])
-            assertEquals("logs log/logger lambda-log", kids[8])
+            assertEquals("logs log/logger lambda-log", kids[17])
+            assertEquals("scheduler get chain-{{msg}} schedule-exists", kids[11])
         } finally {
             model.dispose()
         }

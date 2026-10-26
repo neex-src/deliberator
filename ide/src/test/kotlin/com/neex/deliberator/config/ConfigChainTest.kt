@@ -341,12 +341,12 @@ class ConfigChainTest : BasePlatformTestCase() {
         assertEquals(estate.resolve("estate/terraform/modules/stack/taskdef.json.tftpl").toString(), e.taskdef!!.file)
         assertEquals(14, e.taskdef.line)
         assertEquals("loop", e.taskdef.via)
-        assertEquals(282, e.taskdef.source!!.line)
+        assertEquals(285, e.taskdef.source!!.line)
         bg { chains.loadIndex() }
         val f = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(estate.resolve("estate/services/service-a/src/main/resources/application.properties"))!!
         myFixture.openFileInEditor(f)
         val ts = targets(refsAt("TABLE_NAME").filterIsInstance<TemplateEntryReference>().single())
-        assertEquals(listOf(14, 282), ts.map { (it as FileLine).line })
+        assertEquals(listOf(14, 285), ts.map { (it as FileLine).line })
     }
 
     // --- M4.6: a remote environment ------------------------------------------------------------------------
