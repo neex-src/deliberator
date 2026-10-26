@@ -372,6 +372,7 @@
                                "select id, note, n from plain_t where id = '{{rowId}}'\n\n"
                                "### wait pause\n# @for 1s\n"))
               r (dlb home "run" scn "--ws" ws)]
+        (let [r (dlb home "run" (str root "/core/test/fixtures/plain.scn") "--ws" ws)]
           (is (zero? (:exit r)) (str (:out r) (:err r)))
           (is (re-find #"▶ 001" (:out r)))
           (is (some #(str/starts-with? % "OK ") (str/split-lines (:out r))) "the four plain kinds pass against the estate"))

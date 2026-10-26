@@ -62,7 +62,7 @@
       (is (true? (:ok r)) (:summary r))
       (is (zero? (:exit r)))
       (is (= "plan" (:action r)))
-      (is (str/starts-with? (str (:summary r)) "No changes.") "the estate was applied with the same variables the workspace derives")
+      (is (= "No changes." (:summary r)) "the estate was applied with the same variables the workspace derives")
       (is (= (get-in (env/load ws "local") [:aws :endpoint]) (get (:vars r) "endpoint")))
       (is (seq lines) "the output streamed as tf.line events")
       (is (= (str/split-lines (:output r)) lines) "every line was an event")
