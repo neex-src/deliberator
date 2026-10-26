@@ -167,6 +167,7 @@
           (is (str/includes? (:hint r) ":read-only false"))
           (is (aws/error? (aws/invoke! c e :ssm :GetParameter {:Name p})) "the parameter was never written")
           (is (= "ParameterNotFound" (:code (aws/invoke! c e :ssm :GetParameter {:Name p})))))
+          (is (= :not-found (:category (aws/invoke! c e :ssm :GetParameter {:Name p})))))
         (testing "a token presented to a read-only record is refused too, unused"
           (let [w (writable) r1 (aws/invoke! c w :ssm :PutParameter {:Name p :Value "on" :Type "String"})]
             (is (= :confirm-required (:type r1)))
@@ -445,12 +446,20 @@
             (is (not (aws/error? dec)) (pr-str (dissoc dec :raw)))
             (is (= "the plaintext secret 42" (String. ^bytes dec-plain "UTF-8")))
             (is (not (str/includes? (raw-blob dec) (b64 dec-plain))))
+                dec (confirmed! ctx e :kms :Decrypt {:KeyId kid :CiphertextBlob (:CiphertextBlob enc)})
+                gdk (confirmed! ctx e :kms :GenerateDataKey {:KeyId kid :KeySpec "AES_256"})
+                b64 (fn [^bytes bs] (.encodeToString (java.util.Base64/getEncoder) bs))]
+            (is (not (aws/error? dec)) (pr-str (dissoc dec :raw)))
+            (is (= "the plaintext secret 42" (String. ^bytes (:Plaintext dec) "UTF-8")))
+            (is (not (str/includes? (raw-blob dec) (b64 (:Plaintext dec)))))
             (is (str/includes? (raw-blob dec) "<redacted>"))
             (is (str/includes? (blob (-> (aws/raw-refs enc) :request :sha)) "<redacted>") "the Encrypt request's Plaintext too")
             (is (not (str/includes? (blob (-> (aws/raw-refs enc) :request :sha)) (b64 secret))))
             (is (not (aws/error? gdk)) (pr-str (dissoc gdk :raw)))
             (is (not (str/includes? (raw-blob gdk) (b64 gdk-plain))))
             (is (= (b64 gdk-cipher) (get (clojure.data.json/read-str (raw-blob gdk)) "CiphertextBlob")) "the ciphertext stays")
+            (is (not (str/includes? (raw-blob gdk) (b64 (:Plaintext gdk)))))
+            (is (str/includes? (raw-blob gdk) (b64 (:CiphertextBlob gdk))) "the ciphertext stays")
             (confirmed! ctx e :kms :ScheduleKeyDeletion {:KeyId kid :PendingWindowInDays 7})))))))
 
 (defn- sqs-ctx

@@ -3,6 +3,8 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [cognitect.aws.credentials :as creds]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [deliberator.env :as env]
             [deliberator.env.ops]
             [deliberator.store :as store]

@@ -502,6 +502,8 @@
 (defn- verify-account!
   "Once per [session, environment, account, profile] in the daemon's life: the remote profile must be in the
   account the record says (`check-account!`). Every operation that loads a `:remote` environment calls it
+  "Once per [session, environment, account] in the daemon's life: the remote profile must be in the
+  account the record says (`aws/check`). Every operation that loads a `:remote` environment calls it
   (scenario.run, config.refresh, aws.discover, terraform.drift, logs.fetch, service.start --secrets-from);
   without a daemon map (a direct call) the check runs every time."
   [d ws sess e]
@@ -511,6 +513,20 @@
       (when-not (contains? @checked k)
         (check-account! ws sess e)
         (swap! checked conj k)))))
+    (let [k [(store/ws-name ws) sess (:name e) (get-in e [:aws :account])]
+          checked (or (:checked d) (atom #{}))]
+      (when-not (contains? @checked k)
+        (let [r (aws/check {:ws ws :session sess} e)]
+          (cond
+            (:ok? r) (swap! checked conj k)
+            (:error r) (fail :check-failed (str "cannot verify the account of environment " (:name e) ": "
+                                                (get-in r [:error :message]))
+                             :hint (get-in r [:error :hint]) :env (:name e))
+            :else (fail :account-mismatch
+                        (str "environment " (:name e) " expects account " (:expected r)
+                             " but the profile is in account " (:account r))
+                        :expected (:expected r) :found (:account r) :env (:name e)
+                        :hint "log in to the right account (aws sso login) or fix the record")))))))
 
 
 (declare runs-dir run-edn)
@@ -687,6 +703,10 @@
       (logfetch/fetch! ws env-name target :session (session-key ws args) :since since :for for :filter filter
                        :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))
       (finally (when counter (swap! counter dec))))))
+  (let [ws (ws-of args) env-name (or env "local")]
+    (verify-remote! ctx ws env-name)
+    (logfetch/fetch! ws env-name target :session (session-key ws args) :since since :for for :filter filter
+                     :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))))
 
 (defn- marker-add [_ {:keys [file line logger] :as args}] (markers/add! (ws-of args) file line :logger logger))
 (defn- marker-remove [_ {:keys [file line] :as args}] (markers/remove! (ws-of args) file line))
