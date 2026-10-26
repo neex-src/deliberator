@@ -700,6 +700,10 @@
 
 (defn- terraform-drift [ctx {:keys [env file dir plan] :as args}]
   (let [ws (ws-of args) env-name (or env "local")]
+    (when (and dir (not file)
+               (not-any? #(let [n (.getName ^java.io.File %)] (or (str/ends-with? n ".tf") (str/ends-with? n ".tf.json")))
+                         (or (.listFiles (io/file (str dir))) [])))
+      (fail :tf/no-root (str "no Terraform files in " dir) :dir (str dir)))      ; B18: a wrong folder is not "no drift"
     (verify-remote! ctx ws env-name)
     (tfdrift/drift! ws env-name (cond-> {} file (assoc :file file) dir (assoc :dir dir) plan (assoc :plan plan)))))
 
