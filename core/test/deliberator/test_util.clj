@@ -31,19 +31,12 @@
   "The daemon's limit for `<home>/daemon/deliberatord.sock` (daemon.clj); a longer path falls back to tcp."
   100)
 
-(def ^:private max-tunnel-path-bytes
-  "The limit `tunnel/socket-file` enforces on `<ws>/tunnel/t-<6 hex>.sock`."
-  103)
-
 (defn- byte-count [s] (count (.getBytes (str s) "UTF-8")))
 
 (defn- sock-too-long?
-  "True when a socket the tests bind under `home` would not fit: the daemon's, and the tunnel's in workspace `w`
-  (the one the tunnel tests use), measured as the code measures them."
+  "True when the daemon's socket under `home` would not fit, measured as `daemon.clj` measures it."
   [^java.io.File home]
-  (or (> (byte-count (io/file home "daemon" "deliberatord.sock")) max-unix-path-bytes)
-      (binding [store/*home* home]
-        (> (byte-count (store/path "w" "tunnel" "t-000000.sock")) max-tunnel-path-bytes))))
+  (> (byte-count (io/file home "daemon" "deliberatord.sock")) max-unix-path-bytes))
 
 (defn- rand5 [] (Long/toString (+ 60466176 (long (rand 1.0e9))) 36))
 

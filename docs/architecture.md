@@ -35,19 +35,19 @@ in 0.6 s)*. One repository, one plugin id, one distribution.
 | Concept | What it is | Persisted as |
 |---|---|---|
 | **Workspace** | The long-lived context: attached repositories, environments, runtime, topology, sessions. One IDE project is one workspace's window. | `workspaces/<ws>/workspace.edn` |
-| **Repository** | An entry in the local store: name, remote, bare clone, default branch. | `repos/<name>.git` |
-| **Worktree** | A disposable checkout of a repository at a branch or PR head; "start working" and "open PR" each make one and touch nothing else. | `worktrees/<repo>/<name>/` |
+| **Repository** | An attached checkout, recorded by `repo.attach` (name, path). A bare-clone store under `repos/<name>.git` is M5: planned, not built. | `workspace.edn :repos` |
+| **Worktree** | A disposable checkout of a repository at a branch or PR head; "start working" and "open PR" each make one and touch nothing else. M5: planned, not built. | `worktrees/<repo>/<name>/` (planned) |
 | **Session** | A unit of work, usually a ticket key. Owns every scenario, run, query, fetched log, config snapshot and scratch file made while it is current. Started and ended explicitly, never deleted, searchable. | `sessions/<key>/` |
 | **Environment** | Where operations go: `local` (Floci + Podman, fake credentials, structurally unable to reach AWS) or a remote (`dev`, `preprod`, …: SSO profile, read-only by default). Also names the logical targets a scenario refers to (service base URLs, queues, tables, log sources, Postgres DSN). | `environments/<env>.edn` |
 | **Runtime** | Declarative desired state of the local infrastructure: Podman endpoint, network, Floci, Postgres, service containers. Reconciled lazily. | `runtime.edn` |
 | **Service** | A deployable unit (Spring Boot service, Node Lambda): repository, build, container spec, config chain, log pattern, ports. | `services/<name>.edn` |
-| **Topology** | Per service: `local` (container on the runtime), `remote <env>` or `fake`. Switching one service and rerunning the same scenario is "bringing it in". | `topology.edn` |
+| **Topology** | Per environment and service: `local` (container on the runtime), `external {url}` or `off` (decision 46; `fake` is M6, planned). Switching one service and rerunning the same scenario is "bringing it in". | `environments/<env>.edn :topology` |
 | **Scenario** | A plain text file of ordered steps (`.scn`, §8), committed in a repository or ad hoc in a session. | the file |
 | **Run** | One execution of a scenario: every input and output raw, timings, correlation ids, a rendered text result. Diffable against any other run. | `sessions/<key>/runs/<ts>-<scenario>/` |
 | **Artifact** | Raw bytes fetched or produced, content-addressed, with metadata. Everything else references artifacts. | `raw/sha256/…` |
-| **Cached view** | The latest fetched state of something remote (deployed version, config, parameters) with its age. | `cache/<env>/<kind>/<key>.edn` |
+| **Cached view** | The latest fetched state of something remote with its age. One exists today: the config snapshot (parameters and secret metadata, `config.refresh`); deployed versions and more are M4. | `config/<env>.edn` |
 | **Marker** | A source position (file, line) whose log lines are highlighted after a run. | `markers.edn` |
-| **Provider** | An external process contributing operations through the protocol (§6). | `providers/<name>.edn` |
+| **Provider** | An external process contributing operations through the protocol (§6). M6: planned, not built. | `providers/<name>.edn` (planned) |
 
 ## 3. On-disk layout
 
@@ -55,35 +55,44 @@ in 0.6 s)*. One repository, one plugin id, one distribution.
 
 ```
 daemon/
-  deliberatord.sock  endpoint  daemon.log  version
+  lock  deliberatord.sock  endpoint  daemon.log  daemon.out
 workspaces/<ws>/
-  workspace.edn  runtime.edn  topology.edn  markers.edn
-  environments/<env>.edn        services/<name>.edn        providers/<name>.edn
-  repos/<name>.git              worktrees/<repo>/<name>/
+  workspace.edn  runtime.edn  markers.edn
+  audit.log                     remote calls made while no session was current
+  environments/<env>.edn        services/<name>.edn        config/<env>.edn   (the config snapshot, with its age)
+  project/                      the IDE project directory of the workspace
+  services/<name>/classes/      staged classes for hot reload
   raw/sha256/<2>/<62>           raw/sha256/<2>/<62>.meta.edn
-  cache/<env>/<kind>/<key>.edn
-  logs/services/<service>/<date>.log
+  raw/follow/                   a follow in progress, adopted into raw/ when it ends
+  logs/services/<service>/<date>.log   logs/build/   logs/reload/
+  terraform-plugin-cache/
   sessions/<key>/
-    session.edn  notes.md
+    session.edn  notes/  audit.log   (every remote call: time, env, op, bytes, confirmation)
     scenarios/*.scn
+    logs/<target>-<ts>.log      one file per fetch or follow, hard-linked into raw/
+    config/                     config snapshots taken while the session was current
     runs/<yyyymmdd-hhmmss>-<scenario>/
-      run.edn        scenario path + sha, env, vars, status, step summaries, timings
+      run.edn        scenario path + sha, env, vars, topology, status, step summaries, timings
+      scenario.scn   the file as it was run
       result.txt     the rendered run: what the editor shows, what `cat` and `diff` read
       steps/NNN-<kind>-<name>/
         step.edn     facts, asserts, captures, correlation id, timings, raw refs
-        request.*    response.*     the bytes, byte-exact (hard links into raw/)
-    queries/<name>.{sql,dql,insights}
-    logs/<env>/<source>/<ts>.log
-    fetched/<env>/<kind>/<name>-<ts>.{json,txt}
-    audit.log      every remote call: time, env, op, bytes, confirmation
+        request.*    response.*    display.txt    the bytes, byte-exact (hard links into raw/)
 ```
+
+Planned, not built: `repos/<name>.git` and `worktrees/<repo>/<name>/` (M5), `providers/<name>.edn`
+(M6), `cache/<env>/<kind>/<key>.edn` as the general cached-view layout (M4; today's one view is
+`config/<env>.edn`), named `queries/` (M4, or a convention over `.scn` files).
 
 Principles applied: every fetched byte lands in `raw/` before parsing (principle 1); `result.txt`
 and every view are derived and regenerable (`dlb runs render`); nothing is named `scratch_37`
 (principle 4); everything is text or EDN (principle 3). `.meta.edn` records source, operation,
-environment, time, size and content type, so a raw blob is always explainable. Secret values are
-the one exception to raw persistence: `GetSecretValue` and decrypted parameters from a remote
-environment are stored redacted unless the call was made with the explicit persist flag.
+environment, time, size and content type, so a raw blob is always explainable. The exceptions to
+raw persistence are recorded ones: secret values (`GetSecretValue`, decrypted parameters) are
+persisted with the value fields `<redacted>` on any environment, metadata and refs kept (decision
+49); Podman `inspect` bodies of a container started with real secrets have `Config.Env` scrubbed;
+`terraform.drift` persists an allowlisted extract of `terraform show -json`, never the document,
+which holds the state's secret values (B1).
 
 ## 4. Sessions, environments, security
 
@@ -137,16 +146,17 @@ plugin when a project opens (on the IDE's JBR), or `dlb` when a command finds no
 
 - lock file + unix domain socket under `daemon/`; `endpoint` holds a `tcp://127.0.0.1:<port>`
   fallback for hosts where the socket is unusable;
-- `hello` handshake carries client kind and expected core version; a mismatch makes the client
-  restart the daemon with the jar it ships;
+- `hello` handshake carries client kind and expected core version; on `compatible: false` the client
+  restarts the daemon with the jar it ships only when that jar is newer and no run is in flight,
+  otherwise it fails with `daemon/incompatible` and a hint;
 - idle shutdown after a configurable quiet period; the runtime's containers outlive the daemon;
 - each request runs on a virtual thread; a run is a supervised group of step threads, cancelled
   by `cancel` or by the client's connection closing if it asked for that;
 - development: `cljdev` runs an nREPL in `core/`, the daemon is started from the REPL and the
   IDE connects to the same socket, so the core changes while the IDE stays open.
 
-Long-lived clients (AWS per environment, Podman, JDBC pools) live in the daemon and are reused
-across runs; health is checked on first use after an error.
+AWS clients are memoised in the daemon per environment and service; Podman is a client map per
+call over the configured endpoint; `sql` opens a connection per step (no pool, no health check).
 
 ## 6. The protocol
 
@@ -165,47 +175,49 @@ more `event` lines and exactly one terminal line:
   "summary":"PutParameter /app/flag on dev (account 1234…)"}}
 ```
 
-Operations are `area.verb`: `session.*`, `env.*`, `runtime.*`, `service.*`, `scenario.*`,
-`runs.*`, `raw.*`, `repo.*`, `worktree.*`, `pr.*`, `logs.*`, `query.*`, `ci.*`, `tf.*`,
-`provider.*`, plus `op.describe`, which returns every operation with its argument schema and
-class. The CLI's help, the IDE's actions and an agent's tool list are all generated from
-`op.describe`, so an operation exists in all three the moment the core has it (§4.H of the
-brief). Results are small by rule: a summary plus paths; full data is on disk.
+Operations are `area.verb`: `workspace.*`, `session.*`, `env.*`, `runtime.*`, `service.*`,
+`topology.*`, `config.*`, `scenario.*`, `runs.*`, `raw.*`, `repo.*`, `logs.*`, `marker.*`, `aws.*`,
+`terraform.*`, `daemon.*`, plus `op.describe`, which returns every operation with its argument
+schema and class. The CLI's help and the IDE's operations form are generated from `op.describe`,
+so an operation exists in both the moment the core has it; an agent's tool list generated the same
+way (§4.H of the brief) is planned, not built. Planned families, not built: `worktree.*`, `pr.*`,
+`ci.*` (M5), `query.*` (M4, or a convention over `.scn` files), `provider.*` (M6). Results are
+small by rule: a summary plus paths; full data is on disk.
 
-**Providers** speak the same framing on stdio. `providers/<name>.edn` names the command; the
-daemon starts it on demand, asks `op.describe`, and exposes its operations as `<name>.<op>`,
-streaming its events through. the user's REPL-based infrastructure catalog plugs in here; the core
-knows nothing about it beyond this file.
+**Providers** (M6, planned, not built) speak the same framing on stdio. `providers/<name>.edn`
+names the command; the daemon starts it on demand, asks `op.describe`, and exposes its operations
+as `<name>.<op>`, streaming its events through. the user's REPL-based infrastructure catalog plugs in
+here; the core knows nothing about it beyond this file.
 
 ## 7. Runtime control
 
 `runtime.edn` is desired state:
 
 ```clojure
-{:podman {:endpoint "unix:///run/user/1000/podman/podman.sock"}   ; or tcp://host:port, ssh://user@host
+{:podman {:endpoint "unix:///run/user/1000/podman/podman.sock"}   ; or tcp://host:port
  :network "deliberator"
  :containers
  {:floci    {:image "docker.io/floci/floci:2.3.0" :ports {4566 4566}
              :env {"FLOCI_SERVICES_ECS_MOCK" "true"} :podman-socket true}
-  :postgres {:image "docker.io/library/postgres:17" :ports {5432 5432} :init "estate/sql/"}
-  :service/a {:from :service "a"}}}                                 ; rendered from services/a.edn
+  :postgres {:image "docker.io/library/postgres:17" :ports {5432 5432} :init "estate/sql/"}}}
 ```
+
+Service roles are not in this file: they are derived at `ensure!` time from `services/<name>.edn`
+; `runtime.edn :services` may override a service's host ports.
 
 The reconciler talks to the Podman REST API (libpod endpoints, Docker-compatible ones where
 libpod lacks something) *(spike: the libpod and docker-compat APIs answered over the unix socket
 and over `tcp://127.0.0.1` from `java.net.http`, no client library needed)*. Containers carry
 labels `deliberator.workspace` and `deliberator.role`, so status and cleanup never guess by
 name. Health: HTTP for Floci (`/_floci/health` lists every service's state), `pg_isready` for
-Postgres, the actuator for services. Any operation that targets the `local` environment calls
-`runtime.ensure` first; a cold start costs seconds, a warm one nothing. Logs of every container
-are mirrored to `logs/services/` on demand and tailed from there.
+Postgres, the actuator for services. `runtime.ensure` and `service.start|restart` reconcile; a
+scenario run does not (a cold `dlb run` fails on connection errors until `dlb runtime ensure` or
+`bb estate:up`); a warm ensure costs nothing. Logs of every container are mirrored to
+`logs/services/` on demand and tailed from there.
 
-Machine profiles: on Linux the endpoint is the user's Podman socket. On the Mac the runtime
-host is the existing Podman machine, inside it a privileged container with systemd and nested
-rootless Podman runs Floci and the services; the plugin's endpoint is that inner Podman's API
-over TCP or SSH *(research; retired by the M3 spike on the Mac)*. Floci's own container-backed
-services (Lambda, ECS without mock) get the runtime's Podman socket mounted, as the estate
-already does.
+The endpoint is the user's rootless Podman socket (`unix://`, the default) or a `tcp://` Podman
+service. Floci's own container-backed services (Lambda, ECS without mock) get the runtime's
+Podman socket mounted, as the estate already does.
 
 ## 8. Scenarios and runs
 
@@ -238,10 +250,12 @@ Content-Type: application/json
 # @assert lines >= 2
 ```
 
-- Step kinds in M1: `http`, `sqs send|receive`, `eventbridge put`, `lambda invoke`,
-  `dynamodb get|query|scan`, `sql`, `logs` (file, container, later CloudWatch), `scheduler
-  list|get`, `wait`. Every kind declares its directives, facts and capture roots; the engine owns
-  `@assert`, `@capture`, `@until`, `@timeout`, `@body`, `@env`.
+- Step kinds: `http`, `sqs send|receive`, `eventbridge put`, `lambda invoke`, `dynamodb
+  get|query|scan`, `sql`, `logs` (file, container, CloudWatch), `scheduler list|get`, `wait`,
+  `shell`, `op` (any daemon operation) and `aws` (any `service.Operation`); `scenario.kinds` lists
+  them as data. Every kind declares its directives, facts and capture roots; the engine owns
+  `@assert`, `@capture`, `@until`, `@timeout`, `@body`, `@name`; `@env` and `@var` are header
+  directives.
 - Every step gets a correlation id (`X-Correlation-Id` header, `correlation` message attribute,
   `detail.correlation` on events), recorded in `step.edn`; `{{correlation}}` is the run's id,
   `{{step.correlation}}` the step's. Log steps filter by it exactly.
@@ -254,7 +268,7 @@ The engine is one function from (scenario, environment, session) to a run direct
 sink interface the daemon streams through; the CLI runner and the IDE gutter call the same
 operation.
 
-## 9. IntelliJ integration points *(research; M2 retires each with a fixture test)*
+## 9. IntelliJ integration points *(built in M2 and M3, each behind a fixture test; decisions 31–39, 47, 50, 52, 53)*
 
 - **Workspace window.** The IDE project for a workspace is a near-empty project directory under
   the workspace; repositories are attached to it, never opened as projects. Gradle builds via
@@ -270,8 +284,8 @@ operation.
   diff of two runs through the IDE diff viewer.
 - **Logs.** Fetched logs open as text files; a correlation filter action; markers are gutter
   marks stored in `markers.edn` and matched against `logger`/line metadata from the service's log
-  pattern after a run; non-suspending logging breakpoints are investigated when a service is
-  attached under the debugger (M3).
+  pattern after a run; logpoints (non-suspending logging breakpoints) are the platform's own under
+  the debugger.
 - **Config chain.** A `PsiReferenceContributor` from `${placeholder}` in properties/yaml to the
   task-definition template entry and from `valueFrom` to the parameter; a `LocalInspectionTool`
   asks the daemon whether the parameter exists in the selected environment (cached view, with
@@ -280,19 +294,19 @@ operation.
   container's JDWP port, "Reload Changed Classes" against a JBR with
   `-XX:+AllowEnhancedClassRedefinition` *(research: JBR 21 and 25 ship it; the flag is present in
   the local JBR 25.0.4)*, HotswapAgent in-process with its Spring plugin, container restart as the fallback (decision 43, measured on JBR 21 and 25; DevTools dropped).
-- **Tool window** "Deliberator": sessions, runs, runtime status, environment selector. Every item
-  is also an action and a CLI command.
+- **Tool window** "Deliberator": Workspace (sessions, runs, runtime status, environment selector),
+  Services and AWS contents. Every item is also an action and a CLI command.
 
 ## 10. Milestones and the spikes that gate them
 
-| Milestone | Delivers | Gate spikes |
-|---|---|---|
-| M1 core + CLI | store, sessions, environments, runtime (Floci + Postgres), scenario engine with the M1 kinds, daemon, protocol, `dlb`; estate deployed to Floci | done 2026-10-16: aws-api against Floci for SQS, DynamoDB, SSM, Secrets, EventBridge → SQS, Logs, ECS mock, STS; Podman API over unix and TCP; Clojure on JBR 25 |
-| M2 IDE layer | daemon lifecycle from the plugin, attach/detach, `.scn` editor with inline runs and diff, logs + markers, tool window | attach Gradle/Maven/plain dir without reopen on 2026.2; plugin starts the uberjar on `java.home` |
-| M3 services | service containers, topology switching, hot reload, config chain navigation and inspection, secrets gating | DCEVM reload into a container JVM on Java 21 and 25; Mac nested-Podman endpoint |
-| M4 remote | SSO environments, read-only inspection, deployed versions, Logs Insights with bytes scanned, named queries, cached views | SSO profile use from the daemon; Insights statistics shape |
-| M5 CI/CD + PRs | Actions job logs as text, poll-tail, fail-vs-success diff, local pipeline (`act` + Floci CodeDeploy), PR worktrees with checks | `act` on Podman; what Floci does with a CodeDeploy deployment |
-| M6 Terraform + fakes | override files, scrubbed wrapper, cross-repo apply order, resource → container links; record/replay HTTP fakes, identity-fake extension shape | Terraform AWS provider 6.x against Floci for the estate module |
+| Milestone | Delivers | Gate spikes | Status (2026-10-25) |
+|---|---|---|---|
+| M1 core + CLI | store, sessions, environments, runtime (Floci + Postgres), scenario engine with the M1 kinds, daemon, protocol, `dlb`; estate deployed to Floci | done 2026-10-16: aws-api against Floci for SQS, DynamoDB, SSM, Secrets, EventBridge → SQS, Logs, ECS mock, STS; Podman API over unix and TCP; Clojure on JBR 25 | done |
+| M2 IDE layer | daemon lifecycle from the plugin, attach/detach, `.scn` editor with inline runs and diff, logs + markers, tool window | attach Gradle/Maven/plain dir without reopen on 2026.2; plugin starts the uberjar on `java.home` | done |
+| M3 services | service containers, topology switching, hot reload, config chain navigation and inspection, secrets gating | DCEVM reload into a container JVM on Java 21 and 25 | done headless 2026-10-16; the GUI checks of `docs/demo-m3.md` §9 partly walked |
+| M4 remote | SSO environments, read-only inspection, deployed versions, Logs Insights with bytes scanned, named queries, cached views | SSO profile use from the daemon; Insights statistics shape | partly built: `:remote` records with profile credentials, confirmation tokens, `audit.log`, remote reads and drift in the explorer, `config.refresh`; SSO, deployed versions, Insights and named queries not built (roadmap §3) |
+| M5 CI/CD + PRs | Actions job logs as text, poll-tail, fail-vs-success diff, local pipeline (`act` + Floci CodeDeploy), PR worktrees with checks | `act` on Podman; what Floci does with a CodeDeploy deployment | not started |
+| M6 Terraform + fakes | override files, scrubbed wrapper, cross-repo apply order, resource → container links; record/replay HTTP fakes, identity-fake extension shape | Terraform AWS provider 6.x against Floci for the estate module | partly built: `terraform.local` plan/apply onto Floci and `terraform.drift`; override file, apply order, links and fakes not built (roadmap §4, §6) |
 
 The fake-external-systems category (brief §4.I) is designed as: a fake is a runtime container
 declared like a service plus a provider that records and replays; recordings are scrubbed before

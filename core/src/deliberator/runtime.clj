@@ -53,8 +53,7 @@
             [deliberator.service.description :as description]
             [deliberator.service.staging :as staging]
             [deliberator.store :as store]
-            [deliberator.topology :as topology]
-            [deliberator.tunnel :as tunnel])
+            [deliberator.topology :as topology])
   (:import (java.net InetSocketAddress Socket URI)
            (java.net.http HttpClient HttpClient$Version HttpRequest HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
@@ -403,17 +402,13 @@
 (defn- ws-labels [ws] {"deliberator.workspace" (store/ws-name ws)})
 
 (defn podman-endpoint
-  "The endpoint the Podman client speaks for `cfg`: `runtime.edn :podman :endpoint`, an `ssh://` one replaced by the
-  `unix://` end of its tunnel (opened here, `deliberator.tunnel`; failing as `podman/tunnel-failed`)."
-  [ws cfg]
-  (let [endpoint (get-in cfg [:podman :endpoint] (podman/default-endpoint))]
-    (if (= :ssh (:scheme (podman/parse-endpoint endpoint)))
-      (str "unix://" (tunnel/ensure! ws endpoint (get-in cfg [:podman :ssh])))
-      endpoint)))
+  "The endpoint the Podman client speaks for `cfg`: `runtime.edn :podman :endpoint` (`unix://` or `tcp://`), else the
+  user's socket."
+  [_ws cfg]
+  (get-in cfg [:podman :endpoint] (podman/default-endpoint)))
 
 (defn podman-client
-  "A Podman client for the workspace's `runtime.edn` (the tunnel of an `ssh://` endpoint opened on the way).
-  `:persist? false` leaves the raw store out (probes)."
+  "A Podman client for the workspace's `runtime.edn`. `:persist? false` leaves the raw store out (probes)."
   [ws cfg & {:keys [persist?] :or {persist? true}}]
   (podman/client (podman-endpoint ws cfg) :ws (when persist? (store/ws-name ws))))
 
@@ -579,16 +574,11 @@
   ([ws] (status ws {}))
   ([ws {:keys [only]}]
    (let [cfg (read-config ws)
-         endpoint (get-in cfg [:podman :endpoint] (podman/default-endpoint))
-         ssh? (= :ssh (:scheme (podman/parse-endpoint endpoint)))
-         tunnel-err (when ssh? (try (tunnel/ensure! ws endpoint (get-in cfg [:podman :ssh])) nil (catch clojure.lang.ExceptionInfo e e)))
-         tun (when ssh? (cond-> (tunnel/status ws endpoint) tunnel-err (assoc :error (ex-message tunnel-err))))
-         c (when-not tunnel-err (podman-client ws cfg))]
-     (if-not (and c (podman/available? c))
+         endpoint (podman-endpoint ws cfg)
+         c (podman-client ws cfg)]
+     (if-not (podman/available? c)
        {:ws (store/ws-name ws)
-        :podman (cond-> {:endpoint endpoint :reachable false
-                         :hint (if ssh? (str "ssh tunnel: " (some-> tunnel-err ex-message) " (log " (:log tun) ")") "systemctl --user enable --now podman.socket")}
-                  ssh? (assoc :tunnel tun))
+        :podman {:endpoint endpoint :reachable false :hint "systemctl --user enable --now podman.socket"}
         :containers []}
        (let [ds (when cfg (into {} (map (juxt :role identity)) (desired-all ws cfg)))
              ctrs (cond->> (podman/list-containers c :all true :labels (ws-labels ws))
@@ -608,9 +598,8 @@
                       {:role role :name (:name d) :image (:image d) :state :absent :ports (:ports d)})
              v (podman/info c)]
          {:ws (store/ws-name ws)
-          :podman (cond-> {:endpoint endpoint :reachable true :version (get-in v [:version :Version])
-                           :rootless (get-in v [:host :security :rootless])}
-                    ssh? (assoc :tunnel tun))
+          :podman {:endpoint endpoint :reachable true :version (get-in v [:version :Version])
+                   :rootless (get-in v [:host :security :rootless])}
           :containers (vec (sort-by :role (concat rows absent)))})))))
 
 (defn down!
