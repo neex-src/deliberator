@@ -48,6 +48,8 @@
     service.reload name* budget-ms ws              -> {name mechanism changed redefined took-ms log reload-count [fallback]}   [service.reload.step]
     config.chain name* env ws                      -> {service env module snapshot files entries extra broken unresolved hint}   (offline)
     config.refresh env path ws                     -> {env fetched-at parameters secrets path copy raw errors}
+    deployed.refresh env ws                        -> {env fetched-at services ecs lambda deployments path text raw errors}   (M4.2: ECS, Lambda, CodeDeploy into cache/<env>/deployed.edn)
+    deployed.show env service ws                   -> {env fetched-at age-ms age services count path text}   (from the cache only, never AWS)
     runtime.ensure ws infra-only timeout-ms        -> status   [runtime.pulling runtime.starting runtime.ready]
     runtime.status ws                              -> {ws podman containers}
     runtime.down ws                                -> {removed}  [runtime.removed]
@@ -66,6 +68,7 @@
     repo.detach name* ws                           -> {removed}
     repo.list ws                                   -> [{name path kind attached-at}]
     logs.fetch target* env since for follow filter session ws -> {path lines bytes sha target source [follow]}   [logs.line]
+    logs.insights groups* query* env since until name budget-ms limit session ws -> {query-id status bytes-scanned statistics rows path sha query-file raw}   [line]   (M4.3)
     logs.match path* markers ws                    -> {lines [{n marker-id}] path scanned}
     marker.add file* line* logger ws               -> [{id file line logger}]   (the marker list after the change)
     marker.remove file* line* ws                   -> [{id file line logger}]
@@ -85,6 +88,8 @@
             [clojure.string :as str]
             [deliberator.aws :as aws]
             [deliberator.config :as config]
+            [deliberator.deployed :as deployed]
+            [deliberator.insights :as insights]
             [deliberator.env :as env]
             [deliberator.logfetch :as logfetch]
             [deliberator.awsdiscover :as awsdiscover]
@@ -488,12 +493,22 @@
 
 ;; handlers: scenarios -------------------------------------------------------------------------
 
-(defn- resolve-scenario [ws sess path]
+(defn- resolve-scenario
+  "A scenario file: an absolute path as it is; a relative one in the session's `scenarios/`, else in the session directory
+  itself (`queries/<name>.scn`, the named-query convention, M4.5)."
+  [ws sess path]
   (let [p (io/file path)
-        f (if (.isAbsolute p) p (.toFile (.resolve (.resolve (session/dir ws sess) "scenarios") ^String path)))]
+        sdir (session/dir ws sess)
+        in-scenarios (.toFile (.resolve (.resolve sdir "scenarios") ^String path))
+        in-session (when-not (.isAbsolute p)
+                     (let [f (.normalize (.resolve sdir ^String path))] (when (.startsWith f sdir) (.toFile f))))
+        f (cond (.isAbsolute p) p
+                (.isFile in-scenarios) in-scenarios
+                (and in-session (.isFile in-session)) in-session
+                :else in-scenarios)]
     (when-not (.isFile f)
       (fail :scenario/not-found (str "no scenario file " f)
-            :hint (if (.isAbsolute p) "pass an existing file" "a relative path is looked up in the session's scenarios/ directory; pass an absolute path otherwise")))
+            :hint (if (.isAbsolute p) "pass an existing file" "a relative path is looked up in the session's scenarios/ directory, then in the session directory itself (queries/<name>.scn); pass an absolute path otherwise")))
     (str f)))
 
 (defn- header-env [file]
@@ -706,6 +721,24 @@
                        :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))
       (finally (when counter (swap! counter dec))))))
 
+(defn- logs-insights [ctx {:keys [groups query env since until name budget-ms limit] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")
+        e (verify-remote! ctx ws env-name)
+        emit! (:emit! ctx)]
+    (insights/run-query! {:ws ws :session (session-key ws args) :cancelled? (:cancelled? ctx)} e
+                         (cond-> {:groups groups :query query :since since :until until :name name
+                                  :progress! (fn [t] (when emit! (emit! {:event "line" :text t})))}
+                           budget-ms (assoc :budget-ms budget-ms)
+                           limit (assoc :limit limit)))))
+
+(defn- deployed-refresh [ctx {:keys [env] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (verify-remote! ctx ws env-name)
+    (deployed/refresh! ws env-name)))
+
+(defn- deployed-show [_ {:keys [env service] :as args}]
+  (deployed/show (ws-of args) (or env "local") {:service service}))
+
 (defn- marker-add [_ {:keys [file line logger] :as args}] (markers/add! (ws-of args) file line :logger logger))
 (defn- marker-remove [_ {:keys [file line] :as args}] (markers/remove! (ws-of args) file line))
 (defn- marker-list [_ {:keys [file] :as args}] (markers/list (ws-of args) :file file))
@@ -867,6 +900,13 @@
                      :doc "Fetches the parameters (GetParametersByPath, no decryption) and the secrets' metadata (ListSecrets, DescribeSecret; never values) of an environment, persists every response raw and writes the snapshot config/<env>.edn (and a copy under the open session)."
                      :args (ws-schema :env {:type :string :doc "environment name; default local"}
                                       :path {:type :string :doc "SSM path to list recursively; default /"})}
+   "deployed.refresh" {:fn deployed-refresh :class :mutate
+                       :doc "Fetches what is deployed in an environment: ECS clusters, services and their task definitions (image tag, revision), Lambda functions (version, code sha, last modified), CodeDeploy deployments where present. Read calls only; every response is persisted raw first, then cache/<env>/deployed.edn (with fetched-at) and deployed.txt are derived. A section that fails is listed in errors, the others still answer."
+                       :args (ws-schema :env {:type :string :doc "environment name; default local"})}
+   "deployed.show" {:fn deployed-show :class :read
+                    :doc "What was deployed when last fetched, from the cache only (never AWS), with its age; service narrows to one name (or cluster/name). deployed.refresh fetches again."
+                    :args (ws-schema :service {:type :string :positional true :doc "service or function name, or cluster/name; default all"}
+                                     :env {:type :string :doc "environment name; default local"})}
    "service.list" {:fn service-list :class :read
                    :args (ws-schema :env {:type :string :doc "environment whose topology gives the mode; default local"})
                    :doc "The services of the workspace with kind, repository, module, ports, image, mode (local, external with its url, off) and runtime status."}
@@ -927,7 +967,7 @@
    "scenario.run" {:fn scenario-run :class :mutate
                    :doc "Runs a scenario file in a session against an environment; streams the engine's events; the result is the run summary with paths."
                    :events ["run.started" "step.started" "line" "confirm.required" "step.finished" "run.finished"]
-                   :args (ws-schema :path {:type :string :required true :doc "scenario file; relative paths are looked up in the session's scenarios/"}
+                   :args (ws-schema :path {:type :string :required true :doc "scenario file; relative paths are looked up in the session's scenarios/, then in the session directory (queries/<name>.scn: a named query)"}
                                     :env {:type :string :doc "environment name; default the scenario's @env, else local"}
                                     :session {:type :string :doc "session key; default the current session"}
                                     :steps {:type :ints :doc "run only these step numbers"}
@@ -981,6 +1021,18 @@
                                   :follow {:type :bool :doc "listen until cancelled (Ctrl-C / the client leaving), one file for the whole follow"}
                                   :filter {:type :string :doc "text or /regex/ an entry must match"}
                                   :session {:type :string :doc "session key; default the current session"})}
+   "logs.insights" {:fn logs-insights :class :mutate
+                    :doc "Runs a CloudWatch Logs Insights query over log groups (names, or log/ targets of the environment) and writes the answer as text under the session's logs/ (insights-<name>-<ts>.txt, bytes scanned in its header); polls with a budget, stops the query when over it or cancelled, persists every request and response raw first. The bytes scanned (what Insights bills) are in the result. A named query's text is kept as queries/<name>.insights; rerun it as a one-step scenario (queries/<name>.scn, see dlb runs list --scenario)."
+                    :events ["line"]
+                    :args (ws-schema :groups {:type :strings :required true :doc "log group names (comma separated on the command line) or log/ targets of the environment"}
+                                     :query {:type :string :required true :doc "the Logs Insights query, e.g. fields @timestamp, @message | sort @timestamp desc | limit 20"}
+                                     :env {:type :string :doc "environment name; default local (Floci's Insights is a stub)"}
+                                     :since {:type :string :doc "start of the window: ISO-8601 instant or a duration ago like 30m; default 1h"}
+                                     :until {:type :string :doc "end of the window: instant or duration ago; default now"}
+                                     :name {:type :string :doc "name the query: its text is saved as sessions/<k>/queries/<name>.insights"}
+                                     :budget-ms {:type :int :doc "give up (and stop the query) after this many milliseconds; default 120000"}
+                                     :limit {:type :int :doc "StartQuery limit (rows); service default 1000, at most 10000"}
+                                     :session {:type :string :doc "session key; default the current session"})}
    "logs.match" {:fn logs-match :class :read
                  :doc "Which lines of a fetched log carry a marked logger and line (logback pattern logger:line - msg, or a stack frame at pkg.Class.m(File.java:N)); pure over the file."
                  :args (ws-schema :path {:type :string :required true :doc "log file, absolute or relative to the session's logs/"}
@@ -999,7 +1051,7 @@
                   :doc "The markers of the workspace, by file and line."
                   :args (ws-schema :file {:type :string :doc "only this file"})}
    "runs.list" {:fn runs-list :class :read
-                :doc "The runs of a session, newest first; scenario keeps the runs of one scenario."
+                :doc "The runs of a session, newest first; scenario keeps the runs of one scenario. This is the history of a named query: a query is a one-step scenario kept as queries/<name>.scn in the session (run it with dlb run queries/<name>.scn --env E), so dlb runs list --scenario <name> lists its runs."
                 :args (ws-schema :session {:type :string :doc "session key; default the current session"}
                                  :scenario {:type :string :doc "scenario path, path suffix or name (order, order.scn)"}
                                  :limit {:type :int :default 30 :doc "at most this many runs"})}
@@ -1032,7 +1084,7 @@
             :hint "op.describe lists the operations"))
     (let [args (validate-args op (:args entry) args)]
       (when (and (contains? (:args entry) :ws)
-                 (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.")   ; new families are strict, mutators too
+                 (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (= op "logs.insights")   ; new families are strict, mutators too
                      (and (= :read (:class entry)) (not= "scenario.parse" op))))
         (require-workspace! (:ws args)))
       ((:fn entry) ctx args))))

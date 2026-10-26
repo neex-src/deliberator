@@ -15,6 +15,8 @@
        :capture-roots #{\"$\"}                   ; path roots usable in @assert/@capture/@until ($ = JSON body)
        :concurrent?   false                     ; true: armed before step 1, runs beside the others, joined at the end
        :default-timeout-ms 30000                ; optional, per attempt; `@timeout` overrides
+       :verb-kinds    {\"insights\" {...}}        ; optional: per-verb overrides (`for-verb`): :target :directives :facts
+                                                ;   :capture-roots :concurrent? :default-timeout-ms :run :arm for the steps of that verb
        :arm           (fn [ctx step] armed)     ; concurrent kinds only, optional: called synchronously, in
                                                 ;   scenario order, before the first sequential step starts; its
                                                 ;   return value reaches `:run` as `(:armed ctx)`
@@ -100,6 +102,15 @@
   (swap! registry* assoc kind kind-map)
   kind-map)
 
+(defn for-verb
+  "The kind map that governs a step with `verb`: the kind's `:verb-kinds` entry for it merged over the kind (a verb that
+  is a different step shape, like `logs insights` beside the tail of `logs`: its own target rule, directives, facts,
+  `:run`, `:concurrent?`), else the kind map itself."
+  [kind-map verb]
+  (if-let [o (and verb (get-in kind-map [:verb-kinds verb]))]
+    (merge (dissoc kind-map :verb-kinds :arm :directives :facts :capture-roots :concurrent? :default-timeout-ms) o)
+    kind-map))
+
 (defn directive-specs
   "All directive specs of a kind map: engine-owned first, then the kind's own."
   [kind-map]
@@ -134,23 +145,27 @@
 
 (defn describe-kinds
   "The registry as data for the IDE and agents (`scenario.kinds`): a vector sorted by kind of
-  `{:kind :verbs :verb-optional :target :directives :facts :capture-roots :concurrent :default-timeout-ms}`.
+  `{:kind :verbs :verb-optional :target :directives :facts :capture-roots :concurrent :default-timeout-ms}` (+ `:verb-kinds [{:verb …same shape}]` for a kind whose verb is a different step shape, see `for-verb`).
   `:verbs` are the words (sorted); `:verb-optional` is true when the verb may be absent. A directive is
   `{:name :hint :type :values :repeatable :doc :engine}` (`:type` repeats the hint: the registry declares
   no other type; `:engine` marks the directives every kind has); a fact is `{:name :type}` with the
   implicit `elapsed`; a trailing `*` in a name is a family."
   []
-  (let [engine (set (map :name engine-directives))]
+  (let [engine (set (map :name engine-directives))
+        shape (fn [k]
+                {:target (name (or (:target k) :optional))
+                 :directives (vec (for [d (directive-specs k)]
+                                    {:name (:name d) :hint (:hint d) :type (:hint d) :values (vec (:values d))
+                                     :repeatable (boolean (:repeatable? d)) :doc (:doc d)
+                                     :engine (contains? engine (:name d))}))
+                 :facts (vec (for [f (fact-specs k)] {:name (:name f) :type (name (:type f))}))
+                 :capture-roots (vec (sort (:capture-roots k)))
+                 :concurrent (boolean (:concurrent? k))
+                 :default-timeout-ms (:default-timeout-ms k)})]
     (vec (for [[_ k] (sort-by key (registry))]
-           {:kind (:kind k)
-            :verbs (vec (sort (remove nil? (:verbs k))))
-            :verb-optional (or (nil? (:verbs k)) (contains? (:verbs k) nil))
-            :target (name (or (:target k) :optional))
-            :directives (vec (for [d (directive-specs k)]
-                               {:name (:name d) :hint (:hint d) :type (:hint d) :values (vec (:values d))
-                                :repeatable (boolean (:repeatable? d)) :doc (:doc d)
-                                :engine (contains? engine (:name d))}))
-            :facts (vec (for [f (fact-specs k)] {:name (:name f) :type (name (:type f))}))
-            :capture-roots (vec (sort (:capture-roots k)))
-            :concurrent (boolean (:concurrent? k))
-            :default-timeout-ms (:default-timeout-ms k)}))))
+           (cond-> (assoc (shape k)
+                          :kind (:kind k)
+                          :verbs (vec (sort (remove nil? (:verbs k))))
+                          :verb-optional (or (nil? (:verbs k)) (contains? (:verbs k) nil)))
+             (:verb-kinds k) (assoc :verb-kinds (vec (for [[verb _] (sort-by key (:verb-kinds k))]
+                                                       (assoc (shape (for-verb k verb)) :verb verb)))))))))

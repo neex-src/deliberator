@@ -49,7 +49,7 @@
      :secretsmanager (merge (r "GetSecretValue" "DescribeSecret" "ListSecrets")
                             (m "CreateSecret" "PutSecretValue" "DeleteSecret" "UpdateSecret"))
      :logs (merge (r "FilterLogEvents" "DescribeLogGroups" "DescribeLogStreams" "StartQuery"
-                     "GetQueryResults" "GetLogEvents")
+                     "GetQueryResults" "GetLogEvents" "StopQuery")
                   (m "CreateLogGroup" "CreateLogStream" "PutLogEvents" "DeleteLogGroup"
                      "DeleteLogStream"))
      :sts (r "GetCallerIdentity")
@@ -63,7 +63,8 @@
 
 (def exceptions
   "`[service op]` pairs whose class differs from what their name suggests, with the reason."
-  {["logs" "StartQuery"] "starts a read-only Insights query, changes no resource"})
+  {["logs" "StartQuery"] "starts a read-only Insights query, changes no resource"
+   ["logs" "StopQuery"] "stops an Insights query that was started to read, changes no resource (the cancel of logs.insights)"})
 
 (def generic-read-services
   "Services only the generic `aws` step kind reaches (not in `table`): there `Get*`/`List*`/`Describe*`/`Head*` count as reads.

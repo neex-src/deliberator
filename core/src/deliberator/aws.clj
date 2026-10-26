@@ -121,6 +121,14 @@
    [:kms "GenerateDataKeyPair"] {:paths [["PrivateKeyPlaintext"]]}
    [:kms "GenerateRandom"] {:paths [["Plaintext"]]}
    [:kms "DeriveSharedSecret"] {:paths [["SharedSecret"]]}
+   ;; configuration that is often a secret in practice: the VALUES of function and container environment variables
+   ;; (names stay), step `:vals` = every value of a map
+   [:lambda "ListFunctions"] {:paths [["Functions" :* "Environment" "Variables" :vals]]}
+   [:lambda "GetFunctionConfiguration"] {:paths [["Environment" "Variables" :vals]]}
+   [:lambda "GetFunction"] {:paths [["Configuration" "Environment" "Variables" :vals]]}
+   [:lambda "ListVersionsByFunction"] {:paths [["Versions" :* "Environment" "Variables" :vals]]}
+   [:ecs "DescribeTaskDefinition"] {:paths [["taskDefinition" "containerDefinitions" :* "environment" :* "value"]]}
+   [:ecs "RegisterTaskDefinition"] {:paths [["taskDefinition" "containerDefinitions" :* "environment" :* "value"]]}
    [:cognito-idp "InitiateAuth"] {:paths [["AuthenticationResult" "AccessToken"] ["AuthenticationResult" "IdToken"]
                                           ["AuthenticationResult" "RefreshToken"]]}
    [:cognito-idp "AdminInitiateAuth"] {:paths [["AuthenticationResult" "AccessToken"] ["AuthenticationResult" "IdToken"]
@@ -143,11 +151,12 @@
    [:secretsmanager "UpdateSecret"] [[:SecretString] [:SecretBinary]]})
 
 (defn- redact-path
-  "Replaces the value at `path` (steps: key or :* for every element of a vector) when present."
+  "Replaces the value at `path` (steps: a key, :* for every element of a vector, :vals for every value of a map) when present."
   [x [step & more :as path]]
   (cond
     (empty? path) redacted
     (= step :*) (if (sequential? x) (mapv #(redact-path % more) x) x)
+    (= step :vals) (if (map? x) (reduce-kv (fn [m k v] (assoc m k (redact-path v more))) x x) x)
     (and (map? x) (contains? x step)) (update x step #(redact-path % more))
     :else x))
 
