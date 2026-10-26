@@ -134,11 +134,17 @@
   ([^Project project ^Class cls] (.getService project cls)))
 
 (defn action!
-  "Performs the action with this id now (on the EDT), as if invoked from the place \"ijdev\"."
+  "Performs the action with this id (on the EDT), as if invoked from the place \"ijdev\" with the data context of the project's
+  selected editor (else of its frame): `e.project`, the editor and the file are there, which most actions need (without a component
+  the context comes from the focus owner, and a sandbox IDE on Xvfb has none: the action runs, finds no project and does nothing).
+  An action that opens a modal dialog does not return until it is closed: call it from a `future`."
   [id]
   (edt (let [am (ActionManager/getInstance)
-             ^AnAction a (or (.getAction am (str id)) (throw (ex-info (str "no action " id) {:id id})))]
-         (.tryToExecute am a nil nil "ijdev" true)
+             ^AnAction a (or (.getAction am (str id)) (throw (ex-info (str "no action " id) {:id id})))
+             p (project)
+             ^Component c (or (some-> (editor p) .getContentComponent)
+                              (some-> (com.intellij.openapi.wm.WindowManager/getInstance) (.getFrame p)))]
+         (.tryToExecute am a nil c "ijdev" true)
          :performed)))
 
 (defn actions-matching "Action ids containing s (case-insensitive)." [s]
