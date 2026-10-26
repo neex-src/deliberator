@@ -266,6 +266,7 @@ class ServiceProcessHandler(
             finish(0)
             return
         }
+        if (stopped.get()) { print("stopped while starting: the service is stopped again") ; return }
         tail()
     }
 

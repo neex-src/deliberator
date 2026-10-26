@@ -57,6 +57,8 @@ class DaemonService {
             if (now - lastHelloAt < HELLO_EVERY_MS && prev.client.unreachableAt < lastHelloAt && l.readEndpoint(home) == prev.client.endpoint) {
                 return DaemonConnection(prev.client, prev.hello, home, false, false)
             }
+            // the connection checked a moment ago is good enough, unless a request failed to reach the daemon since then
+            if (now - lastHelloAt < HELLO_EVERY_MS && prev.client.unreachableAt < lastHelloAt) return prev
             // still the same daemon? one hello, no restart logic needed when it answers compatibly
             val h = try { prev.client.hello(l.jarVersion()) } catch (_: DaemonException) { null }
             if (h != null && h.compatible != false) return DaemonConnection(prev.client, h, home, false, false).also { last = it; lastHelloAt = now }
