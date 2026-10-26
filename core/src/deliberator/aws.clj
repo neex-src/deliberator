@@ -80,13 +80,23 @@
   [x]
   (walk/postwalk (fn [v] (if (map? v) (vec (sort-by (comp pr-str key) v)) v)) (edn-ready x)))
 
+(defn- without-detail-correlation
+  "An event's `Detail` as parsed JSON without its `correlation` member (the step adds the run's one, see
+  `steps/eventbridge`); text that is not a JSON object stays as it is."
+  [detail]
+  (let [m (try (json/read-str detail) (catch Exception _ nil))]
+    (if (map? m) (dissoc m "correlation") detail)))
+
 (defn- without-run-id
   "The request minus the run id: an SQS send carries it as the `correlation` message attribute (also
-  per entry of a batch), and it differs on every run. Everything else stays."
+  per entry of a batch) and an EventBridge entry as `detail.correlation`; it differs on every run.
+  Everything else stays."
   [request]
-  (let [drop-attr (fn [m] (if (map? (:MessageAttributes m)) (update m :MessageAttributes dissoc "correlation") m))]
-    (cond-> (drop-attr request)
-      (sequential? (:Entries request)) (update :Entries #(mapv drop-attr %)))))
+  (let [drop-id (fn [m] (cond-> m
+                          (map? (:MessageAttributes m)) (update :MessageAttributes dissoc "correlation")
+                          (string? (:Detail m)) (update :Detail without-detail-correlation)))]
+    (cond-> (drop-id request)
+      (sequential? (:Entries request)) (update :Entries #(mapv drop-id %)))))
 
 (defn- fingerprint-request
   "What a confirmation token binds: the canonical request without the run id."
@@ -231,9 +241,14 @@
     p))
 
 (defn- consume-pass!
-  "True (and the pass is gone) when `pass` is live and was issued for `key` ([ws env account service op])."
+  "True (and the pass is gone) when `pass` is live and was issued for `key` ([ws env account service op]). Like a
+  token, a pass presented for another operation is refused and stays: it dies by its use or its expiry only."
   [pass key now]
-  (let [[old _] (swap-vals! passes (fn [m] (if (contains? m pass) (dissoc m pass) m)))
+  (let [[old _] (swap-vals! passes (fn [m] (let [v (get m pass)]
+                                             (cond (nil? v) m
+                                                   (.isAfter ^Instant now (:expires v)) (dissoc m pass)
+                                                   (= key (:key v)) (dissoc m pass)
+                                                   :else m))))
         v (get old pass)]
     (boolean (and v (= key (:key v)) (not (.isAfter ^Instant now (:expires v)))))))
 
