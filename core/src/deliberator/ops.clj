@@ -28,7 +28,9 @@
     env.list ws                                    -> {environments [{name kind account ...}]}
     env.describe name* ws                          -> {env path}
     env.check name* ws                             -> {ok account expected targets [error] [warning endpoint-held-by]}
-    env.save name* record* ws                      -> {env kind path}   (the one way to write environments/<name>.edn: env/validate)
+    env.save name* record* check ws                -> {env kind path [account checked read-only]}   (the one way to write environments/<name>.edn: env/validate; a remote record is written only when its profile is in its account)
+    env.create name* profile* account* region* read-only description endpoint targets check ws -> as env.save   (a remote record from flags; refuses an existing name)
+    env.remove name* ws                            -> {removed kind path}   (not `local`)
     runtime.set path* value* ws                    -> {ws path keys value}   (one value of runtime.edn by key path, then sync-env)
     daemon.stop                                    -> {stopping pid runs}   (the daemon exits a moment later)
     runtime.sync-env ws                            -> {ws path}
@@ -335,12 +337,56 @@
         (sequential? x) (mapv keywordize x)
         :else x))
 
-(defn- env-save [_ {:keys [name record] :as args}]
+(declare check-account!)
+
+(defn- checked-key
+  "What `verify-account!` remembers for the daemon's life: the workspace, session, environment, and the account and
+  profile of the record (a profile edited in the file is asked again)."
+  [ws sess e]
+  [(store/ws-name ws) sess (:name e) (get-in e [:aws :account]) (get-in e [:aws :profile])])
+
+(defn- env-save [ctx {:keys [name record check] :as args}]
   (let [ws (ws-of args)
+        _ (store/safe-name name)
         r (-> (keywordize record) (assoc :name name))
         r (cond-> r (string? (:kind r)) (update :kind keyword))
+        r (env/validate r)
+        sess (workspace/current-session ws)
+        ;; a remote record is written only for an account it really is in: the profile must exist, log in and say so
+        account (when (and (= :remote (:kind r)) (not (false? check)))
+                  (try (check-account! ws sess r)
+                       (catch Throwable t
+                         (env/forget! ws (:name r))      ; the client of the record that was refused is not kept
+                         (throw t))))
         e (env/save! ws r)]
-    {:env (:name e) :kind (:kind e) :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
+    (when account
+      (swap! (or (get-in ctx [:daemon :checked]) (atom #{})) conj (checked-key ws sess e)))
+    (cond-> {:env (:name e) :kind (:kind e) :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}
+      (= :remote (:kind e)) (assoc :account (get-in e [:aws :account]) :checked (boolean account)
+                                   :read-only (env/read-only? e)))))
+
+(defn- env-create [ctx {:keys [name profile account region read-only description endpoint targets check] :as args}]
+  (let [ws (ws-of args)
+        rec (cond-> {:kind :remote
+                     :read-only (if (nil? read-only) true read-only)
+                     :aws (cond-> {:profile profile :region region :account account}
+                            endpoint (assoc :endpoint endpoint))
+                     :targets (or targets {})}
+              description (assoc :description description))]
+    (store/safe-name name)
+    (env/validate (assoc rec :name name))
+    (when (contains? (set (env/names ws)) name)
+      (fail :env/exists (str "environment " name " exists already")
+            :hint (str "`dlb env remove " name "` first, or `dlb env save` to replace the whole record") :env name))
+    (env-save ctx {:ws (:ws args) :name name :check check :record rec})))
+
+(defn- env-remove [ctx {:keys [name] :as args}]
+  (let [ws (ws-of args)
+        e (env/remove! ws name)]
+    (when-let [c (get-in ctx [:daemon :checked])]
+      (swap! c (fn [s] (into #{} (remove (fn [k] (and (= (store/ws-name ws) (first k)) (= (:name e) (nth k 2))))) s))))
+    {:removed (:name e) :kind (:kind e)
+     :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
 
 (defn- runtime-set [_ {:keys [path value] :as args}]
   (runtime/set-config! (ws-of args)
@@ -436,27 +482,35 @@
   (try (:env (:header (parse/parse (Files/readAllBytes (.toPath (io/file file))) :path (.toPath (io/file file)))))
        (catch Exception _ nil)))
 
+(defn- check-account!
+  "The remote profile of `e` must be in the account the record says (`aws/check`, sts:GetCallerIdentity, which needs no
+  permission): returns the account, or fails `:check-failed` (cannot ask: no credentials, no network) or
+  `:account-mismatch`. Always asks; `verify-account!` caches."
+  [ws sess e]
+  (let [r (aws/check {:ws ws :session sess} e)]
+    (cond
+      (:ok? r) (:account r)
+      (:error r) (fail :check-failed (str "cannot verify the account of environment " (:name e) ": "
+                                          (get-in r [:error :message]))
+                       :hint (get-in r [:error :hint]) :env (:name e))
+      :else (fail :account-mismatch
+                  (str "environment " (:name e) " expects account " (:expected r)
+                       " but the profile is in account " (:account r))
+                  :expected (:expected r) :found (:account r) :env (:name e)
+                  :hint "log in to the right account (aws sso login) or fix the record"))))
+
 (defn- verify-account!
-  "Once per [session, environment, account] in the daemon's life: the remote profile must be in the
-  account the record says (`aws/check`). Every operation that loads a `:remote` environment calls it
+  "Once per [session, environment, account, profile] in the daemon's life: the remote profile must be in the
+  account the record says (`check-account!`). Every operation that loads a `:remote` environment calls it
   (scenario.run, config.refresh, aws.discover, terraform.drift, logs.fetch, service.start --secrets-from);
   without a daemon map (a direct call) the check runs every time."
   [d ws sess e]
   (when (= :remote (:kind e))
-    (let [k [(store/ws-name ws) sess (:name e) (get-in e [:aws :account])]
+    (let [k (checked-key ws sess e)
           checked (or (:checked d) (atom #{}))]
       (when-not (contains? @checked k)
-        (let [r (aws/check {:ws ws :session sess} e)]
-          (cond
-            (:ok? r) (swap! checked conj k)
-            (:error r) (fail :check-failed (str "cannot verify the account of environment " (:name e) ": "
-                                                (get-in r [:error :message]))
-                             :hint (get-in r [:error :hint]) :env (:name e))
-            :else (fail :account-mismatch
-                        (str "environment " (:name e) " expects account " (:expected r)
-                             " but the profile is in account " (:account r))
-                        :expected (:expected r) :found (:account r) :env (:name e)
-                        :hint "log in to the right account (aws sso login) or fix the record")))))))
+        (check-account! ws sess e)
+        (swap! checked conj k)))))
 
 
 (declare runs-dir run-edn)
@@ -749,7 +803,22 @@
    "env.save" {:fn env-save :class :mutate
                :doc "Writes an environment record of the workspace after validation (env/validate): the one way to create or change environments/<name>.edn, for tasks and clients alike. record is the whole record (kind local|remote, aws, targets, description, topology, read-only), as env.describe returns it under env; name wins over the record's. No account check yet (M4.1)."
                :args (ws-schema :name {:type :string :required true :doc "environment name (the file environments/<name>.edn)"}
-                                :record {:type :object :required true :doc "the environment record (kind, aws, targets, ...)"})}
+                                :record {:type :object :required true :doc "the environment record (kind, aws, targets, ...)"}
+                                :check {:type :bool :doc "remote records: verify the account first and refuse a mismatch (default true; false for offline authoring)"})}
+   "env.create" {:fn env-create :class :mutate
+                 :doc "Creates a remote environment record: the AWS profile, the account it must be in, the region. Asks the profile who it is first (sts:GetCallerIdentity, needs no permission) and refuses, writing nothing, when the account differs or the profile cannot log in (check false: write anyway, for authoring offline). Read-only by default (every mutation refused; --read-only false makes each one a confirmation). Refuses a name that exists."
+                 :args (ws-schema :name {:type :string :required true :doc "environment name (the file environments/<name>.edn)"}
+                                  :profile {:type :string :required true :doc "AWS profile of the shared config/credentials files (static keys, sso_session, role_arn, credential_process)"}
+                                  :account {:type :string :required true :doc "the 12-digit account id the profile must be in"}
+                                  :region {:type :string :required true :doc "AWS region"}
+                                  :read-only {:type :bool :doc "refuse every mutation (default true; false: each mutation needs a confirmation)"}
+                                  :description {:type :string :doc "one line for humans"}
+                                  :endpoint {:type :string :doc "endpoint override (the emulator trick of; a real remote record has none)"}
+                                  :targets {:type :object :doc "target names -> values, e.g. {\"queue/inbox\": \"https://...\"}"}
+                                  :check {:type :bool :doc "verify the account before writing (default true)"})}
+   "env.remove" {:fn env-remove :class :mutate
+                 :doc "Deletes environments/<name>.edn (not `local`: it follows runtime.edn). What was fetched through it (config/<name>.edn, raw/, session runs) stays."
+                 :args (ws-schema :name {:type :string :required true :doc "environment name"})}
    "runtime.set" {:fn runtime-set :class :mutate
                   :doc "Sets one value of the workspace's runtime.edn by key path (the file is created with the defaults when absent) and points the local environment at the result, as runtime.sync-env does; e.g. path containers,postgres,init value /repo/estate/sql. A path element of digits is a number key (ports)."
                   :args (ws-schema :path {:type :strings :required true :doc "key path into runtime.edn, e.g. containers,postgres,init"}

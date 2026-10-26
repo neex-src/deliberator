@@ -349,6 +349,21 @@
                       (instance? java.nio.channels.UnresolvedAddressException %))
                  (take-while some? (iterate #(.getCause ^Throwable %) t)))))
 
+(defn- credential-bridge-error
+  "When the call failed because the credentials could not be fetched (`Unable to fetch credentials`) and the CLI bridge
+  recorded why: `{:message :hint}` naming the CLI's own words. The hint always says `aws sso login` (R18): an expired or
+  never-made SSO login is the usual cause, and a profile that names an sso_session the config lacks needs its config fixed
+  first."
+  [env r]
+  (when (and (= :remote (:kind env))
+             (str/starts-with? (str (:cognitect.anomalies/message r)) "Unable to fetch credentials"))
+    (when-let [{:keys [message]} (env/credential-failure (get-in env [:aws :profile]))]
+      {:message (str "credentials of profile " (get-in env [:aws :profile]) " could not be fetched: " message)
+       :hint (str "the AWS CLI could not export credentials for profile " (get-in env [:aws :profile])
+                  "; if its SSO login is gone or expired, log in again: aws sso login --profile " (get-in env [:aws :profile])
+                  ". An sso_session or role_arn profile must also exist in the AWS config the daemon sees (AWS_CONFIG_FILE, "
+                  "~/.aws/config); a profile of static keys needs its keys in the shared credentials file")})))
+
 (defn- ->error [env service op-name r raw]
   (let [t (throwable r)
         cat (if (and t (connection-failure? t))
@@ -361,10 +376,11 @@
     (with-meta
       {:type :aws/error :category cat
        :code code
-       :message (or (:message r) (:Message r) (get-in r [:ErrorResponse :Error :Message]) (get-in r [:Error :Message])
+       :message (or (:message (credential-bridge-error env r))
+                    (:message r) (:Message r) (get-in r [:ErrorResponse :Error :Message]) (get-in r [:Error :Message])
                     (:cognitect.anomalies/message r)
                     (some-> t ex-message) (str cat))
-       :hint (hint env cat code service op-name)
+       :hint (or (:hint (credential-bridge-error env r)) (hint env cat code service op-name))
        :service service :op op-name :env (:name env) :raw raw}
       {::error true})))
 
@@ -458,7 +474,7 @@
                                           m))))
         run (fn [confirmation]
               (let [t0 (System/nanoTime)
-                    r (aws/invoke (env/aws-client env api) {:op (keyword op-name) :request request})
+                    r (env/with-client ws env api #(aws/invoke % {:op (keyword op-name) :request request}))
                     elapsed (quot (- (System/nanoTime) t0) 1000000)
                     anomaly? (some? (:cognitect.anomalies/category r))
                     http (some-> r meta :http-response)

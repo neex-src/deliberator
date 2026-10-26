@@ -129,7 +129,13 @@ A `:remote` environment takes its credentials from `:profile` (static keys from 
 (`service/a`, `queue/inbox`), not hosts, so the same file runs against any environment. Every operation that loads a
 remote environment (`scenario.run`, `config.refresh`, `aws.discover`, `terraform.drift`, `logs.fetch`,
 `service.start --secrets-from`) first asks STS who the profile is and refuses when the account is not the record's
-(`account-mismatch`; once per session, environment and account in a daemon's life).
+(`account-mismatch`; once per session, environment, account and profile in a daemon's life).
+A remote record is authored, not hand-written: `dlb env create <name> --profile P --account A --region R [--read-only false]`
+(`env.create`; `env.save` takes the whole record) asks STS the same question before it writes and writes nothing on a
+mismatch or a profile that cannot log in (`--check false` for offline authoring); `env.remove` deletes a record (never
+`local`; what was fetched through it stays). Credentials from the CLI bridge are refreshed by the wall clock five minutes
+before the expiry the CLI reports (a sleeping laptop does not stop a clock); when the CLI fails the still valid ones are
+kept and its own words go into the error with the `aws sso login` hint.
 
 **Operation classes.** Every AWS operation the core issues is listed once with a class, `:read` or `:mutate`
 (`deliberator.env.ops/table`); an operation that is not in the table is `:mutate`, except that for the services only the

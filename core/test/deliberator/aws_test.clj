@@ -317,6 +317,27 @@
           (is (= "configure export-credentials --profile dlbtest-sso --format process"
                  (str/trim (slurp args)))))))))
 
+(deftest a-profile-that-cannot-log-in-fails-with-the-clis-words-and-the-sso-hint
+  ;; no Floci, no network: the credentials are never fetched, so nothing is sent
+  (with-temp-home
+    (let [dir (temp-home)
+          cli (io/file dir "fake-aws")]
+      (spit cli "#!/bin/sh\necho 'Error loading SSO Token: Token for corp does not exist' >&2\nexit 255\n")
+      (.setExecutable cli true)
+      (binding [env/*credentials-file* (io/file dir "no-such-credentials")
+                env/*aws-cli* (str cli)]
+        (let [e (remote :aws {:profile "dlbtest-corp" :region "eu-central-1" :account "111111111111"})
+              r (aws/invoke! ctx e :sts :GetCallerIdentity {})]
+          (is (aws/error? r) (pr-str r))
+          (is (re-find #"credentials of profile dlbtest-corp could not be fetched" (:message r)) (:message r))
+          (is (str/includes? (:message r) "Token for corp does not exist") (:message r))
+          (is (str/includes? (:hint r) "aws sso login --profile dlbtest-corp") (:hint r))
+          (is (str/includes? (:hint r) "AWS_CONFIG_FILE") (:hint r)))
+        (testing "the check answers the same way (env.save and every op that verifies the account)"
+          (let [c (aws/check ctx (remote :aws {:profile "dlbtest-corp" :region "eu-central-1" :account "111111111111"}))]
+            (is (false? (:ok? c)))
+            (is (str/includes? (get-in c [:error :hint]) "aws sso login --profile dlbtest-corp"))))))))
+
 (deftest-floci check-compares-the-account
   (with-temp-home
     (is (:ok? (aws/check ctx local)))

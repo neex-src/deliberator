@@ -9,13 +9,15 @@
     :remote  {:name :kind :read-only (default true) :aws {:profile :region :account [:endpoint]}
              :targets}                        no `:credentials`
 
-  `(aws-client env service)` is an aws-api client memoised per `[record service]`. A `:local` client
+  `(with-client ws env service f)` calls `f` with an aws-api client memoised per workspace, environment name and service
+  (`aws-client` is the uncounted accessor for tests); a changed record retires the old client, stopped when its last call
+  returns (B17). `(save! ws env)` writes a validated record, `(remove! ws name)` deletes it. A `:local` client
   is built from the record's `:aws` only (endpoint override, basic credentials, explicit region):
   it never consults `~/.aws`, `AWS_PROFILE`, `AWS_*` keys or `AWS_ENDPOINT_URL`. A `:remote` client
   takes its credentials from `:profile`: first the static keys of the profile in the shared
   credentials file (aws-api's own provider), then, for SSO, assume-role and credential_process
   profiles that provider cannot read, `aws configure export-credentials --profile P` (refreshed
-  before expiry;). `:aws :endpoint` is allowed on a remote record so tests can point a
+  before expiry by the wall clock, a failure keeps the still valid ones and is recorded for the hint; decisions 09, 56). `:aws :endpoint` is allowed on a remote record so tests can point a
   remote-shaped environment at the local emulator; a real remote record leaves it out.
 
   `(target env key) -> value` resolves `service/a`, `queue/inbox`, ... (keyword or string), throwing
@@ -26,7 +28,6 @@
   `:mutate` whatever the flag says."
   (:refer-clojure :exclude [load])
   (:require [clojure.data.json :as json]
-            [clojure.java.shell :as shell]
             [clojure.string :as str]
             [cognitect.aws.client.api :as aws]
             [cognitect.aws.credentials :as creds]
@@ -34,7 +35,7 @@
             [deliberator.store :as store])
   (:import (java.io File)
            (java.net URI)
-           (java.time Duration Instant)))
+           (java.time Instant OffsetDateTime)))
 
 ;; schema -------------------------------------------------------------------------------------
 
@@ -150,6 +151,8 @@
         (unknown-keys m top-keys "environment")
         (when-not (nonblank? (:name m)) [":name must be a non-blank string"])
         (when-not (contains? #{:local :remote} kind) [":kind must be :local or :remote"])
+        (when (and (= "local" (:name m)) (not= :local kind))
+          [":name local is reserved for the :local environment (it must never reach AWS)"])
         (when-not aws? [":aws must be a map"])
         (when (and aws? (not (nonblank? (:region aws)))) [":aws :region must be a non-blank string"])
         (when (and aws? (not (and (string? (:account aws)) (re-matches #"\d{12}" (:account aws)))))
@@ -243,12 +246,30 @@
                       {:type :env/invalid :problems [(str ":name " (pr-str (:name env)) " differs from the file name " n)]})))
     env))
 
+(declare retire-changed! forget!)
+
 (defn save!
-  "Validates and writes the environment record; returns it."
+  "Validates and writes the environment record; returns it. The clients of the record it replaces are retired (B17)."
   [ws env]
   (let [env (validate env)]
     (store/write-edn! (env-file ws (:name env)) env)
+    (retire-changed! ws env)
     env))
+
+(defn remove!
+  "Deletes environments/<name>.edn and retires its clients; returns the record it held. `local` cannot be removed (it is
+  written again from runtime.edn on first use): `:env/protected`; an unknown name is `:env/not-found`. What was fetched
+  through the environment stays (principle 1): config/<name>.edn and the raw store are not touched."
+  [ws name]
+  (let [n (store/safe-name name)]
+    (when (= "local" n)
+      (throw (ex-info "the local environment cannot be removed: it follows runtime.edn and is written again on first use"
+                      {:type :env/protected :name n
+                       :hint "change the local runtime with `dlb runtime set` / `dlb runtime sync-env` instead"})))
+    (let [e (load ws n)]
+      (java.nio.file.Files/delete (env-file ws n))
+      (forget! ws n)
+      e)))
 
 ;; targets ------------------------------------------------------------------------------------
 
@@ -313,8 +334,9 @@
   nil)
 
 (def ^:dynamic *aws-cli*
-  "Command used for the SSO fallback; tests bind it to a stub script."
-  "aws")
+  "Command used for the SSO fallback: `DELIBERATOR_AWS_CLI` (a path, for a daemon started with a short PATH, e.g. from a
+  desktop launcher), else `aws` on the daemon's PATH. Tests bind it to a stub script."
+  (or (not-empty (System/getenv "DELIBERATOR_AWS_CLI")) "aws"))
 
 (defn- endpoint-override [^String url]
   (let [u (URI. url)
@@ -322,34 +344,116 @@
     {:protocol proto :hostname (.getHost u)
      :port (if (pos? (.getPort u)) (.getPort u) (if (= proto :https) 443 80))}))
 
-(defn- cli-credentials
-  "Credentials from `aws configure export-credentials --profile P --format process`, with a ttl
-  that refreshes five minutes before expiry; nil when the CLI is missing or refuses."
-  [cli profile]
-  (try
-    (let [{:keys [exit out]} (shell/sh cli "configure" "export-credentials" "--profile" profile
-                                       "--format" "process")]
-      (when (zero? exit)
-        (let [m (json/read-str out)
-              exp (some-> (get m "Expiration") Instant/parse)
-              ttl (some-> exp (as-> e (- (.getSeconds (Duration/between (Instant/now) e)) 300)) (max 30))]
-          (cond-> {:aws/access-key-id (get m "AccessKeyId")
-                   :aws/secret-access-key (get m "SecretAccessKey")
-                   :aws/session-token (get m "SessionToken")}
-            ttl (assoc ::creds/ttl ttl)))))
-    (catch Exception _ nil)))
+;; The bridge to the AWS CLI. aws-api's own provider reads static keys only; SSO, assume-role and credential_process
+;; profiles go through `aws configure export-credentials --profile P`, whose output carries an `Expiration`. The expiry
+;; is checked against the wall clock on every fetch: a timer (aws-api's auto-refresh) counts monotonic time, which stands
+;; still while a laptop sleeps, so after a resume it would serve expired credentials until the timer fired.
+(def ^:private cli-timeout-ms 30000)
+(def ^:private refresh-margin-s 300)
+(def ^:private retry-s 30)
 
-(defn- profile-provider [profile file cli]
+(defonce ^:private credential-failures (atom {}))
+
+(defn credential-failure
+  "The last failure of the CLI bridge for `profile` (`{:at inst :message str}`), nil once it worked again."
+  [profile] (get @credential-failures profile))
+
+(defn- first-line [s]
+  (->> (str/split-lines (str s)) (map str/trim) (remove str/blank?) first))
+
+(defn- cli-env
+  "The daemon's environment for the CLI child: the AWS config and credentials files stay (they say where the profile
+  is), a profile selected by the environment or an endpoint override (the emulator's) goes: the profile is passed
+  explicitly and the call must reach the real STS/SSO."
+  []
+  (-> (into {} (remove (fn [[k _]] (or (#{"AWS_PROFILE" "AWS_DEFAULT_PROFILE"} k) (str/starts-with? k "AWS_ENDPOINT_URL"))))
+            (System/getenv))
+      (assoc "AWS_PAGER" "")))
+
+(defn- run-cli
+  "`{:exit :out :err}` of the command, killed after `timeout-ms` (:exit :timeout); an unstartable command is
+  `{:exit :missing}`."
+  [cmd timeout-ms]
+  (try
+    (let [pb (ProcessBuilder. ^java.util.List (vec cmd))
+          _ (doto (.environment pb) (.clear) (.putAll (cli-env)))
+          p (.start pb)
+          _ (.close (.getOutputStream p))
+          out (future (slurp (.getInputStream p)))
+          err (future (slurp (.getErrorStream p)))]
+      (if (.waitFor p timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+        {:exit (.exitValue p) :out @out :err @err}
+        (do (.destroyForcibly p) {:exit :timeout :out "" :err ""})))
+    (catch java.io.IOException e {:exit :missing :out "" :err (ex-message e)})))
+
+(defn- cli-credentials
+  "`{:creds {...} :refresh-at inst :expires-at inst}` from `aws configure export-credentials --profile P --format
+  process`, refreshed five minutes before the expiry the CLI reports (never when it reports none); nil when the CLI is
+  missing or refuses, the reason recorded for `credential-failure`."
+  [cli profile]
+  (let [{:keys [exit out err]} (run-cli [cli "configure" "export-credentials" "--profile" profile "--format" "process"]
+                                        cli-timeout-ms)
+        fail (fn [msg] (swap! credential-failures assoc profile {:at (Instant/now) :message msg}) nil)]
+    (cond
+      (= :missing exit) (fail (str "the AWS CLI (" cli ") cannot be started by the daemon: " (first-line err)
+                                   " (is it on the daemon's PATH?)"))
+      (= :timeout exit) (fail (str cli " configure export-credentials timed out after " (quot cli-timeout-ms 1000) " s"))
+      (not (zero? exit)) (fail (str cli " configure export-credentials --profile " profile " exited " exit
+                                    (when-let [l (first-line err)] (str ": " l))))
+      :else
+      (try
+        (let [m (json/read-str out)
+              exp (some-> (get m "Expiration") (OffsetDateTime/parse) (.toInstant))
+              creds {:aws/access-key-id (get m "AccessKeyId")
+                     :aws/secret-access-key (get m "SecretAccessKey")
+                     :aws/session-token (get m "SessionToken")}]
+          (if-not (and (:aws/access-key-id creds) (:aws/secret-access-key creds))
+            (fail (str cli " configure export-credentials printed no AccessKeyId/SecretAccessKey for profile " profile))
+            (do (swap! credential-failures dissoc profile)
+                {:creds creds :expires-at (or exp Instant/MAX)
+                 :refresh-at (if exp (.minusSeconds ^Instant exp refresh-margin-s) Instant/MAX)})))
+        (catch Exception e (fail (str cli " configure export-credentials printed something else than JSON credentials: "
+                                      (ex-message e))))))))
+
+(defn- before? [c k now] (boolean (and c (.isBefore ^Instant now ^Instant (get c k)))))
+
+(defn- profile-provider
+  "Static keys of the profile in the shared credentials file, else the CLI bridge. One cache per client, checked against
+  the wall clock on every fetch under a lock (a burst of calls runs the CLI once). A refresh that fails keeps the
+  cached credentials while they are still valid and tries again in 30 s; once expired they are dropped (nil)."
+  [profile file cli]
   (let [static (if file
                  (creds/profile-credentials-provider profile (File. (str file)))
-                 (creds/profile-credentials-provider profile))]
-    (creds/cached-credentials-with-auto-refresh
-     (reify creds/CredentialsProvider
-       (fetch [_]
-         (or (creds/fetch static)
-             (cli-credentials cli profile)))))))
+                 (creds/profile-credentials-provider profile))
+        cache (atom nil)
+        obtain (fn []
+                 (or (when-let [k (creds/fetch static)]
+                       {:creds k :expires-at Instant/MAX :refresh-at Instant/MAX})
+                     (cli-credentials cli profile)))
+        refresh! (fn []
+                   (let [now (Instant/now) c @cache fresh (obtain)]
+                     (cond
+                       fresh (do (reset! cache fresh) (:creds fresh))
+                       (before? c :expires-at now) (do (swap! cache assoc :refresh-at (let [retry (.plusSeconds now retry-s)]
+                                                                                        (if (.isBefore retry ^Instant (:expires-at c)) retry (:expires-at c))))
+                                                       (:creds c))
+                       :else (do (reset! cache nil) nil))))]
+    (reify creds/CredentialsProvider
+      (fetch [_]
+        (if (before? @cache :refresh-at (Instant/now))
+          (:creds @cache)
+          (locking cache
+            (if (before? @cache :refresh-at (Instant/now))
+              (:creds @cache)
+              (refresh!))))))))
 
-(defonce ^:private clients (atom {}))
+;; Clients are memoised per slot [workspace, environment name, api, credentials file, cli] and carry the record they were
+;; built from. A slot whose record changed (env.save, an edited environments/x.edn) retires its client: stopped at once
+;; when no call uses it, else when the last call that does returns (`with-client` counts the users). B17.
+
+(defonce ^:private lock (Object.))
+(defonce ^:private clients (atom {}))   ; slot -> {:record :client :users (atom n)}
+(defonce ^:private retired (atom []))   ; entries still used by a call, stopped when it returns
 
 (defn- build-client [{:keys [kind aws]} service]
   (let [base {:api (ops/api-name service) :region (:region aws)}]
@@ -365,17 +469,77 @@
                               (profile-provider (:profile aws) *credentials-file* *aws-cli*))
                  (:endpoint aws) (assoc :endpoint-override (endpoint-override (:endpoint aws))))))))
 
-(defn aws-client
-  "The aws-api client of `service` for `env`, memoised per record and service."
-  [env service]
+(defn- stop-client! [{:keys [client]}]
+  (try (aws/stop client) (catch Exception _ nil)))
+
+(defn- retire! [entry]
+  (if (pos? @(:users entry))
+    (swap! retired conj entry)
+    (stop-client! entry)))
+
+(defn- record-of [env] (select-keys env [:name :kind :aws]))
+
+(defn- slot-of [ws env service]
+  [(some-> ws store/ws-name) (:name env) (ops/api-name service) *credentials-file* *aws-cli*])
+
+(defn- entry!
+  "The live entry of the slot for `env`, built (and the replaced one retired) when the record differs. Under `lock`."
+  [ws env service]
+  (let [slot (slot-of ws env service) record (record-of env) e (get @clients slot)]
+    (if (and e (= record (:record e)))
+      e
+      (do (when e (retire! e))
+          (let [n {:record record :client (build-client env service) :users (atom 0)}]
+            (swap! clients assoc slot n)
+            n)))))
+
+(defn with-client
+  "Calls `(f client)` with the aws-api client of `service` for `env` (workspace `ws`), memoised per slot. The client is
+  counted as in use for the duration, so a record change during the call cannot stop it under the call."
+  [ws env service f]
   (let [env (validate env)
-        k [(select-keys env [:name :kind :aws]) (ops/api-name service) *credentials-file* *aws-cli*]]
-    (or (get @clients k)
-        (let [c (build-client env service)]
-          (get (swap! clients (fn [m] (if (contains? m k) m (assoc m k c)))) k)))))
+        e (locking lock (let [e (entry! ws env service)] (swap! (:users e) inc) e))]
+    (try (f (:client e))
+         (finally
+           (locking lock
+             (when (and (zero? (swap! (:users e) dec)) (some #(identical? e %) @retired))
+               (swap! retired (fn [v] (vec (remove #(identical? e %) v))))
+               (stop-client! e)))))))
+
+(defn aws-client
+  "The aws-api client of `service` for `env`, memoised per record and service (slot without a workspace). Not counted:
+  for tests and one-off calls; the core calls through `with-client`."
+  [env service]
+  (let [env (validate env)]
+    (locking lock (:client (entry! nil env service)))))
+
+(defn retire-changed!
+  "Retires the clients of environment `name` in workspace `ws` whose record is not `env` (the record just saved)."
+  [ws env]
+  (let [w (some-> ws store/ws-name) record (record-of env)]
+    (locking lock
+      (doseq [[slot e] @clients
+              :when (and (= w (first slot)) (= (:name env) (second slot)) (not= record (:record e)))]
+        (swap! clients dissoc slot)
+        (retire! e)))))
+
+(defn forget!
+  "Retires every client of environment `name` in workspace `ws` (the record was removed)."
+  [ws name]
+  (let [w (some-> ws store/ws-name)]
+    (locking lock
+      (doseq [[slot e] @clients :when (and (= w (first slot)) (= name (second slot)))]
+        (swap! clients dissoc slot)
+        (retire! e)))))
+
+(defn client-stats
+  "`{:live n :retired n}`: the memoised clients and the replaced ones still serving a call."
+  [] {:live (count @clients) :retired (count @retired)})
 
 (defn close-clients!
   "Stops and forgets every memoised client."
   []
-  (doseq [c (vals @clients)] (try (aws/stop c) (catch Exception _ nil)))
-  (reset! clients {}))
+  (locking lock
+    (doseq [e (concat (vals @clients) @retired)] (stop-client! e))
+    (reset! clients {})
+    (reset! retired [])))

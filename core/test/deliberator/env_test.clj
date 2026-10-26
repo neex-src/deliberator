@@ -1,10 +1,12 @@
 (ns deliberator.env-test
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [cognitect.aws.credentials :as creds]
             [deliberator.env :as env]
             [deliberator.env.ops]
             [deliberator.store :as store]
-            [deliberator.test-util :refer [with-temp-home]]))
+            [deliberator.test-util :refer [temp-home with-temp-home]]))
 
 (use-fixtures :once (fn [f] (f) (env/close-clients!)))
 
@@ -167,3 +169,126 @@
         (is (= #{"AWS_CONFIG_FILE" "AWS_SHARED_CREDENTIALS_FILE" "AWS_EC2_METADATA_DISABLED" "AWS_PAGER"}
                (set (filter #(str/starts-with? % "AWS_") (keys o))))))
       (is (not (contains? (env/child-env base (env/validate remote)) "AWS_ENDPOINT_URL"))))))
+
+;; --- the credential bridge ----------------------------------------------------------------------
+
+(defn- stub-cli
+  "A fake `aws`: appends a line per call to <dir>/calls, prints credentials expiring `exp-s` seconds from now (key id
+  `AKIA<n>`, n = call number) unless <dir>/fail exists, then it says `fail-msg` on stderr and exits 255."
+  [dir exp-s fail-msg]
+  (let [cli (io/file dir "fake-aws")]
+    (spit cli (str "#!/bin/sh\n"
+                   "echo \"$@\" >> " dir "/calls\n"
+                   "if [ -e " dir "/fail ]; then echo '" fail-msg "' >&2; exit 255; fi\n"
+                   "n=$(wc -l < " dir "/calls)\n"
+                   "exp=$(date -u -d \"+" exp-s " seconds\" +%Y-%m-%dT%H:%M:%S.%3N+00:00)\n"
+                   "echo \"{\\\"Version\\\":1,\\\"AccessKeyId\\\":\\\"AKIA$n\\\",\\\"SecretAccessKey\\\":\\\"s\\\","
+                   "\\\"SessionToken\\\":\\\"t\\\",\\\"Expiration\\\":\\\"$exp\\\"}\"\n"))
+    (.setExecutable cli true)
+    (str cli)))
+
+(defn- calls [dir]
+  (let [f (io/file dir "calls")] (if (.exists f) (count (str/split-lines (slurp f))) 0)))
+(defn- key-of [p] (:aws/access-key-id (creds/fetch p)))
+
+(deftest the-cli-bridge-caches-until-the-reported-expiry-less-the-margin
+  (with-temp-home
+    (let [dir (temp-home) cli (stub-cli dir 3600 "never")
+          p (#'env/profile-provider "dlbtest-role" (io/file dir "no-such-credentials") cli)]
+      (is (= "AKIA1" (key-of p)))
+      (is (= "AKIA1" (key-of p)))
+      (is (= 1 (calls dir)) "one CLI call serves the next fetches")
+      (is (= "configure export-credentials --profile dlbtest-role --format process"
+             (str/trim (slurp (io/file dir "calls")))))
+      (is (nil? (env/credential-failure "dlbtest-role"))))))
+
+(deftest the-cli-bridge-refreshes-by-the-wall-clock-and-keeps-valid-credentials-when-the-refresh-fails
+  (with-temp-home
+    (let [dir (temp-home) cli (stub-cli dir 4 "Error loading SSO Token: Token for s does not exist")
+          p (#'env/profile-provider "dlbtest-sso" (io/file dir "no-such-credentials") cli)]
+      (with-redefs [env/refresh-margin-s 3]       ; refresh from 1 s after the fetch, expire after 4
+        (is (= "AKIA1" (key-of p)))
+        (Thread/sleep 1300)
+        (testing "past refresh-at the CLI is asked again, the new credentials replace the old"
+          (is (= "AKIA2" (key-of p)))
+          (is (= 2 (calls dir))))
+        (testing "a refresh that fails keeps the still valid credentials, and says why"
+          (spit (io/file dir "fail") "")
+          (Thread/sleep 1300)
+          (is (= "AKIA2" (key-of p)) "valid for another 2.7 s: kept")
+          (is (= 3 (calls dir)))
+          (is (str/includes? (:message (env/credential-failure "dlbtest-sso")) "Token for s does not exist"))
+          (is (str/includes? (:message (env/credential-failure "dlbtest-sso")) "--profile dlbtest-sso exited 255")))
+        (testing "expired and still failing: nothing, so the call fails with the CLI's own words"
+          (Thread/sleep 3000)
+          (is (nil? (key-of p))))
+        (testing "the login happens (the CLI works again): credentials come back, the failure is forgotten"
+          (io/delete-file (io/file dir "fail"))
+          (is (some? (key-of p)))
+          (is (nil? (env/credential-failure "dlbtest-sso"))))))))
+
+(deftest the-cli-bridge-reports-a-missing-cli-and-a-hung-one
+  (with-temp-home
+    (let [dir (temp-home)]
+      (is (nil? (key-of (#'env/profile-provider "dlbtest-nocli" (io/file dir "x") "/no/such/aws"))))
+      (is (re-find #"cannot be started.*PATH" (:message (env/credential-failure "dlbtest-nocli"))))
+      (let [cli (io/file dir "slow-aws")]
+        (spit cli "#!/bin/sh\nexec sleep 20\n")
+        (.setExecutable cli true)
+        (with-redefs [env/cli-timeout-ms 300]
+          (is (nil? (key-of (#'env/profile-provider "dlbtest-slow" (io/file dir "x") (str cli)))))
+          (is (re-find #"timed out" (:message (env/credential-failure "dlbtest-slow"))))))
+      (let [cli (io/file dir "junk-aws")]
+        (spit cli "#!/bin/sh\necho 'not json'\n")
+        (.setExecutable cli true)
+        (is (nil? (key-of (#'env/profile-provider "dlbtest-junk" (io/file dir "x") (str cli)))))
+        (is (re-find #"something else than JSON" (:message (env/credential-failure "dlbtest-junk"))))))))
+
+;; --- B17: replaced clients are stopped, never under a running call ------------------------------------------------------
+
+(deftest a-replaced-client-is-stopped-when-its-last-call-returns
+  (with-temp-home
+    (env/close-clients!)
+    (let [stopped (atom 0)
+          e remote
+          e2 (assoc-in remote [:aws :region] "eu-west-1")]
+      (with-redefs [cognitect.aws.client.api/stop (let [real cognitect.aws.client.api/stop]
+                                                    (fn [c] (swap! stopped inc) (real c)))]
+        (env/save! "w" e)
+        (let [started (promise) release (promise)
+              call (future (env/with-client "w" e :sqs (fn [c] (deliver started c) @release :done)))
+              old @started]
+          (is (= {:live 1 :retired 0} (env/client-stats)))
+          (env/save! "w" e2)                                   ; the record changes while the call runs
+          (is (= {:live 0 :retired 1} (env/client-stats)) "retired, not stopped: the call still uses it")
+          (is (zero? @stopped))
+          (env/with-client "w" e2 :sqs (fn [c] (is (not (identical? old c)))))
+          (is (= {:live 1 :retired 1} (env/client-stats)))
+          (deliver release true)
+          (is (= :done @call))
+          (is (= {:live 1 :retired 0} (env/client-stats)))
+          (is (= 1 @stopped) "stopped when the call returned"))
+        (testing "an idle client is stopped the moment the record changes"
+          (reset! stopped 0)
+          (env/save! "w" (assoc-in remote [:aws :region] "eu-north-1"))
+          (is (= 1 @stopped))
+          (is (= 0 (:retired (env/client-stats)))))
+        (testing "save of the same record keeps the client; remove! forgets it"
+          (reset! stopped 0)
+          (env/with-client "w" (env/validate (assoc-in remote [:aws :region] "eu-north-1")) :sqs identity)
+          (env/save! "w" (assoc-in remote [:aws :region] "eu-north-1"))
+          (is (zero? @stopped))
+          (env/remove! "w" "dev")
+          (is (= 0 (:live (env/client-stats)))))))
+    (env/close-clients!)))
+
+(deftest remove-deletes-the-record-and-protects-local
+  (with-temp-home
+    (env/save! "w" remote)
+    (is (some #{"dev"} (env/names "w")))
+    (is (= "dev" (:name (env/remove! "w" "dev"))))
+    (is (not-any? #{"dev"} (env/names "w")))
+    (is (= :env/not-found (:type (ex-data (try (env/remove! "w" "dev") (catch Exception e e))))))
+    (is (= :env/protected (:type (ex-data (try (env/remove! "w" "local") (catch Exception e e))))))
+    (is (= :env/invalid (:type (ex-data (try (env/validate (assoc remote :name "local")) (catch Exception e e)))))
+        "a remote record cannot take the name local")))
