@@ -23,6 +23,15 @@
 # @assert $.Parameter.Value == estate-messages
 {"Name": "/estate/common/table-name"}
 
+### shell aws-cli
+# The `aws` CLI works inside a `shell` step too, and it goes where this run goes: the step's environment is the daemon's
+# with every `AWS_*` removed, the config and credentials files pointed at /dev/null, and the `local` record exported as
+# `AWS_ENDPOINT_URL`, the fake keys and the region. Whatever profile or keys the daemon was started with, a local run cannot
+# reach real AWS from a shell step; `$` is the CLI's JSON here, like any other step's response.
+# @assert $.QueueUrls[0] contains estate-
+# @assert out contains estate-inbox
+aws sqs list-queues --output json
+
 ### aws sns.CreateTopic create-topic
 # @capture arn = $.TopicArn
 {"Name": "{{topic}}"}

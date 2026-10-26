@@ -364,7 +364,20 @@
 (defn- service-adopt [_ {:keys [path taskdef name jdwp] :as args}]
   (service/adopt! (ws-of args) {:path path :taskdef taskdef :name name :jdwp jdwp}))
 (defn- config-chain [_ {:keys [name env] :as args}] (config/chain (ws-of args) name (or env "local")))
-(defn- config-refresh [_ {:keys [env path] :as args}] (config/refresh! (ws-of args) (or env "local") {:path (or path "/")}))
+(declare verify-account!)
+
+(defn- verify-remote!
+  "`verify-account!` for an operation that takes an environment name: loads the record (a missing one fails as
+  before) and checks the account when it is remote. The session is the request's or the current one, nil when none."
+  [ctx ws env-name]
+  (let [e (env/load ws env-name)]
+    (verify-account! (:daemon ctx) ws (or (workspace/current-session ws) nil) e)
+    e))
+
+(defn- config-refresh [ctx {:keys [env path] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (verify-remote! ctx ws env-name)
+    (config/refresh! ws env-name {:path (or path "/")})))
 (defn- service-list [_ {:keys [env] :as args}] (service/list (ws-of args) (or env "local")))
 (defn- topology-show [_ {:keys [env] :as args}] (topology/show (ws-of args) env))
 (defn- topology-set [_ {:keys [env name mode url log-container container-url] :as args}]
@@ -373,11 +386,13 @@
 (defn- service-status [_ {:keys [name] :as args}] (service/status (ws-of args) name))
 (defn- service-build [ctx {:keys [name] :as args}] (service/build! (ws-of args) name {:sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)}))
 (defn- service-start [ctx {:keys [name secrets-from confirm] :as args}]
+  (when secrets-from (verify-remote! ctx (ws-of args) secrets-from))
   (service/start! (ws-of args) name {:sink (:emit! ctx) :secrets-from secrets-from :confirm confirm}))
 (defn- service-stop [ctx {:keys [name] :as args}] (service/stop! (ws-of args) name {:sink (:emit! ctx)}))
 (defn- service-reload [ctx {:keys [name budget-ms] :as args}]
   (reload/reload! (ws-of args) name (cond-> {:sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)} budget-ms (assoc :budget-ms budget-ms))))
 (defn- service-restart [ctx {:keys [name secrets-from confirm] :as args}]
+  (when secrets-from (verify-remote! ctx (ws-of args) secrets-from))
   (service/restart! (ws-of args) name {:sink (:emit! ctx) :secrets-from secrets-from :confirm confirm}))
 
 (defn- daemon-stop [ctx _]
@@ -423,14 +438,17 @@
 
 (defn- verify-account!
   "Once per [session, environment, account] in the daemon's life: the remote profile must be in the
-  account the record says (`aws/check`)."
+  account the record says (`aws/check`). Every operation that loads a `:remote` environment calls it
+  (scenario.run, config.refresh, aws.discover, terraform.drift, logs.fetch, service.start --secrets-from);
+  without a daemon map (a direct call) the check runs every time."
   [d ws sess e]
   (when (= :remote (:kind e))
-    (let [k [(store/ws-name ws) sess (:name e) (get-in e [:aws :account])]]
-      (when-not (contains? @(:checked d) k)
+    (let [k [(store/ws-name ws) sess (:name e) (get-in e [:aws :account])]
+          checked (or (:checked d) (atom #{}))]
+      (when-not (contains? @checked k)
         (let [r (aws/check {:ws ws :session sess} e)]
           (cond
-            (:ok? r) (swap! (:checked d) conj k)
+            (:ok? r) (swap! checked conj k)
             (:error r) (fail :check-failed (str "cannot verify the account of environment " (:name e) ": "
                                                 (get-in r [:error :message]))
                              :hint (get-in r [:error :hint]) :env (:name e))
@@ -572,11 +590,15 @@
 
 (defn- scenario-kinds [_ _] (kinds/describe-kinds))
 
-(defn- aws-discover [_ {:keys [env] :as args}]
-  (awsdiscover/discover! (ws-of args) (or env "local")))
+(defn- aws-discover [ctx {:keys [env] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (verify-remote! ctx ws env-name)
+    (awsdiscover/discover! ws env-name)))
 
-(defn- terraform-drift [_ {:keys [env file dir plan] :as args}]
-  (tfdrift/drift! (ws-of args) (or env "local") (cond-> {} file (assoc :file file) dir (assoc :dir dir) plan (assoc :plan plan))))
+(defn- terraform-drift [ctx {:keys [env file dir plan] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (verify-remote! ctx ws env-name)
+    (tfdrift/drift! ws env-name (cond-> {} file (assoc :file file) dir (assoc :dir dir) plan (assoc :plan plan)))))
 
 (defn- terraform-local [ctx {:keys [env dir action vars] :as args}]
   (tflocal/run! (ws-of args) (or env "local") {:dir dir :action (or action "plan") :vars vars :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)}))
@@ -602,12 +624,6 @@
 (defn- repo-list [_ args] (repo/list (ws-of args)))
 
 (defn- logs-fetch [ctx {:keys [target env since for filter follow] :as args}]
-  (let [ws (ws-of args)
-        follow? (boolean (or follow (= "until-cancelled" (some-> for str str/trim str/lower-case))))
-        counter (when follow? (:follows (:daemon ctx)))]   ; an active follow is work in flight (hello :runs, R32)
-    (when counter (swap! counter inc))
-    (try
-      (logfetch/fetch! ws (or env "local") target :session (session-key ws args) :since since :for for :filter filter
   (let [ws (ws-of args) env-name (or env "local")
         follow? (boolean (or follow (= "until-cancelled" (some-> for str str/trim str/lower-case))))
         counter (when follow? (:follows (:daemon ctx)))]   ; an active follow is work in flight (hello :runs, R32)

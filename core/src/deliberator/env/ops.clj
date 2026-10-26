@@ -90,11 +90,34 @@
 
 
 (def secret-bearing
-  "`[service op]` pairs that are `:read` but whose response carries secret values. `deliberator.aws` redacts
-  their persisted bodies on a remote environment, and on any environment when the caller asks (`:redact-secrets`)."
-  #{[:secretsmanager "GetSecretValue"] [:ssm "GetParameter"] [:ssm "GetParameters"] [:ssm "GetParametersByPath"]})
+  "`[service op]` pairs whose response carries secret values (reads and mutations alike). `deliberator.aws` redacts
+  their persisted bodies on a remote environment, and on any environment when the caller asks (`:redact-secrets`):
+  Secrets Manager and SSM values, the temporary credentials of STS, the secret key of a new IAM access key, the
+  plaintext of KMS, and the tokens of a Cognito sign-in. The table is the precise layer; `secret-member?` is the
+  catch-all behind it."
+  #{[:secretsmanager "GetSecretValue"] [:ssm "GetParameter"] [:ssm "GetParameters"] [:ssm "GetParametersByPath"]
+    [:sts "AssumeRole"] [:sts "AssumeRoleWithSAML"] [:sts "AssumeRoleWithWebIdentity"] [:sts "AssumeRoot"]
+    [:sts "GetSessionToken"] [:sts "GetFederationToken"]
+    [:iam "CreateAccessKey"] [:iam "CreateServiceSpecificCredential"] [:iam "ResetServiceSpecificCredential"]
+    [:kms "Decrypt"] [:kms "GenerateDataKey"] [:kms "GenerateDataKeyPair"] [:kms "GenerateDataKeyWithoutPlaintext"]
+    [:kms "GenerateRandom"] [:kms "DeriveSharedSecret"]
+    [:cognito-idp "InitiateAuth"] [:cognito-idp "AdminInitiateAuth"] [:cognito-idp "RespondToAuthChallenge"]
+    [:cognito-idp "AdminRespondToAuthChallenge"] [:cognito-idp "GetTokensFromRefreshToken"]})
 
 (defn secret-bearing?
-  "True when `service`/`op` returns secret values (GetSecretValue, GetParameter(s) with decryption)."
+  "True when `service`/`op` returns secret values (see `secret-bearing`)."
   [service op]
   (contains? secret-bearing [(api-name service) (name op)]))
+
+(def secret-member-pattern
+  "Member names (request or response, any service) whose values are secrets: the name rule that redacts what no table
+  row names yet. Matched against the whole member name, case-insensitive, as a suffix (`SecretAccessKey`,
+  `PrivateKeyPlaintext`, `TemporaryPassword`, `SharedSecret`, `aws_secret_access_key`) so `Credentials` itself is not a match: its
+  `AccessKeyId` and `Expiration` stay readable, its `SecretAccessKey` and `SessionToken` do not. `NextToken`,
+  `ClientToken` and the like are not secrets and are not matched."
+  #"(?i)(SecretAccessKey|SecretKey|SessionToken|Plaintext|Password|SecretString|SecretBinary|PrivateKey|AccessToken|IdToken|RefreshToken|Secret|Passphrase)$")
+
+(defn secret-member?
+  "True when a member named `k` (keyword or string) holds a secret by its name."
+  [k]
+  (boolean (re-find secret-member-pattern (name k))))

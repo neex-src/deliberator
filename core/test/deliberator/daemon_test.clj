@@ -449,8 +449,11 @@
 
 ;; --- remote-shaped environments (Floci) ---------------------------------------------------------
 
-(defn remote-env [& {:as over}]
-  (env/validate (merge {:name "dlbdev" :kind :remote
+(defn remote-env
+  "A remote-shaped record on Floci; `:read-only false` because these runs mutate through the token flow (a read-only
+  record refuses a mutation flat, `aws_test`)."
+  [& {:as over}]
+  (env/validate (merge {:name "dlbdev" :kind :remote :read-only false
                         :aws {:profile "dlbtest" :region "eu-central-1" :account "000000000000"
                               :endpoint fu/url}
                         :targets {:queue/q (str "dlbtest-d-" (subs (str (UUID/randomUUID)) 0 8))}}

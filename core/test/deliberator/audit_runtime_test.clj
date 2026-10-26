@@ -174,7 +174,7 @@
 ;; --- the confirmation flow through the daemon ---------------------------------------------------------------
 
 (defn- remote-env []
-  (env/validate {:name "dlbdev" :kind :remote
+  (env/validate {:name "dlbdev" :kind :remote :read-only false
                  :aws {:profile "dlbaudit" :region "eu-central-1" :account "000000000000" :endpoint fu/url}
                  :targets {:function/logger "estate-logger"}}))
 
@@ -248,3 +248,24 @@
                 (is (= "confirm-required" (get-in t1 [:error :type])))
                 (is (= "ok" (get-in t2 [:result :status])) (pr-str (or (:error t2) (:result t2))))))
             (finally (aws/invoke! {:ws "default"} local :sqs :DeleteQueue {:QueueUrl url})))))))
+
+(deftest-floci a-confirmed-eventbridge-put-is-approved-although-its-correlation-differs
+  ;; PutEvents carries the step's correlation as `detail.correlation`, a new run id on the approving re-run:
+  ;; the token binds the request without it (like the `correlation` attribute of an SQS send). Found on real AWS.
+  (let [bus (str "dlbaudit-" (subs (str (UUID/randomUUID)) 0 8))]
+    (with-remote-daemon [h]
+      (env/save! "default" (assoc-in (remote-env) [:targets :bus/audit] bus))
+      (let [local (audit-env bus)]
+        (aws/invoke! {:ws "default"} local :eventbridge :CreateEventBus {:Name bus})
+        (try
+          (with-client [c h]
+            (ok! c "session.start" {:key "T-1"})
+            (let [path (write-file "put.scn" "### eventbridge put bus/audit\n{\"order\": \"o-1\"}\n")
+                  t1 (:terminal (tc/request c "scenario.run" {:path path :env "dlbdev"}))
+                  token (get-in t1 [:error :token])
+                  t2 (:terminal (tc/request c "scenario.run" {:path path :env "dlbdev" :confirm token :steps [1]}))
+                  t3 (:terminal (tc/request c "scenario.run" {:path path :env "dlbdev" :confirm token :steps [1]}))]
+              (is (= "confirm-required" (get-in t1 [:error :type])))
+              (is (= "ok" (get-in t2 [:result :status])) (pr-str (or (:error t2) (:result t2))))
+              (is (not= "ok" (get-in t3 [:result :status])) "the token is single-use")))
+          (finally (aws/invoke! {:ws "default"} local :eventbridge :DeleteEventBus {:Name bus})))))))

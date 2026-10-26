@@ -24,12 +24,22 @@
     (is (= {:service :secretsmanager :id "estate/api-key" :json-key nil} (runtime/logical-ref "estate/api-key")))))
 
 (deftest every-redacted-response-is-marked-secret-bearing
-  (testing "the ops that return secret values are the class :read ones listed in env.ops/secret-bearing"
-    (doseq [[s o] ops/secret-bearing]
+  (testing "the value reads of Secrets Manager and SSM are :read and listed in env.ops/secret-bearing"
+    (doseq [[s o] [[:secretsmanager "GetSecretValue"] [:ssm "GetParameter"] [:ssm "GetParameters"] [:ssm "GetParametersByPath"]]]
       (is (= :read (ops/op-class s o)) (str s " " o " stays a read"))
       (is (ops/secret-bearing? s o)))
     (is (not (ops/secret-bearing? :ssm "PutParameter")))
-    (is (ops/secret-bearing? :secretsmanager :GetSecretValue))))
+    (is (ops/secret-bearing? :secretsmanager :GetSecretValue)))
+  (testing "the credential-minting rows (sts, iam, kms, cognito) are mutations: gated on a remote environment, redacted too"
+    (doseq [[s o] ops/secret-bearing :when (not (#{:ssm :secretsmanager} s))]
+      (is (= :mutate (ops/op-class s o)) (str s " " o))
+      (is (ops/secret-bearing? s o))))
+  (testing "the name rule"
+    (doseq [k ["SecretAccessKey" "SessionToken" "Plaintext" "PrivateKeyPlaintext" "Password" "MasterUserPassword"
+               "SecretString" "SecretBinary" "AccessToken" "IdToken" "RefreshToken" "ClientSecret" "SharedSecret" :Plaintext]]
+      (is (ops/secret-member? k) (str k)))
+    (doseq [k ["NextToken" "ClientToken" "ContinuationToken" "Value" "AccessKeyId" "Credentials" "KeyId" "Name" "TokenType" "SecretId" "SecretList"]]
+      (is (not (ops/secret-member? k)) (str k)))))
 
 (deftest inspect-body-of-a-secret-container-is-scrubbed
   (let [body (fn [labels] (.getBytes (json/write-str {"Id" "abc" "Config" {"Labels" labels "Env" ["PATH=/bin" "API_KEY=the-real-value" "EMPTY="]}}) "UTF-8"))

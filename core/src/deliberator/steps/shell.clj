@@ -5,10 +5,14 @@
   `request.sh`). Facts: `exit` (number), `out` (the output as text, at most the last 64 KB), `lines` (number); `$` paths
   work when the whole output is JSON. A non-zero exit is a step error unless an `@assert`/`@until` of the step names `exit`
   (then the checks decide). The script sees `DELIBERATOR_HOME DLB_WS DLB_SESSION DLB_ENV DLB_RUN_ID` on top of the daemon's
-  environment. Default timeout 10 minutes; a timeout or cancel kills the process and its children. Refused for a `:remote`
+  environment SCRUBBED (`env/child-env`): no `AWS_*` of the daemon, `AWS_CONFIG_FILE`/`AWS_SHARED_CREDENTIALS_FILE=/dev/null`,
+  and the run's local record exported as `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (the fake keys) and
+  `AWS_DEFAULT_REGION`, so `aws` in a step talks to the local emulator and cannot reach real AWS through the daemon's
+  credentials. Default timeout 10 minutes; a timeout or cancel kills the process and its children. Refused for a `:remote`
   environment."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
+            [deliberator.env :as env]
             [deliberator.scenario.kinds :as kinds]
             [deliberator.steps.common :as c]
             [deliberator.store :as store])
@@ -66,6 +70,8 @@
              (.directory dir)
              (.redirectErrorStream true))
         _ (doto (.environment pb)
+            (.clear)
+            (.putAll (env/child-env (System/getenv) (:env ctx)))
             (.put "DELIBERATOR_HOME" (str (store/home)))
             (.put "DLB_WS" (str (:ws ctx)))
             (.put "DLB_SESSION" (str (:session ctx)))

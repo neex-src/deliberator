@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [deliberator.daemon :as daemon]
+            [deliberator.env :as env]
             [deliberator.ops :as ops]
             [deliberator.store :as store]
             [deliberator.test-client :as tc]
@@ -108,6 +109,56 @@
             (is (false? (:ok terminal)))
             (is (str/includes? (str (get-in terminal [:error :message])) "op needs a verb: aws.describe"))
             (is (not (str/includes? (str (get-in terminal [:error :message])) "daemon.stop")))))))))
+
+(deftest shell-steps-see-a-scrubbed-environment-pointed-at-the-local-record
+  (with-daemon [h]
+    (with-client [c h]
+      (tc/request c "session.start" {:key "T-1"})
+      (let [{:keys [env]} (get-in (tc/request c "env.describe" {:name "local"}) [:terminal :result])
+            r (run! c "env.scn" (str "### shell aws-vars\n# @assert out contains AWS_ENDPOINT_URL=" (get-in env [:aws :endpoint]) "\n"
+                                     "env | grep '^AWS_' | sort\n"
+                                     "### shell no-real-files\n# @assert out == /dev/null /dev/null\n"
+                                     "echo -n \"$AWS_CONFIG_FILE $AWS_SHARED_CREDENTIALS_FILE\"\n"))]
+        (is (= "ok" (:status r)) (:text r))
+        (testing "the AWS_* set is exactly the exported one: endpoint, fake keys, region, the two files, IMDS and pager off"
+          (is (= ["AWS_ACCESS_KEY_ID=test" "AWS_CONFIG_FILE=/dev/null" "AWS_DEFAULT_REGION=eu-central-1"
+                  "AWS_EC2_METADATA_DISABLED=true" (str "AWS_ENDPOINT_URL=" (get-in env [:aws :endpoint])) "AWS_PAGER="
+                  "AWS_REGION=eu-central-1" "AWS_SECRET_ACCESS_KEY=test" "AWS_SHARED_CREDENTIALS_FILE=/dev/null"]
+                 (str/split-lines (str/trim (step-file r 1 "response.txt"))))
+              "whatever AWS_* this JVM was started with, the step never sees it"))))))
+
+(deftest op-steps-reach-no-remote-environment
+  (with-daemon [h]
+    (with-client [c h]
+      (tc/request c "session.start" {:key "T-1"})
+      ;; a remote record whose endpoint is a closed port: nothing answers there, and nothing may be asked
+      (env/save! "default" {:name "dev" :kind :remote :read-only false
+                            :aws {:profile "nosuch" :region "eu-central-1" :account "111111111111" :endpoint "http://localhost:19"}
+                            :targets {}})
+      (testing "the body's env, a read: refused before the operation runs"
+        (let [r (run! c "r1.scn" "### op config.refresh\n# @assert ok == false\n# @assert error.type == op/remote-env\n{\"env\": \"dev\"}\n")]
+          (is (= "ok" (:status r)) (:text r))
+          (is (str/includes? (get-in r [:steps 1 :facts "error.message"]) "names dev, which is remote"))))
+      (testing "env.check name, aws.discover env, service.start secrets-from"
+        (let [r (run! c "r2.scn" (str "### op env.check\n# @assert error.type == op/remote-env\n{\"name\": \"dev\"}\n"
+                                      "### op aws.discover\n# @assert error.type == op/remote-env\n{\"env\": \"dev\"}\n"
+                                      "### op service.start\n# @assert error.type == op/remote-env\n{\"name\": \"a\", \"secrets-from\": \"dev\"}\n"))]
+          (is (= "ok" (:status r)) (:text r))))
+      (testing "without the assert it is a step error with a hint"
+        (let [r (run! c "r3.scn" "### op env.describe\n{\"name\": \"dev\"}\n")]
+          (is (= "failed" (:status r)))
+          (is (str/includes? (get-in r [:steps 1 :error :hint]) "dlb or the IDE"))))
+      (testing "the daemon itself verifies the account of a remote environment on config.refresh (R19): unreachable here"
+        (let [{:keys [terminal]} (tc/request c "config.refresh" {:env "dev"})]
+          (is (false? (:ok terminal)))
+          (is (= "check-failed" (get-in terminal [:error :type])) (pr-str (:error terminal)))
+          (is (str/includes? (str (get-in terminal [:error :message])) "cannot verify the account of environment dev"))))
+      (testing "and on aws.discover, terraform.drift and logs.fetch"
+        (doseq [[op args] [["aws.discover" {:env "dev"}]
+                           ["terraform.drift" {:env "dev" :dir (str (store/home))}]
+                           ["logs.fetch" {:env "dev" :target "log/x"}]]]
+          (let [{:keys [terminal]} (tc/request c op args)]
+            (is (= "check-failed" (get-in terminal [:error :type])) (str op " " (pr-str (:error terminal))))))))))
 
 (deftest continue-carries-variables-and-captures
   (with-daemon [h]
