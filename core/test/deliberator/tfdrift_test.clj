@@ -53,3 +53,10 @@
       (let [plan {:planned_values (:values secret-doc) :prior_state {:values (:values secret-doc)}}]
         (is (= (tf/declared plan nil) (tf/declared (tf/extract plan) nil)))
         (is (not (str/includes? (json/write-str (tf/extract plan)) "secret-")))))))
+
+(deftest read-doc-of-a-directory-without-terraform-files-refuses-b18
+  (let [d (java.nio.file.Files/createTempDirectory "tfdrift-empty" (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (is (= :tf/no-root (:type (ex-data (try (tf/read-doc {:dir (str d)}) (catch Exception e e))))))
+      (is (= :tf/no-root (:type (ex-data (try (tf/read-doc {:dir (str d "/missing")}) (catch Exception e e))))))
+      (finally (java.nio.file.Files/delete d)))))

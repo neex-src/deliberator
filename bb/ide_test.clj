@@ -14,7 +14,7 @@
 
 (def groups
   {"a" ["audit" "config" "daemon" "explorer" "logs" "scn"]
-   "b" ["repo" "run" "services" "testing" "ui" "workspace"]})
+   "b" ["environments" "repo" "run" "services" "testing" "ui" "workspace"]})
 
 (defn packages
   "The test packages on disk: the directories under `test-root`."

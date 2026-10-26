@@ -107,7 +107,7 @@
         (testing "the operations that would run the daemon into itself are not offered"
           (let [{:keys [terminal]} (tc/request c "scenario.run" {:path (write-file "c.scn" "### op daemon.stop\n")})]
             (is (false? (:ok terminal)))
-            (is (str/includes? (str (get-in terminal [:error :message])) "op needs a verb: aws.describe"))
+            (is (re-find #"op needs a verb: [a-z]+\.[a-z]+" (str (get-in terminal [:error :message]))))   ; the example is the first op offered (it was aws.describe until audit.show)
             (is (not (str/includes? (str (get-in terminal [:error :message])) "daemon.stop")))))))))
 
 (deftest shell-steps-see-a-scrubbed-environment-pointed-at-the-local-record

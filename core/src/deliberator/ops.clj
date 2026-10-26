@@ -50,6 +50,7 @@
     config.refresh env path ws                     -> {env fetched-at parameters secrets path copy raw errors}
     deployed.refresh env ws                        -> {env fetched-at services ecs lambda deployments path text raw errors}   (M4.2: ECS, Lambda, CodeDeploy into cache/<env>/deployed.edn)
     deployed.show env service ws                   -> {env fetched-at age-ms age services count path text}   (from the cache only, never AWS)
+    audit.show session ws                          -> {path exists scope session count outcomes confirmed lines [{n at env service op outcome confirmation reason}]}   (the audit.log of a session, else of the workspace; the IDE opens `path` and highlights `lines`)
     runtime.ensure ws infra-only timeout-ms        -> status   [runtime.pulling runtime.starting runtime.ready]
     runtime.status ws                              -> {ws podman containers}
     runtime.down ws                                -> {removed}  [runtime.removed]
@@ -739,6 +740,24 @@
 (defn- deployed-show [_ {:keys [env service] :as args}]
   (deployed/show (ws-of args) (or env "local") {:service service}))
 
+(defn- audit-show [_ {:keys [session] :as args}]
+  (let [ws (ws-of args)
+        ctx {:ws ws :session session}
+        p (aws/audit-path ctx)
+        exists (.exists (.toFile p))
+        lines (if exists (aws/audit-lines ctx) [])
+        key (or session (:key (session/current ws)))]
+    {:path (str p) :exists exists :scope (if key "session" "workspace") :session key :count (count lines)
+     :outcomes (frequencies (map #(some-> (:outcome %) name) lines))
+     :confirmed (count (filter :confirmation lines))    ; a call that went through with a confirmation (outcome ok or error, confirmation used or pass)
+     :lines (vec (map-indexed (fn [i l] (-> (select-keys l [:at :env :service :op :outcome :confirmation :reason])
+                                            (assoc :n (inc i))
+                                            (update :at str)
+                                            (update :outcome #(some-> % name))
+                                            (update :confirmation #(some-> % name))
+                                            (update :reason #(some-> % name))))
+                              lines))}))
+
 (defn- marker-add [_ {:keys [file line logger] :as args}] (markers/add! (ws-of args) file line :logger logger))
 (defn- marker-remove [_ {:keys [file line] :as args}] (markers/remove! (ws-of args) file line))
 (defn- marker-list [_ {:keys [file] :as args}] (markers/list (ws-of args) :file file))
@@ -903,6 +922,9 @@
    "deployed.refresh" {:fn deployed-refresh :class :mutate
                        :doc "Fetches what is deployed in an environment: ECS clusters, services and their task definitions (image tag, revision), Lambda functions (version, code sha, last modified), CodeDeploy deployments where present. Read calls only; every response is persisted raw first, then cache/<env>/deployed.edn (with fetched-at) and deployed.txt are derived. A section that fails is listed in errors, the others still answer."
                        :args (ws-schema :env {:type :string :doc "environment name; default local"})}
+   "audit.show" {:fn audit-show :class :read
+                 :doc "Where the audit trail of a session is and what it holds: path (the audit.log the gate wrote, one EDN line per attempt on a remote environment), exists, the counts per outcome (ok error confirm-required refused confirmed), how many calls went through with a confirmation (confirmed), and one summary per line with its line number n, so a client can open the file and mark the confirmations (outcome confirm-required, a confirmation used, or refused). session defaults to the current session; with none, the workspace-level audit.log."
+                 :args (ws-schema :session {:type :string :doc "session key; default the current session"})}
    "deployed.show" {:fn deployed-show :class :read
                     :doc "What was deployed when last fetched, from the cache only (never AWS), with its age; service narrows to one name (or cluster/name). deployed.refresh fetches again."
                     :args (ws-schema :service {:type :string :positional true :doc "service or function name, or cluster/name; default all"}
@@ -1084,7 +1106,7 @@
             :hint "op.describe lists the operations"))
     (let [args (validate-args op (:args entry) args)]
       (when (and (contains? (:args entry) :ws)
-                 (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (= op "logs.insights")   ; new families are strict, mutators too
+                 (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
                      (and (= :read (:class entry)) (not= "scenario.parse" op))))
         (require-workspace! (:ws args)))
       ((:fn entry) ctx args))))

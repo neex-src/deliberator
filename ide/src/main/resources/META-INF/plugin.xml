@@ -70,6 +70,12 @@
         <projectService serviceImplementation="com.neex.deliberator.config.ConfigViews"/>
         <editorNotificationProvider implementation="com.neex.deliberator.config.ConfigViewBanner"/>
         <editorNotificationProvider implementation="com.neex.deliberator.scn.RemoteEnvBanner"/>
+
+        <!-- remote environments (m4): audit trail view, Logs Insights result banner -->
+        <projectService serviceImplementation="com.neex.deliberator.environments.AuditViews"/>
+        <editorNotificationProvider implementation="com.neex.deliberator.environments.AuditBanner"/>
+        <projectService serviceImplementation="com.neex.deliberator.logs.InsightsViews"/>
+        <editorNotificationProvider implementation="com.neex.deliberator.logs.InsightsBanner"/>
         <localInspection shortName="DeliberatorConfigChain" displayName="Broken configuration chain" groupName="Deliberator"
                          enabledByDefault="true" level="WARNING" implementationClass="com.neex.deliberator.config.ConfigChainInspection"/>
     </extensions>
@@ -95,6 +101,10 @@
                     text="Attach Repository..." description="Add a directory (Gradle, Maven or plain) to this project without reopening it"/>
             <action id="deliberator.repo.detach" class="com.neex.deliberator.actions.DetachRepositoryAction"
                     text="Detach Repository..." description="Remove an attached repository from this project (files untouched)"/>
+            <action id="deliberator.env.create" icon="AllIcons.General.Add" class="com.neex.deliberator.environments.NewEnvironmentAction"
+                    text="New Environment..." description="env.create: a remote environment from an AWS profile, an account and a region (the account is checked first)"/>
+            <action id="deliberator.audit.open" class="com.neex.deliberator.environments.OpenAuditLogAction"
+                    text="Open Audit Log..." description="audit.show: the audit trail of a session as text, the confirmations highlighted"/>
             <action id="deliberator.ops.show" icon="AllIcons.Actions.Edit" class="com.neex.deliberator.actions.OperationsAction"
                     text="Operations..." description="Every daemon operation with a generated form"/>
         </group>
@@ -139,6 +149,8 @@
                     text="Clear Correlation Filter" description="Unfold the entries the filter folded"/>
             <action id="deliberator.logs.match" class="com.neex.deliberator.logs.MatchMarkersAction"
                     text="Match Markers in Open Logs" description="logs.match on every open log file and highlight the matching lines"/>
+            <action id="deliberator.logs.insights" class="com.neex.deliberator.logs.FindInCloudWatchAction"
+                    text="Find in CloudWatch Logs..." description="The selection (an exception class or message) searched with Logs Insights in the log groups of the selected environment's service; the result opens as text with the bytes scanned in a banner"/>
             <action id="deliberator.marker.toggle" class="com.neex.deliberator.logs.ToggleMarkerAction"
                     text="Add Deliberator Marker" description="Mark this source line: log lines of its class and line are highlighted in fetched logs">
                 <add-to-group group-id="EditorGutterPopupMenu" anchor="first"/>

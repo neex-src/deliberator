@@ -94,7 +94,9 @@
   [{:keys [file dir plan]}]
   (let [txt (cond
               file (slurp (io/file file))
-              dir (let [env (into {} (remove (fn [[k _]] (str/starts-with? k "AWS_"))) (System/getenv))
+              dir (let [_ (when-not (and (.isDirectory (io/file dir)) (some #(str/ends-with? (.getName ^java.io.File %) ".tf") (.listFiles (io/file dir))))
+                            (throw (ex-info (str "no Terraform files in " dir) {:type :tf/no-root :dir (str dir)})))   ; B18: not "no drift"
+                        env (into {} (remove (fn [[k _]] (str/starts-with? k "AWS_"))) (System/getenv))
                         r (shell/with-sh-dir dir
                             (shell/with-sh-env (assoc env "AWS_CONFIG_FILE" "/dev/null" "AWS_SHARED_CREDENTIALS_FILE" "/dev/null" "TF_IN_AUTOMATION" "1")
                               (apply shell/sh "terraform" "show" "-json" "-no-color" (when plan [plan]))))]

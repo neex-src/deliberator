@@ -71,14 +71,12 @@ class AwsExplorerTest : BasePlatformTestCase() {
         assertEquals("no question for a root that cannot be applied", 0, asked)
     }
 
-    fun testDriftOnARootWithoutTerraformFilesCompletesAndWritesItsReportThroughTheDaemon() {
+    fun testDriftOnARootWithoutTerraformFilesEndsInTheDaemonsErrorAndWritesNoReport() {
+        // B18: it used to answer "0/0 declared present" and write a "no drift" report for a folder that holds no Terraform
         panel.runDrift(tf.resolve("no-root").toString())
-        wait("Drift to report") { panel.statusText().contains("declared present") || panel.lastError != null }
-        assertNull(panel.lastError, panel.lastError)
+        assertReadableError("Drift")
         val wsDir = Path.of(bg { WorkspaceService.getInstance(project).call("workspace.show").resultObject().get("path").asString })
-        val report = wsDir.resolve("project").resolve("explore").resolve("drift-local.txt")
-        wait("the daemon to have written the report") { Files.exists(report) }
-        assertTrue(Files.readString(report), Files.readString(report).contains("no drift"))
+        assertFalse("no report for a root that is not one", Files.exists(wsDir.resolve("project").resolve("explore").resolve("drift-local.txt")))
     }
 
     fun testApplyAsksWithTheDaemonsVariablesOnTheEdtAndNoDoesNothing() {

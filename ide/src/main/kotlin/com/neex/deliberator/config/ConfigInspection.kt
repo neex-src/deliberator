@@ -1,9 +1,11 @@
 package com.neex.deliberator.config
 
 import com.intellij.codeInspection.InspectionManager
+import com.intellij.codeInspection.LocalQuickFix
 import com.intellij.codeInspection.LocalInspectionTool
 import com.intellij.codeInspection.ProblemDescriptor
 import com.intellij.codeInspection.ProblemHighlightType
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiFile
 
@@ -37,11 +39,21 @@ class ConfigChainInspection : LocalInspectionTool(), com.intellij.openapi.projec
                 val hit = Placeholders.scan(text).firstOrNull { it.name == name } ?: continue
                 val range = TextRange(from + hit.start - 2, from + hit.end)
                 val msg = "$label: ${p.reason ?: p.kind}"
-                out.getOrPut(range to msg) { manager.createProblemDescriptor(file, range, msg, type, isOnTheFly) }
+                // a parameter missing from the snapshot may only be stale: Refresh is one click on the warning (config.refresh of the selected, remote or local, environment)
+                val fixes = if (p.kind == "parameter-missing") arrayOf<LocalQuickFix>(RefreshSnapshotFix(chain.env)) else LocalQuickFix.EMPTY_ARRAY
+                out.getOrPut(range to msg) { manager.createProblemDescriptor(file, range, msg, type, isOnTheFly, *fixes) }
             }
         }
         add(chain.broken, ProblemHighlightType.GENERIC_ERROR_OR_WARNING, "Deliberator")
         add(chain.unresolved, ProblemHighlightType.WEAK_WARNING, "Deliberator (cannot tell)")
         return out.values.toTypedArray().takeIf { it.isNotEmpty() }
     }
+}
+
+/** The quick fix of a parameter that the snapshot lacks: `config.refresh` of the environment, then the chains reload and the warning is checked again. */
+class RefreshSnapshotFix(private val env: String) : LocalQuickFix {
+    override fun getFamilyName() = "Refresh the config snapshot"
+    override fun getName() = "Refresh the config snapshot of $env"
+    override fun startInWriteAction() = false
+    override fun applyFix(project: Project, descriptor: ProblemDescriptor) = ConfigRefresh.run(project)
 }
