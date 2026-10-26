@@ -9,6 +9,7 @@
   emulator's) is written to `<home>/tour-aws-credentials`, which the daemon this task starts gets as `AWS_SHARED_CREDENTIALS_FILE`
   (a daemon that is already running keeps its own environment: when chapter 11 is in the run and the running daemon of this home does
   not have the file, it is stopped and replaced; `/proc/<pid>/environ` says).
+  (a daemon that is already running keeps its own environment; chapter 11's first step says so).
 
   Environment, all optional: `DELIBERATOR_HOME` (default `<repo>/.scratch/tour-home`, the home of `bb tour:ide`), `DELIBERATOR_JAR` (default
   core/target/deliberatord.jar, built when missing), `DLB_DAEMON_ARGS` (default `--idle-minutes 15`). Run from the repository
@@ -98,6 +99,7 @@
                  "DELIBERATOR_JAR" (or (System/getenv "DELIBERATOR_JAR") (str (fs/absolutize "core/target/deliberatord.jar")))
                  "DLB_DAEMON_ARGS" (or (System/getenv "DLB_DAEMON_ARGS") "--idle-minutes 15")
                  "AWS_SHARED_CREDENTIALS_FILE" creds}
+                 "AWS_SHARED_CREDENTIALS_FILE" (credentials-file! home)}
             session (str "TOUR-" (today))
             _ (p/shell {:extra-env env :out :string} dlb "workspace" "open" ws)
             _ (p/shell {:extra-env env :out :string} dlb "session" "start" session "--ws" ws)
