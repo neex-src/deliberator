@@ -47,17 +47,30 @@ class AwsNode(
 
 /**
  * The request shapes of AWS operations, from the daemon's `aws.describe` (the IDE never reads an AWS model itself).
- * Fetched once per operation over the connection the editor already has, never starting a daemon.
+ * Fetched once per operation over the connection the editor already has, never starting a daemon. [input] answers from the
+ * cache and fetches a miss on a pooled thread (the first completion in a body shows nothing, the next one everything): the
+ * editor's threads never wait for the daemon. [fetch] is the blocking form for background callers (Fill Request Body).
  */
 @Service(Service.Level.APP)
 class AwsModels {
     private val cache = ConcurrentHashMap<String, java.util.Optional<AwsNode>>()
+    private val fetching = ConcurrentHashMap.newKeySet<String>()
 
-    /** The input shape of `service.Operation` ([verb]), null when unknown or no daemon is reachable. Blocking on first use. */
+    /** The input shape of `service.Operation` ([verb]) from the cache; null when not fetched yet (a fetch is scheduled) or unknown. Never blocks. */
     fun input(project: Project, verb: String): AwsNode? {
+        cache[verb]?.let { return it.orElse(null) }
+        if (ScnRegistry.getInstance().knownClient() == null || !fetching.add(verb)) return null
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try { if (!project.isDisposed) fetch(project, verb) } finally { fetching.remove(verb) }
+        }
+        return null
+    }
+
+    /** The input shape of [verb], fetched when not cached. Blocking: background threads only. */
+    fun fetch(project: Project, verb: String): AwsNode? {
         val (service, op) = verb.split('.', limit = 2).takeIf { it.size == 2 } ?: return null
         cache[verb]?.let { return it.orElse(null) }
-        val client = ScnRegistry.getInstance().knownClient() ?: run { ScnRegistry.getInstance().warm(project); return null }
+        val client = ScnRegistry.getInstance().knownClient() ?: return null
         val node = try {
             val r = ScnDaemon.call(client, project, "aws.describe", JsonObject().apply { addProperty("service", service); addProperty("op", op) })
             AwsNode.parse(r.takeIf { it.isJsonObject }?.asJsonObject?.get("input"))

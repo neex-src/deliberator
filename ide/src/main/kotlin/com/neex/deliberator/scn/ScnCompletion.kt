@@ -137,11 +137,12 @@ object ScnProposals {
 }
 
 /**
- * Completion of `.scn`: kinds, verbs, targets, directive names, facts, variables. The data comes from [ScnRegistry]
- * (never blocks on a daemon start, never touches the EDT); with no daemon and no saved copy the static part
- * (engine directives, built-in variables, the file's own vars and captures) still answers.
+ * Completion of `.scn`: kinds, verbs, targets, directive names, facts, variables. The data comes from [ScnRegistry] and
+ * [AwsResources] caches only (a stale cache is refreshed on a pooled thread for the next completion): the completion thread
+ * never waits for the daemon and never starts one; with no daemon and no saved copy the static part (engine directives,
+ * built-in variables, the file's own vars and captures) still answers. DumbAware: no index is used.
  */
-class ScnCompletionContributor : CompletionContributor() {
+class ScnCompletionContributor : CompletionContributor(), com.intellij.openapi.project.DumbAware {
     init {
         extend(CompletionType.BASIC, PlatformPatterns.psiElement().withLanguage(ScnLanguage), object : CompletionProvider<CompletionParameters>() {
             override fun addCompletions(parameters: CompletionParameters, context: ProcessingContext, result: CompletionResultSet) {
@@ -154,7 +155,7 @@ class ScnCompletionContributor : CompletionContributor() {
                 val registry = ScnRegistry.getInstance()
                 val project = file.project
                 val needsTargets = ctx is ScnContext.Variable || ctx is ScnContext.StepLine
-                if (needsTargets && registry.needsTargets(project)) registry.refreshTargets(project)
+                if (needsTargets && registry.needsTargets(project)) registry.refreshTargetsAsync(project)
                 val targets = if (needsTargets) registry.targets(project) else emptyList()
                 val prefix = when (ctx) {
                     is ScnContext.StepStart -> ctx.prefix

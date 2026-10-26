@@ -47,7 +47,12 @@ class MarkerIcon(private val gutter: MarkerGutter, val marker: Marker) : GutterI
 class MarkerGutter(val editor: Editor, val project: Project, val file: VirtualFile) : Disposable {
     val matcher = LogMatcher.getInstance(project)
     private val service = MarkerService.getInstance(project)
-    private val drawn = ArrayList<Pair<Marker, RangeHighlighter>>()
+    /** Mutated on the EDT (redraw), read by the save hook on a pooled thread ([syncMoved]): every access goes through [drawnNow]/[setDrawn]. */
+    private val lock = Any()
+    private var drawn: List<Pair<Marker, RangeHighlighter>> = emptyList()
+
+    private fun drawnNow(): List<Pair<Marker, RangeHighlighter>> = synchronized(lock) { drawn }
+    private fun setDrawn(l: List<Pair<Marker, RangeHighlighter>>) = synchronized(lock) { drawn = l }
 
     init {
         project.messageBus.connect(this).subscribe(MarkerListener.TOPIC, object : MarkerListener {
@@ -57,23 +62,26 @@ class MarkerGutter(val editor: Editor, val project: Project, val file: VirtualFi
     }
 
     /** The icons now in the gutter, by 1-based line. */
-    fun icons(): Map<Int, MarkerIcon> = drawn.filter { it.second.isValid }.associate { it.first.line to (it.second.gutterIconRenderer as MarkerIcon) }
+    fun icons(): Map<Int, MarkerIcon> = drawnNow().filter { it.second.isValid }.associate { it.first.line to (it.second.gutterIconRenderer as MarkerIcon) }
 
     fun redraw() {
         if (editor.isDisposed) return
         clear()
         val doc = editor.document
+        val out = ArrayList<Pair<Marker, RangeHighlighter>>()
         for (m in service.markersOf(file.path)) {
             if (m.line < 1 || m.line > doc.lineCount) continue
             val h = editor.markupModel.addLineHighlighter(null, m.line - 1, HighlighterLayer.FIRST)
             h.gutterIconRenderer = MarkerIcon(this, m)
-            drawn += m to h
+            out += m to h
         }
+        setDrawn(out)
     }
 
     private fun clear() {
-        if (!editor.isDisposed) drawn.forEach { editor.markupModel.removeHighlighter(it.second) }
-        drawn.clear()
+        val old = drawnNow()
+        setDrawn(emptyList())
+        if (!editor.isDisposed) old.forEach { editor.markupModel.removeHighlighter(it.second) }
     }
 
     /** Jump to the last log line the marker matched, opening that log. False (with a balloon) when it never matched. */
@@ -97,8 +105,9 @@ class MarkerGutter(val editor: Editor, val project: Project, val file: VirtualFi
      * A marked line that was deleted has no valid highlighter left: its marker stays where it was, removed only by hand.
      */
     fun syncMoved(): Int {
+        val snapshot = drawnNow()
         val moves = com.intellij.openapi.application.ApplicationManager.getApplication().runReadAction(com.intellij.openapi.util.Computable<List<Pair<Marker, Int>>> {
-            drawn.filter { it.second.isValid }.mapNotNull { (m, h) ->
+            snapshot.filter { it.second.isValid }.mapNotNull { (m, h) ->
                 val now = editor.document.getLineNumber(h.startOffset) + 1
                 if (now != m.line) m to now else null
             }

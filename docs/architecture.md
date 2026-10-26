@@ -136,7 +136,6 @@ mismatch or a profile that cannot log in (`--check false` for offline authoring)
 `local`; what was fetched through it stays). Credentials from the CLI bridge are refreshed by the wall clock five minutes
 before the expiry the CLI reports (a sleeping laptop does not stop a clock); when the CLI fails the still valid ones are
 kept and its own words go into the error with the `aws sso login` hint.
-(`account-mismatch`; once per session, environment and account in a daemon's life).
 
 **Operation classes.** Every AWS operation the core issues is listed once with a class, `:read` or `:mutate`
 (`deliberator.env.ops/table`); an operation that is not in the table is `:mutate`, except that for the services only the

@@ -50,13 +50,15 @@ class ServiceOps(private val project: Project) {
      * `secrets-from` the daemon answers `confirm-required` twice: each is put to [confirmer] and, when confirmed, the start is repeated with `confirm` set to the
      * token (token 1, token 2, start). Declining ends it with `service/cancelled`: nothing was started, no value fetched.
      */
-    fun start(name: String, extra: JsonObject = JsonObject(), onEvent: (DaemonEvent) -> Unit = {}): Started {
+    fun start(name: String, extra: JsonObject = JsonObject(), onEvent: (DaemonEvent) -> Unit = {}, onCall: (com.neex.deliberator.daemon.DaemonClient.Call) -> Unit = {}): Started {
         val a = args(name)
         extra.entrySet().forEach { a.add(it.key, it.value) }
         val secrets = a.has("secrets-from")
         try {
             repeat(MAX_CONFIRMATIONS + 1) {
-                val t = svc.start("service.start", a, true, onEvent).await()
+                val call = svc.start("service.start", a, true, onEvent)
+                onCall(call)   // the run configuration keeps it: a Stop during the start waits for this answer before stopping
+                val t = call.await()
                 if (t.ok) return started(t.resultObject(), name)
                 val e = t.error
                 if (secrets && t.errorType == "confirm-required" && e != null) {

@@ -31,7 +31,7 @@ class PasteAwsCliAction : ScnEditorAction() {
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             val verbs = ScnRegistry.getInstance().let { it.kinds() ?: runCatching { it.refresh() }.getOrNull() }?.get("aws")?.verbs?.toSet().orEmpty()
-            val r = AwsStepTools.fromCli(text, verbs) { AwsModels.getInstance().input(v.project, it) }
+            val r = AwsStepTools.fromCli(text, verbs) { AwsModels.getInstance().fetch(v.project, it) }
             ApplicationManager.getApplication().invokeLater({
                 val step = r.text()
                 if (step == null) { Ui.notify(v.project, "Paste aws command", r.error ?: "not understood", NotificationType.WARNING); return@invokeLater }
@@ -54,7 +54,7 @@ class FillAwsBodyAction : ScnEditorAction() {
         if (step.body?.text?.isNotBlank() == true) { Ui.notify(v.project, "Fill body", "The step already has a body.", NotificationType.INFORMATION); return }
         val index = step.index
         ApplicationManager.getApplication().executeOnPooledThread {
-            val node = AwsModels.getInstance().input(v.project, verb)
+            val node = AwsModels.getInstance().fetch(v.project, verb)
             ApplicationManager.getApplication().invokeLater({
                 if (node == null) { Ui.notify(v.project, "Fill body", "No request model for $verb (is the daemon reachable?).", NotificationType.WARNING); return@invokeLater }
                 AwsStepEdits.setBody(editor, index, AwsStepTools.skeleton(node))

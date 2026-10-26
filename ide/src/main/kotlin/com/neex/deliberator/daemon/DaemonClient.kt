@@ -29,6 +29,8 @@ import java.util.concurrent.atomic.AtomicLong
  * Callers update the UI themselves (`invokeLater`); nothing here touches the platform.
  */
 class DaemonClient(val endpoint: String) {
+    /** Epoch millis of the last request that could not reach the daemon (`daemon/unreachable`, `daemon/closed`); 0 when none. [DaemonService] re-checks after one. */
+    @Volatile var unreachableAt: Long = 0; private set
 
     /** A request in flight. [terminal] completes once; [cancel] closes the connection, which cancels the request on the daemon. */
     class Call internal constructor(val id: String, val terminal: CompletableFuture<DaemonTerminal>, private val channel: () -> SocketChannel?) {
@@ -42,6 +44,19 @@ class DaemonClient(val endpoint: String) {
             terminal.get()
         } catch (e: ExecutionException) {
             throw (e.cause as? DaemonException ?: e)
+        }
+
+        /**
+         * As [await], but gives up after [timeoutMs]: the request is cancelled (the connection closed) and a [DaemonException]
+         * `daemon/timeout` is thrown. For the editor's paths (completion, annotator), which may wait a little but never hang.
+         */
+        fun await(timeoutMs: Long): DaemonTerminal = try {
+            terminal.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: ExecutionException) {
+            throw (e.cause as? DaemonException ?: e)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            cancel()
+            throw DaemonException("the daemon did not answer within $timeoutMs ms", "daemon/timeout")
         }
     }
 
@@ -86,9 +101,11 @@ class DaemonClient(val endpoint: String) {
                     try { ch.close() } catch (_: IOException) { }
                 }
             } catch (e: DaemonException) {
+                if (e.type == "daemon/unreachable" || e.type == "daemon/closed") unreachableAt = System.currentTimeMillis()
                 future.completeExceptionally(e)
             } catch (e: IOException) {
                 if (!future.isCancelled) {
+                    unreachableAt = System.currentTimeMillis()
                     future.completeExceptionally(
                         DaemonException("cannot talk to the daemon at $endpoint: ${e.message}", "daemon/unreachable", cause = e),
                     )
@@ -104,6 +121,14 @@ class DaemonClient(val endpoint: String) {
     fun call(op: String, args: JsonObject = JsonObject(), onEvent: (DaemonEvent) -> Unit = {}): DaemonTerminal =
         try {
             start(op, args, true, onEvent).await()
+        } catch (e: CancellationException) {
+            throw DaemonException("request $op cancelled", "daemon/cancelled")
+        }
+
+    /** [call] with a budget: `daemon/timeout` after [timeoutMs] (the request is cancelled). The editor's calls use it. */
+    fun call(op: String, args: JsonObject, timeoutMs: Long): DaemonTerminal =
+        try {
+            start(op, args, true).await(timeoutMs)
         } catch (e: CancellationException) {
             throw DaemonException("request $op cancelled", "daemon/cancelled")
         }

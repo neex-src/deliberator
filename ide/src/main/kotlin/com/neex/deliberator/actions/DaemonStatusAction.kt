@@ -11,7 +11,7 @@ import com.neex.deliberator.daemon.DaemonException
 import com.neex.deliberator.daemon.DaemonService
 
 /** Deliberator | Daemon status: finds or starts the daemon and shows what answered. */
-class DaemonStatusAction : AnAction() {
+class DaemonStatusAction : AnAction(), com.intellij.openapi.project.DumbAware {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
 
     override fun actionPerformed(e: AnActionEvent) {

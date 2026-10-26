@@ -1,0 +1,147 @@
+# Chapter 10: the IDE, by what its actions leave behind
+#
+# The tool window, the editor and the run configuration are views over the daemon: whatever you click sends one of the operations
+# you have already used in this tour, and the result is a file or a state you can read here. This chapter is the walk of the IDE
+# (docs/demo-m3.md section 9 and docs/walkthrough.md parts 6-13), told as scenario steps: each one names the IDE action that sends
+# the same operation, runs it, and asserts what the action leaves behind. The clicking itself is done in the sandbox IDE
+# (`bb tour:ide`, or `bb ide:run --ws <ws> --home <home>`); chapters 1-9 have to have run (the estate is up, a session is open).
+# @env local
+
+### shell paths
+# Terraform operations take the root directory; ask the shell where this checkout is.
+# @cwd ..
+# @capture root = out
+pwd | tr -d '\n'
+
+### shell workspace
+# @capture ws = out
+printf %s "$DLB_WS"
+
+# Tool window -> Services. The rows are `service.list`; the toolbar's Stop, Start and Restart send `service.stop`, `service.start` and
+# `service.restart` for the selected row. The tab renders the daemon's answer and refreshes itself every 15 seconds while it is the
+# tab you look at: stop A from a terminal and its row says `stopped` without a click.
+
+### op service.stop services-tab-stop
+# Stop keeps the container (a Start brings the same one back).
+# @assert $.status == stopped
+{"name": "a"}
+
+### op service.list services-tab-rows
+# The row the tab shows for a: mode local, stopped. Rows for a2 and b follow in name order.
+# @assert $[0].name == a
+# @assert $[0].mode == local
+# @assert $[0].status == stopped
+{}
+
+### op service.start services-tab-start
+# @assert $.status == running
+# @assert $.container == deliberator-{{ws}}-service-a
+{"name": "a"}
+
+### op service.restart services-tab-restart
+# @assert $.status == running
+{"name": "a"}
+
+# Run | "Deliberator Service: a" -> Run starts the service and follows its log into the console: ONE `logs.fetch` follow for the
+# whole Run session, which ends as one read-only file in the session's logs/ (a hard link of the raw blob). Stop (or the red
+# square) stops the follow and the service; a Stop pressed while the start is still going waits for the start and stops what it made.
+
+### op logs.fetch run-console-log
+# The one-shot form of what the console shows (the follow is the same operation with `for`/follow).
+# @assert $.lines > 0
+# @capture log = $.path
+{"target": "log/service-a", "since": "2m"}
+
+### shell log-is-read-only
+# A finished log is read-only (mode 444) and shares its inode with the raw blob (link count 2).
+# @assert out contains 444 2
+stat -c '%a %h' "{{log}}"
+
+# AWS tab. Every file the explorer produces is written by the daemon (`explore.write`, which names the place under the workspace's
+# project directory); the tab opens the path it gets. Double-clicking a resource appends a read step to explore/explore-<env>.scn,
+# created once with a header: a second `if-missing` write leaves the file as you edited it.
+
+### op explore.write explorer-scenario
+# (`created` and `written` say whether this run made the file or found it from an earlier one.)
+# @assert $.path matches /\/explore\/explore-local\.scn$/
+# @capture explore = $.path
+{"name": "explore-local.scn", "text": "# Written by the AWS explorer: one read step per resource you opened. Edit, rerun, keep.\n# @env local\n", "if-missing": true}
+
+### op explore.write explorer-scenario-again
+# The file exists now: nothing is written, the same path comes back.
+# @assert $.created == false
+# @assert $.written == false
+# @assert $.path == {{explore}}
+{"name": "explore-local.scn", "text": "replaced?\n", "if-missing": true}
+
+### op explore.write path-is-the-daemons
+# The name is a name, never a path: `../` and friends are folded into one file name under explore/.
+# @assert $.path matches /\/explore\/tour-chapter10\.txt$/
+{"name": "../../tour-chapter10.txt", "text": "written by chapter 10\n"}
+
+### op terraform.local ask-the-variables
+# Apply asks first: the tab fetches the variables the daemon derives for this workspace and shows them in the confirmation
+# ("terraform apply of <root> onto environment local? Variables passed (-var): ..."), all off the UI thread.
+# @assert $.vars.container_endpoint == http://deliberator-{{ws}}-floci:4566
+# @assert $.vars.service_a_url == http://deliberator-{{ws}}-service-a:8081
+{"dir": "{{root}}/estate/terraform/floci", "action": "vars"}
+
+### op terraform.local plan-from-the-tab
+# Plan sends no variables of its own: the daemon derives the same ones, so on the estate's own root it plans nothing.
+# @timeout 5m
+# @assert $.summary contains No changes
+{"dir": "{{root}}/estate/terraform/floci", "action": "plan"}
+
+### op terraform.drift drift-from-the-tab
+# Terraform drift...: declared vs. existing; the tab marks the tree and writes the report through `explore.write`.
+# @assert $.missing == []
+# @assert $.matching > 10
+{"dir": "{{root}}/estate/terraform/floci"}
+
+### op terraform.local no-root
+# A directory without Terraform files is an error the button can show, never a crash of the tab.
+# @assert error.type == tf/no-root
+{"dir": "{{root}}/docs", "action": "plan"}
+
+# Config navigation: Ctrl+click on ${TABLE_NAME} in application.properties offers the template line, the Terraform declaration and
+# the parameter's view; the view's banner says how old the snapshot is, and Refresh (the banner's link, or Deliberator | Refresh
+# Config Snapshot) fetches a new one and the banner says "0 s ago". A deleted parameter turns the placeholder into a warning.
+
+### op config.refresh banner-refresh
+# @assert $.parameters > 30
+# @assert $.secrets == 2
+# @capture fetched = $.fetched-at
+{"env": "local"}
+
+### op config.chain config-chain
+# What Deliberator | Config Chain prints, and what the inspection reads: five entries for a, none broken, TABLE_NAME in line 7 of
+# application.properties with its parameter present.
+# @assert $.entries[0].placeholder == TABLE_NAME
+# @assert $.entries[0].line == 7
+# @assert $.entries[0].parameter.status == present
+# @assert $.broken == []
+# @assert $.snapshot.fetched-at == {{fetched}}
+{"name": "a", "env": "local"}
+
+# Secrets checkbox: "Take secret values from environment" in the run configuration is `service.start` with `secrets-from`; the IDE
+# shows each of the daemon's two confirmations as a dialog. Cancel at either one is the typed `service/cancelled`, nothing started.
+
+### op service.start secrets-confirmation-1
+# The first confirmation: what would be read, and a token for step 2. (Chapter 7 gives both and looks inside the container.)
+# @assert error.type == confirm-required
+{"name": "a", "secrets-from": "local2"}
+
+### op service.status a-is-still-plain
+# Nothing was started or recreated by asking.
+# @assert $[0].status == running
+{"name": "a"}
+
+# Topology..., the Services tab's globe button, is `topology.set` and then the balloon's "Apply now" is `runtime.ensure` (chapter 6).
+# Debug attaches IntelliJ's debugger to the service's JDWP port and Stop detaches: the container keeps running. Logging breakpoints
+# ("Add Logpoint") print into the debug console without stopping it. Those three are editor and debugger features: the IDE tests and
+# the walk in .scratch/walk check them; what is left behind is the running service:
+
+### op service.list services-after-the-walk
+# @assert $[0].name == a
+# @assert $[0].status == running
+{}

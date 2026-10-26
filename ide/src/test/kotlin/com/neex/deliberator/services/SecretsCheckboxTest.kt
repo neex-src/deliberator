@@ -188,6 +188,7 @@ class SecretsCheckboxTest : BasePlatformTestCase() {
     fun testTheProcessHandlerSaysWhichEnvironmentsValuesTheContainerGot() {
         // a handler whose start is replaced by the real daemon's refusal path can only show the failure; the success line is checked on the pure note instead
         ops.confirmer = { false }
+        bg { svc.startSession("T-8", null) }   // the handler asks for the session once, before it starts anything
         val h = ServiceProcessHandler(project, "q", "local", JsonObject().apply { addProperty("secrets-from", "local") }, null, false)
         val text = StringBuffer()
         h.addProcessListener(object : com.intellij.execution.process.ProcessAdapter() {

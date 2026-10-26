@@ -367,6 +367,34 @@ class RunFromEditorTest : BasePlatformTestCase() {
         assertEquals("cancelled", st.snapshot!!.status)
     }
 
+    /** R21: results follow their steps by head text, so a step inserted above during a run takes none of the run's results and moves none. */
+    fun testAStepInsertedDuringARunKeepsEveryResultOnItsStep() {
+        val (vf, view) = open("### wait first\n# @for 100ms\n\n### wait second\n# @for 60s\n")
+        val st = runner.state(vf.path)
+        view.runSteps(null)
+        wait("step 1's section while step 2 runs") {
+            PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+            st.progress?.sections?.containsKey(1) == true && view.inlayInfos().any { it.step == 1 && it.section != null }
+        }
+        WriteCommandAction.runWriteCommandAction(project) { myFixture.editor.document.insertString(0, "### wait inserted\n# @for 10ms\n\n") }
+        assertTrue("an edit during the run marks the view stale", view.stale)
+        com.intellij.openapi.application.ApplicationManager.getApplication().invokeAndWait { view.refresh() }
+        val text = myFixture.editor.document.text
+        fun headEnd(head: String) = text.indexOf(head) + head.length   // a result is painted at the end of its step's head line
+        val during = view.inlayInfos().filter { it.step != null }.associateBy { it.step }
+        assertEquals("only the two steps of the run have a result slot: ${during.keys}", setOf(1, 2), during.keys)
+        assertEquals("run step 1 ('wait first') is painted at its own head, not at the inserted one", headEnd("### wait first"), during[1]!!.offset)
+        assertTrue("and keeps its section: ${during[1]}", during[1]?.section?.text?.contains("wait first") == true)
+        assertEquals("run step 2 ('wait second') is painted at its head and is the one running", headEnd("### wait second"), during[2]!!.offset)
+        assertEquals("running", during[2]?.live?.status)
+        runner.cancel(vf.path)
+        wait("the cancelled run to end") { !runner.isRunning(vf.path) && st.snapshot != null }
+        com.intellij.openapi.application.ApplicationManager.getApplication().invokeAndWait { view.refresh() }
+        val after = view.inlayInfos().filter { it.step != null }.associateBy { it.step }
+        assertEquals(setOf(1, 2), after.keys)
+        assertTrue("'wait first' still has its own: ${after[1]}", after[1]?.section?.text?.contains("wait first") == true)
+    }
+
     /** F12: the history popup's actions, driven without a screen. */
     fun testTheHistoryMenuOpensInlineAndDiffsWithThePreviousRun() {
         val (vf, view) = open("### wait one\n# @for 50ms\n")

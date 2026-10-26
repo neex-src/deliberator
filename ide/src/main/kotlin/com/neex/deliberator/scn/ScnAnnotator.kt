@@ -11,15 +11,16 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
-import com.neex.deliberator.daemon.DaemonService
+
 
 /**
  * Parse errors of `scenario.parse {text}` as errors on their line. Runs on the platform's external-annotator
  * pass: a background thread, after the editor has been quiet for the auto-reparse delay, results dropped when
- * the document changed meanwhile. A daemon that is not there (or says no) gives no annotations, never a dialog.
- * The same call keeps the cached `scenario.kinds` current.
+ * the document changed meanwhile. It talks only over the connection the editor already knows ([ScnRegistry.knownClient],
+ * made when the `.scn` editor opened) with a budget of [ScnDaemon.TIMEOUT_MS]: it never starts a daemon and never hangs the
+ * pass. A daemon that is not there (or says no) gives no annotations, never a dialog. DumbAware: no index is used.
  */
-class ScnExternalAnnotator : ExternalAnnotator<ScnExternalAnnotator.Info, ScnExternalAnnotator.Result>() {
+class ScnExternalAnnotator : ExternalAnnotator<ScnExternalAnnotator.Info, ScnExternalAnnotator.Result>(), com.intellij.openapi.project.DumbAware {
     class Info(val file: PsiFile, val text: String, val path: String?)
     class Error(val line: Int, val message: String)
     class Result(val errors: List<Error>)
@@ -32,13 +33,13 @@ class ScnExternalAnnotator : ExternalAnnotator<ScnExternalAnnotator.Info, ScnExt
 
     override fun doAnnotate(info: Info): Result? {
         return try {
-            val conn = DaemonService.getInstance().ensure()
-            ScnRegistry.getInstance().load(conn)
+            // the connection the editor's warm-up made; none yet (or the daemon not there) = no annotations this pass
+            val client = ScnRegistry.getInstance().knownClient() ?: return null
             val args = JsonObject().apply {
                 addProperty("text", info.text)
                 info.path?.let { addProperty("path", it) }
             }
-            val r = ScnDaemon.call(conn.client, info.file.project, "scenario.parse", args)
+            val r = ScnDaemon.call(client, info.file.project, "scenario.parse", args)
             Result(errors(r.asJsonObject))
         } catch (e: com.intellij.openapi.progress.ProcessCanceledException) {
             throw e

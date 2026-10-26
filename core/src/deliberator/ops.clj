@@ -21,6 +21,7 @@
     workspace.open path ws                         -> {ws dir project created}   (the one op that creates a workspace on purpose)
     workspace.show ws                              -> {ws path workspace environments}   (reading ops: unknown ws is workspace/not-found)
     session.note name* text* session ws            -> {path}
+    explore.write name* text* if-missing ws        -> {path created written}   (<workspace project>/explore/<name>, for the IDE's explorer)
     session.start key* title ws                    -> {session path}   (reopens an existing key)
     session.end key ws                             -> {session path}   (default: the current session)
     session.list ws                                -> {sessions current}
@@ -31,7 +32,6 @@
     env.save name* record* check ws                -> {env kind path [account checked read-only]}   (the one way to write environments/<name>.edn: env/validate; a remote record is written only when its profile is in its account)
     env.create name* profile* account* region* read-only description endpoint targets check ws -> as env.save   (a remote record from flags; refuses an existing name)
     env.remove name* ws                            -> {removed kind path}   (not `local`)
-    env.save name* record* ws                      -> {env kind path}   (the one way to write environments/<name>.edn: env/validate)
     runtime.set path* value* ws                    -> {ws path keys value}   (one value of runtime.edn by key path, then sync-env)
     daemon.stop                                    -> {stopping pid runs}   (the daemon exits a moment later)
     runtime.sync-env ws                            -> {ws path}
@@ -264,6 +264,23 @@
     {:ws (store/ws-name ws) :path (str (store/path ws)) :workspace (workspace/load ws)
      :environments (env/names ws)}))
 
+(defn- explore-write
+  "Writes `text` as `<workspace project>/explore/<name>` (the daemon names the place, the IDE opens the path it gets);
+  `if-missing` leaves an existing file alone (the explorer's `explore-<env>.scn` is created once, then edited in the editor)."
+  [_ {:keys [name text if-missing] :as args}]
+  (let [ws (ws-of args)
+        _ (when-not (workspace-exists? ws) (fail :workspace/not-found (str "workspace " (store/ws-name ws) " does not exist")))
+        w (workspace/load ws)
+        project (or (:project w) (str (store/path ws "project")))
+        safe (-> (str name) (str/replace #"[^A-Za-z0-9._-]+" "-") (str/replace #"^[.-]+" ""))
+        _ (when (str/blank? safe) (fail :bad-args "explore.write: name is empty" :problems ["name"]))
+        f (.toPath (io/file project "explore" safe))
+        existed (exists? f)]
+    (if (and existed if-missing)
+      {:path (str f) :created false :written false}
+      (do (store/write-bytes-atomic! f (.getBytes (str text) "UTF-8"))
+          {:path (str f) :created (not existed) :written true}))))
+
 (defn- session-info [ws s] (when s {:session s :path (str (session/dir ws (:key s)))}))
 
 (defn- session-start [_ {:keys [key title] :as args}]
@@ -347,48 +364,6 @@
   [(store/ws-name ws) sess (:name e) (get-in e [:aws :account]) (get-in e [:aws :profile])])
 
 (defn- env-save [ctx {:keys [name record check] :as args}]
-  (let [ws (ws-of args)
-        _ (store/safe-name name)
-        r (-> (keywordize record) (assoc :name name))
-        r (cond-> r (string? (:kind r)) (update :kind keyword))
-        r (env/validate r)
-        sess (workspace/current-session ws)
-        ;; a remote record is written only for an account it really is in: the profile must exist, log in and say so
-        account (when (and (= :remote (:kind r)) (not (false? check)))
-                  (try (check-account! ws sess r)
-                       (catch Throwable t
-                         (env/forget! ws (:name r))      ; the client of the record that was refused is not kept
-                         (throw t))))
-        e (env/save! ws r)]
-    (when account
-      (swap! (or (get-in ctx [:daemon :checked]) (atom #{})) conj (checked-key ws sess e)))
-    (cond-> {:env (:name e) :kind (:kind e) :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}
-      (= :remote (:kind e)) (assoc :account (get-in e [:aws :account]) :checked (boolean account)
-                                   :read-only (env/read-only? e)))))
-
-(defn- env-create [ctx {:keys [name profile account region read-only description endpoint targets check] :as args}]
-  (let [ws (ws-of args)
-        rec (cond-> {:kind :remote
-                     :read-only (if (nil? read-only) true read-only)
-                     :aws (cond-> {:profile profile :region region :account account}
-                            endpoint (assoc :endpoint endpoint))
-                     :targets (or targets {})}
-              description (assoc :description description))]
-    (store/safe-name name)
-    (env/validate (assoc rec :name name))
-    (when (contains? (set (env/names ws)) name)
-      (fail :env/exists (str "environment " name " exists already")
-            :hint (str "`dlb env remove " name "` first, or `dlb env save` to replace the whole record") :env name))
-    (env-save ctx {:ws (:ws args) :name name :check check :record rec})))
-
-(defn- env-remove [ctx {:keys [name] :as args}]
-  (let [ws (ws-of args)
-        e (env/remove! ws name)]
-    (when-let [c (get-in ctx [:daemon :checked])]
-      (swap! c (fn [s] (into #{} (remove (fn [k] (and (= (store/ws-name ws) (first k)) (= (:name e) (nth k 2))))) s))))
-    {:removed (:name e) :kind (:kind e)
-     :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
-(defn- env-save [_ {:keys [name record] :as args}]
   (let [ws (ws-of args)
         _ (store/safe-name name)
         r (-> (keywordize record) (assoc :name name))
@@ -545,18 +520,11 @@
 (defn- verify-account!
   "Once per [session, environment, account, profile] in the daemon's life: the remote profile must be in the
   account the record says (`check-account!`). Every operation that loads a `:remote` environment calls it
-  "Once per [session, environment, account] in the daemon's life: the remote profile must be in the
-  account the record says (`aws/check`). Every operation that loads a `:remote` environment calls it
   (scenario.run, config.refresh, aws.discover, terraform.drift, logs.fetch, service.start --secrets-from);
   without a daemon map (a direct call) the check runs every time."
   [d ws sess e]
   (when (= :remote (:kind e))
     (let [k (checked-key ws sess e)
-          checked (or (:checked d) (atom #{}))]
-      (when-not (contains? @checked k)
-        (check-account! ws sess e)
-        (swap! checked conj k)))))
-    (let [k [(store/ws-name ws) sess (:name e) (get-in e [:aws :account])]
           checked (or (:checked d) (atom #{}))]
       (when-not (contains? @checked k)
         (check-account! ws sess e)
@@ -831,6 +799,11 @@
                                     :session {:type :string :doc "session key; default the current session"})}
    "workspace.show" {:fn workspace-show :class :read :args (ws-schema)
                      :doc "The workspace record, its path and its environments."}
+   "explore.write" {:fn explore-write :class :mutate
+                    :doc "Writes a text file of the explorer (a Terraform transcript, a drift report, the explore-<env>.scn the AWS tab appends to) as <workspace project>/explore/<name>; the daemon names the place, the answer is the path. if-missing: leave an existing file as it is."
+                    :args (ws-schema :name {:type :string :required true :doc "file name under explore/ (letters, digits, . _ - kept)"}
+                                     :text {:type :string :required true :doc "the text to write"}
+                                     :if-missing {:type :bool :doc "write only when the file does not exist yet"})}
    "session.start" {:fn session-start :class :mutate
                     :doc "Starts (or reopens) a session and makes it current."
                     :args (ws-schema :key {:type :string :required true :doc "session key, e.g. a ticket id"}
@@ -869,7 +842,6 @@
    "env.remove" {:fn env-remove :class :mutate
                  :doc "Deletes environments/<name>.edn (not `local`: it follows runtime.edn). What was fetched through it (config/<name>.edn, raw/, session runs) stays."
                  :args (ws-schema :name {:type :string :required true :doc "environment name"})}
-                                :record {:type :object :required true :doc "the environment record (kind, aws, targets, ...)"})}
    "runtime.set" {:fn runtime-set :class :mutate
                   :doc "Sets one value of the workspace's runtime.edn by key path (the file is created with the defaults when absent) and points the local environment at the result, as runtime.sync-env does; e.g. path containers,postgres,init value /repo/estate/sql. A path element of digits is a number key (ports)."
                   :args (ws-schema :path {:type :strings :required true :doc "key path into runtime.edn, e.g. containers,postgres,init"}

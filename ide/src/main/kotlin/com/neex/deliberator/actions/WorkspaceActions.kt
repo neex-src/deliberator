@@ -22,7 +22,7 @@ import java.nio.file.Path
 import javax.swing.JComponent
 
 /** Base of the project-bound actions: visible with a project, enabled when [enabledFor] says so; the work is [perform]. */
-abstract class WorkspaceAction : AnAction() {
+abstract class WorkspaceAction : AnAction(), com.intellij.openapi.project.DumbAware {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
 
     open fun enabledFor(svc: WorkspaceService): Boolean = svc.ws != null
@@ -157,7 +157,7 @@ class OperationsAction : WorkspaceAction() {
 }
 
 /** `deliberator.workspace.bind`: bind the current project to a workspace by name. */
-class BindWorkspaceAction : AnAction() {
+class BindWorkspaceAction : AnAction(), com.intellij.openapi.project.DumbAware {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
     override fun update(e: AnActionEvent) { e.presentation.isEnabledAndVisible = e.project != null }
     override fun actionPerformed(e: AnActionEvent) {
@@ -179,7 +179,7 @@ class CreateWorkspaceAction : WorkspaceAction() {
 }
 
 /** `deliberator.workspace.open`: open (creating, through `workspace.open`) the project directory of a workspace as a project. */
-class OpenWorkspaceAction : AnAction() {
+class OpenWorkspaceAction : AnAction(), com.intellij.openapi.project.DumbAware {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
     override fun actionPerformed(e: AnActionEvent) {
         val name = Messages.showInputDialog(e.project, "Workspace name:", "Open workspace", null, "default", null)?.trim() ?: return

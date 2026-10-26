@@ -192,6 +192,28 @@
         (is (= "héllo\n" (slurp f :encoding "UTF-8")))))
     (is (= :session/not-found (thrown-type #(call "session.note" {:name "x" :text "y" :session "nope"}))))))
 
+(deftest explore-write-puts-the-explorers-files-under-the-workspace-project
+  ;; R25: the IDE never writes a file itself; the daemon names <workspace project>/explore/<name>
+  (tu/with-temp-home
+    (is (= :workspace/not-found (thrown-type #(call "explore.write" {:name "drift-local.txt" :text "x"}))))
+    (let [opened (call "workspace.open" {})
+          r (call "explore.write" {:name "drift-local.txt" :text "# drift\nMISSING ssm /x\n"})]
+      (is (= (str (io/file (:project opened) "explore" "drift-local.txt")) (:path r)))
+      (is (true? (:created r)))
+      (is (= "# drift\nMISSING ssm /x\n" (slurp (:path r) :encoding "UTF-8")))
+      (let [again (call "explore.write" {:name "drift-local.txt" :text "replaced\n"})]
+        (is (false? (:created again)))
+        (is (= "replaced\n" (slurp (:path r) :encoding "UTF-8"))))
+      (testing "if-missing creates once and then leaves the user's edits alone"
+        (let [a (call "explore.write" {:name "explore-local.scn" :text "# header\n" :if-missing true})
+              b (call "explore.write" {:name "explore-local.scn" :text "# other\n" :if-missing true})]
+          (is (and (:created a) (:written a)))
+          (is (and (not (:created b)) (not (:written b)) (= (:path a) (:path b))))
+          (is (= "# header\n" (slurp (:path a) :encoding "UTF-8")))))
+      (testing "the name is sanitised, never a path"
+        (is (re-find #"/explore/etc-passwd$" (:path (call "explore.write" {:name "../../etc/passwd" :text "x"}))))
+        (is (= :bad-args (thrown-type #(call "explore.write" {:name "..." :text "x"}))))))))
+
 (deftest result-txt-is-progressive-while-a-run-is-going
   (tu/with-temp-home
     (call "workspace.open" {})

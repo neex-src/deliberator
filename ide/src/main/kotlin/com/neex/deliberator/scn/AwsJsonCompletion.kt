@@ -19,8 +19,9 @@ import com.intellij.util.ProcessingContext
 /**
  * Member names and enum values in the JSON body of an `aws` step, from the operation's request shape: required members
  * first (bold), then the rest, the ones already written left out. Only inside a `.scn` body, only for `### aws service.Op`.
+ * Reads the [AwsModels] and [AwsResources] caches only (a miss is fetched in the background for the next completion); no index: DumbAware.
  */
-class AwsJsonCompletion : CompletionContributor() {
+class AwsJsonCompletion : CompletionContributor(), com.intellij.openapi.project.DumbAware {
     init {
         extend(CompletionType.BASIC, PlatformPatterns.psiElement(), object : CompletionProvider<CompletionParameters>() {
             override fun addCompletions(parameters: CompletionParameters, context: ProcessingContext, result: CompletionResultSet) {

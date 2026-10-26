@@ -189,7 +189,10 @@ class ServiceProcessHandler(
     private val debugSession: Boolean,
 ) : ProcessHandler() {
     private val stopped = AtomicBoolean(false)
+    /** The follow in flight (cancelled by Stop). */
     @Volatile private var inFlight: DaemonClient.Call? = null
+    /** The `service.start` in flight: the daemon does not abort a start, so a Stop waits for its answer and then stops what it started. */
+    @Volatile private var starting: DaemonClient.Call? = null
     @Volatile var started: Started? = prestarted; private set
     private val pending = StringBuilder()
     private val record = StringBuilder()
@@ -222,10 +225,21 @@ class ServiceProcessHandler(
 
     private fun work() {
         val ops = ServiceOps.getInstance(project)
+        val svc = WorkspaceService.getInstance(project)
+        // the session the follow is kept in: asked for once, here, before anything starts (never from the follow loop)
+        try {
+            ScnRunner.getInstance(project).ensureSession(svc)
+        } catch (e: DaemonException) {
+            print("no session - " + e.readable())
+            finish(1)
+            return
+        }
+        if (stopped.get()) { finish(0); return }   // Stop came before anything started: nothing to start
         try {
             if (prestarted == null) {
                 print("> service.start $service")
-                val s = ops.start(service, startArgs) { ev -> print("  ${ev.name}${summary(ev.json)}") }
+                val s = ops.start(service, startArgs, { ev -> print("  ${ev.name}${summary(ev.json)}") }) { starting = it }
+                starting = null
                 started = s
                 print("service $service ${s.status}" + (s.container?.let { ", container $it" } ?: "") + (s.port?.let { ", port $it" } ?: "") + (s.jdwp?.let { ", JDWP $it" } ?: ""))
                 startArgs.get("secrets-from")?.takeIf { it.isJsonPrimitive }?.asString?.let { printSecretsNote(it) }
@@ -234,15 +248,24 @@ class ServiceProcessHandler(
                 startArgs.get("secrets-from")?.takeIf { it.isJsonPrimitive }?.asString?.let { printSecretsNote(it) }
             }
         } catch (e: DaemonException) {
+            starting = null
             print("service.start failed - " + e.readable())
             finish(1)
             return
         } catch (e: Exception) {
+            starting = null
             print("service.start failed - ${e.message}")
             finish(1)
             return
         }
-        if (stopped.get()) return
+        if (stopped.get()) {
+            // Stop came while the start was in flight (before the call was handed out, or the wait ran out): what the start made is stopped here
+            print("stopped while starting: stopping the service again")
+            print("> service.stop $service")
+            try { ops.stop(service); print("service $service stopped") } catch (e: Exception) { print("service.stop failed - ${e.message}") }
+            finish(0)
+            return
+        }
         tail()
     }
 
@@ -266,7 +289,6 @@ class ServiceProcessHandler(
         var failures = 0
         while (!stopped.get()) {
             try {
-                ScnRunner.getInstance(project).ensureSession(svc)
                 val a = JsonObject().apply {
                     addProperty("target", ServiceOps.logTarget(service))
                     addProperty("env", env)
@@ -303,17 +325,30 @@ class ServiceProcessHandler(
 
     private fun finish(code: Int) { if (!isProcessTerminated && !isProcessTerminating) notifyProcessTerminated(code) }
 
+    /**
+     * Stop: the follow is cancelled; a `service.start` still in flight is waited for (the daemon does not abort a start: a stop sent
+     * meanwhile would end before the container appears and leave it running), then `service.stop`. Whatever the stop answers, the
+     * process ends (never "terminating" for ever).
+     */
     override fun destroyProcessImpl() {
         stopped.set(true)
         inFlight?.cancel()
+        val start = starting
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
+                if (start != null) {
+                    print("stop requested while the service starts: waiting for service.start to answer")
+                    runCatching { start.terminal.get(START_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS) }
+                }
                 print("> service.stop $service")
                 val r = ServiceOps.getInstance(project).stop(service)
                 print("service $service ${r.get("status")?.asString ?: "stopped"}")
                 notifyProcessTerminated(0)
             } catch (e: DaemonException) {
                 print("service.stop failed - " + e.readable())
+                notifyProcessTerminated(1)
+            } catch (e: Exception) {
+                print("service.stop failed - $e")
                 notifyProcessTerminated(1)
             }
         }
@@ -334,6 +369,8 @@ class ServiceProcessHandler(
     companion object {
         @Volatile internal var retryMs = 5000L
         private const val RECORD_MAX = 200_000
+        /** How long a Stop waits for a `service.start` in flight (build + create + health) before stopping anyway. */
+        private const val START_WAIT_MS = 180_000L
     }
 }
 

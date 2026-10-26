@@ -241,6 +241,7 @@ class ServicesTest : BasePlatformTestCase() {
     fun testStartingAServiceTheTopologyTurnedOffEndsTheProcessWithTheTypedError() {
         adoptFixture()
         bg { ops().setTopology("ok", "off") }
+        bg { svc.startSession("T-6", null) }
         val h = ServiceProcessHandler(project, "ok", "local", JsonObject(), null, false)
         val text = captured(h)
         h.begin()
@@ -406,6 +407,28 @@ class ServicesTest : BasePlatformTestCase() {
         assertEquals(0, h.exitCode)
         assertEquals("stopped", bg { svc.refreshNow() }.services.single { it.name == "stub" }.status)
         assertNull(ServiceConsoles.getInstance(project).of("stub"))
+    }
+
+    /**
+     * R16: a Stop pressed while `service.start` is still in flight waits for the start's answer and stops what it made; the process ends
+     * (never "terminating" for ever) and no container is left running.
+     */
+    fun testStopWhileTheServiceStartsStopsWhatTheStartMadeAndEndsTheProcess() {
+        val engine = bg { svc.refreshNow() }.engineReachable
+        if (engine != true) { println("SKIPPED testStopWhileTheServiceStarts: the container engine is not reachable (${svc.model.engineHint})"); return }
+        val dir = buildStub(daemon.home.resolve("stub")) ?: run { println("SKIPPED testStopWhileTheServiceStarts: this JVM has no Java compiler"); return }
+        Files.writeString(wsDir.resolve("runtime.edn"), """{:network "deliberator" :containers {} :services {"stub" {:ports {8080 19181 5005 19185}}}}""")
+        bg { ops().adopt(dir.toString()) }
+        bg { svc.startSession("T-6", null) }
+        val h = ServiceProcessHandler(project, "stub", "local", JsonObject(), null, false)
+        captured(h)
+        h.begin()
+        Thread.sleep(400)   // the start is in flight: the build and the container take seconds
+        h.destroyProcess()
+        wait("Stop ends the process although the start was still going", 180) { h.isProcessTerminated }
+        val t = h.transcript()
+        assertTrue(t, t.contains("> service.stop stub"))
+        assertFalse(t, bg { svc.refreshNow() }.services.single { it.name == "stub" }.status == "running")
     }
 
     fun testADebugSessionsStopDetachesAndLeavesTheServiceRunning() {

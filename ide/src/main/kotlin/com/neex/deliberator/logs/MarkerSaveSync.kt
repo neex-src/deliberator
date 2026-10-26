@@ -11,7 +11,11 @@ class MarkerSaveSync : FileDocumentManagerListener {
         val gutters = EditorFactory.getInstance().getEditors(document).mapNotNull { MarkerGutter.of(it) }.take(1)
         if (gutters.isEmpty()) return
         ApplicationManager.getApplication().executeOnPooledThread {
-            try { gutters.forEach { it.syncMoved() } } catch (_: Exception) {}
+            try { gutters.forEach { it.syncMoved() } } catch (e: Exception) { LOG.warn("markers of ${document} were not re-saved after a save: $e") }
         }
+    }
+
+    private companion object {
+        val LOG = com.intellij.openapi.diagnostic.logger<MarkerSaveSync>()
     }
 }

@@ -37,6 +37,11 @@ class ServicesPanel(private val project: Project) : JPanel(BorderLayout()), UiDa
         PopupHandler.installPopupMenu(table, group, ActionPlaces.POPUP)
         svc.addListener(this, ::render)
         render(svc.model)
+        // the Workspace tab's own tick runs only while that tab shows: this tab keeps itself current (every 15 s while showing), demo-m3 §9 item 1
+        var ticks = 0
+        val timer = javax.swing.Timer(5000) { if (isShowing && ++ticks % 3 == 0) svc.refresh() }
+        timer.start()
+        com.intellij.openapi.util.Disposer.register(this) { timer.stop() }
     }
 
     /** The selected row (the data of the actions). */
