@@ -97,6 +97,7 @@
             [deliberator.env :as env]
             [deliberator.logfetch :as logfetch]
             [deliberator.awsdiscover :as awsdiscover]
+            [deliberator.ci :as ci]
             [deliberator.hcl :as hcl]
             [deliberator.tfdrift :as tfdrift]
             [deliberator.tflocal :as tflocal]
@@ -132,6 +133,7 @@
   [:hint :known :problems :line :token :summary :step :confirmations :result :expires :target :env
    :role :key :sha :schema :account :expected :found :log :exit :service :lines :errors
    :of :names :sources :output :endpoint :command :ref :cycle :edges :file])
+   :of :names :sources :output :endpoint :command :ref :cycle :edges :file :path :repo :branch])
 
 (defn error-map
   "The wire error of a throwable: `{:type :message [:hint ...]}`."
