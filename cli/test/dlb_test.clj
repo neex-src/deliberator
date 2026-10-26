@@ -351,8 +351,6 @@
     (is (false? (:ok m)))
     (is (= "scenario/not-found" (get-in m [:error :type])))))
 
-(defmethod clojure.test/report :skip [m] (println "SKIP" (:message m)))
-
 (deftest plain-scenario-when-the-runtime-is-up
   ;; The throwaway test home has no runtime and no Postgres target, so this can only run against a
   ;; real estate: ESTATE_WS=<ws> and DELIBERATOR_HOME=<its home> (bb estate:up --ws <ws>).
