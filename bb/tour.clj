@@ -5,6 +5,10 @@
   then one line per chapter (ok/FAIL, the result trailer, the run directory) and the exit code: 1 when any chapter was not green.
   The daemon is stopped at the end when this task started it; the estate stays up unless `--down`.
 
+  Chapter 11 runs against `tour-remote`, a remote-shaped record at the tour's Floci: its profile `tour-remote` (fake keys, the
+  emulator's) is written to `<home>/tour-aws-credentials`, which the daemon this task starts gets as `AWS_SHARED_CREDENTIALS_FILE`
+  (a daemon that is already running keeps its own environment; chapter 11's first step says so).
+
   Environment, all optional: `DELIBERATOR_HOME` (default `<repo>/.scratch/tour-home`, the home of `bb tour:ide`), `DELIBERATOR_JAR` (default
   core/target/deliberatord.jar, built when missing), `DLB_DAEMON_ARGS` (default `--idle-minutes 15`). Run from the repository
   root, as `bb` does."
@@ -23,6 +27,14 @@
   "$DELIBERATOR_HOME, else `<repo>/.scratch/tour-home`: the same home `bb tour:ide` opens, so the IDE sees what the test ran."
   []
   (str (fs/absolutize (or (System/getenv "DELIBERATOR_HOME") ".scratch/tour-home"))))
+
+(defn- credentials-file!
+  "`<home>/tour-aws-credentials` with the profile chapter 11's record uses (Floci takes any keys); -> its path."
+  [home]
+  (let [f (fs/path home "tour-aws-credentials")]
+    (fs/create-dirs home)
+    (spit (str f) "[tour-remote]\naws_access_key_id = test\naws_secret_access_key = test\n")
+    (str f)))
 
 (defn- today [] (.format (java.time.LocalDate/now java.time.ZoneOffset/UTC) (java.time.format.DateTimeFormatter/BASIC_ISO_DATE)))
 
@@ -68,7 +80,8 @@
     (try
       (let [env {"DELIBERATOR_HOME" home
                  "DELIBERATOR_JAR" (or (System/getenv "DELIBERATOR_JAR") (str (fs/absolutize "core/target/deliberatord.jar")))
-                 "DLB_DAEMON_ARGS" (or (System/getenv "DLB_DAEMON_ARGS") "--idle-minutes 15")}
+                 "DLB_DAEMON_ARGS" (or (System/getenv "DLB_DAEMON_ARGS") "--idle-minutes 15")
+                 "AWS_SHARED_CREDENTIALS_FILE" (credentials-file! home)}
             session (str "TOUR-" (today))
             _ (p/shell {:extra-env env :out :string} dlb "workspace" "open" ws)
             _ (p/shell {:extra-env env :out :string} dlb "session" "start" session "--ws" ws)
