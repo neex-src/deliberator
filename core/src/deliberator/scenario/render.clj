@@ -26,7 +26,8 @@
   :duration, :instant or :id (`<duration>` `<instant>` `<id>`); `(attempt n)`; everywhere in the
   text: the run directory path, the run id (hence step correlation ids), the values of volatile
   vars (`{{name}}`), values of :id/:instant facts of that step, and any UUID or ISO-8601 instant
-  (`<uuid>` `<instant>`)."
+  (`<uuid>` `<instant>`); epoch-second dates (`CreationDate`, `LastModificationDate`, `LastModifiedDate`) and `Version`
+  numbers of AWS documents."
   (:require [clojure.string :as str]
             [deliberator.store :as store])
   (:import (java.nio.charset StandardCharsets)
@@ -63,6 +64,9 @@
             (str/replace uuid-re "<uuid>")
             ;; SQS hashes the attribute values, which carry the run's ids: it changes with them
             (str/replace #"(?<=\"MD5OfMessageAttributes\":\")[0-9a-f]{32}" "<md5>")
+            ;; epoch-second dates and the version counter of AWS documents (Scheduler, SSM): a new run makes new ones
+            (str/replace #"(?<=\"(?:CreationDate|LastModificationDate|LastModifiedDate)\":)[0-9.eE+]+" "<epoch>")
+            (str/replace #"(?<=\"Version\":)\d+" "<n>")
             (str/replace instant-re "<instant>"))))))
 
 (defn- show [v]

@@ -13,7 +13,7 @@
             [deliberator.podman :as podman]
             [deliberator.runtime :as runtime]
             [deliberator.service.description :as description]
-            [deliberator.steps.dynamodb] [deliberator.steps.eventbridge] [deliberator.steps.http]
+            [deliberator.steps.awscall] [deliberator.steps.dynamodb] [deliberator.steps.eventbridge] [deliberator.steps.http]
             [deliberator.steps.lambda] [deliberator.steps.logs] [deliberator.steps.scheduler]
             [deliberator.steps.sql] [deliberator.steps.sqs] [deliberator.steps.wait]
             [deliberator.store :as store]))

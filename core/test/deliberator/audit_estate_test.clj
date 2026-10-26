@@ -16,7 +16,9 @@
             [deliberator.scenario.engine :as engine]
             [deliberator.scenario.render :as render]
             [deliberator.session :as session]
+            [deliberator.steps.awscall]
             [deliberator.steps.dynamodb]
+            [deliberator.steps.scheduler]
             [deliberator.steps.http]
             [deliberator.steps.logs]
             [deliberator.steps.sql]
@@ -51,12 +53,12 @@
             r2 (run-order! ws e)]
         (testing "a green order, all checks"
           (is (= :ok (:status r1)) (head (:text r1)))
-          (is (= 9 (:steps r1)))
-          (is (= 21 (:checks r1)))
+          (is (= 20 (:steps r1)))
+          (is (= 42 (:checks r1)))
           (is (= 0 (:failed-checks r1))))
         (testing "one step directory per step, request/response files are hard links into raw/"
           (let [steps (.listFiles (io/file (get-in r1 [:paths :run]) "steps"))]
-            (is (= 9 (count steps)))
+            (is (= 20 (count steps)))
             (doseq [d steps
                     f (.listFiles ^java.io.File d)
                     :when (re-matches #"(request|response)\..+" (.getName f))
@@ -72,9 +74,9 @@
             (let [r3 (run-order! ws e)
                   run (store/read-edn (io/file (get-in r3 [:paths :run]) "run.edn"))]
               (is (= :failed (:status r3)))
-              (is (= 9 (count (:steps run))) "every step ran or was reported")
+              (is (= 20 (count (:steps run))) "every step ran or was reported")
               (is (pos? (:failed-checks r3)))
-              (is (re-find #"(?m)^FAILED \d+/21$" (:text r3)) (head (:text r3)))
+              (is (re-find #"(?m)^FAILED \d+/42$" (:text r3)) (head (:text r3)))
               (is (re-find #"✗ \$\.status\.S == ACKED|✗ until \$\.status\.S == ACKED" (:text r3))
                   "the ack assertion is named")
               (is (not (str/includes? (:text r3) "Exception")) (head (:text r3)))

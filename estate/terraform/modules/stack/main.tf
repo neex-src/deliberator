@@ -12,7 +12,10 @@ variable "prefix" {
   type    = string
   default = "estate"
 }
-variable "lambda_source_dir" { type = string }
+variable "lambda_dir" {
+  type        = string
+  description = "estate/lambda: one directory per function (logger, scheduler-create, ecs-scale)."
+}
 variable "service_a_base_url" {
   type        = string
   default     = "http://localhost:8081"
@@ -139,7 +142,7 @@ resource "aws_sqs_queue_policy" "events_from_rule" {
 # --- lambda ---
 data "archive_file" "lambda" {
   type        = "zip"
-  source_dir  = var.lambda_source_dir
+  source_dir  = "${var.lambda_dir}/logger"
   output_path = "${path.module}/.build/logger.zip"
 }
 

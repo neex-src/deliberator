@@ -1,9 +1,13 @@
 # One order through the whole estate: inbox queue -> service A (DynamoDB) -> publish -> bus ->
 # service B (ack in A, row in Postgres) and the Lambda logger. One id and one correlation id run
-# through every step; the three log steps are armed before step 1 and filtered by that correlation.
+# through every step; the log steps are armed before step 1 and filtered by that correlation.
+# The second half is the chain: HTTP API -> scheduler-create (Lambda) -> a one-off Scheduler schedule -> ecs-scale (Lambda)
+# -> ECS service scaled + SSM parameter put. Checked from the outside: the schedule exists, the service and the parameter
+# change, the schedule deletes itself; the correlation id reaches both Lambdas' logs.
 # @env local
 # @var corr = {{correlation}}
 # @var msg = ord-{{uuid}}
+# @var param = /estate/chain/desired-count
 
 ### sqs send queue/inbox send-order
 # @attr id={{msg}}
@@ -44,6 +48,62 @@ select message_id, correlation, a_status from acks where message_id = '{{msg}}' 
 # @assert $.correlation == {{corr}}
 GET {{service/a}}/messages/{{msg}}
 
+### http api-log
+# The HTTP API in front of the logger Lambda.
+# @assert status == 200
+# @assert $.ok == true
+# @assert $.correlation == {{corr}}
+# @assert $.path == /log
+GET {{api/main}}/log
+X-Correlation-Id: {{corr}}
+
+### aws ssm.PutParameter chain-reset-param
+# Start from a known value, so that a second run of this file proves the chain again.
+{"Name": "{{param}}", "Value": "1", "Type": "String", "Overwrite": true}
+
+### aws ecs.UpdateService chain-reset-service
+# @assert $.service.deploymentController.type == CODE_DEPLOY
+{"cluster": "estate", "service": "estate-service-a", "desiredCount": 1}
+
+### http chain-schedule
+# POST /schedule -> scheduler-create creates the one-off schedule, firing in 8 s.
+# @assert status == 202
+# @assert $.group == estate-chain
+# @assert $.schedule == chain-{{msg}}
+# @assert $.input.desiredCount == 3
+# @assert $.input.correlation == {{corr}}
+POST {{api/main}}/schedule
+X-Correlation-Id: {{corr}}
+Content-Type: application/json
+
+{"delaySeconds": 8, "desiredCount": 3, "name": "chain-{{msg}}"}
+
+### scheduler list scheduler/chain schedule-listed
+# @assert count >= 1
+
+### scheduler get chain-{{msg}} schedule-exists
+# The schedule is there, enabled, aimed at ecs-scale, and deletes itself after it ran.
+# @group estate-chain
+# @assert $.State == ENABLED
+# @assert $.ScheduleExpression matches /^at\(20/
+# @assert $.Target.Arn matches /:function:estate-ecs-scale$/
+# @assert $.ActionAfterCompletion == DELETE
+
+### aws ssm.GetParameter chain-param
+# The config update: ecs-scale put the new value.
+# @until $.Parameter.Value == 3 within 40s
+{"Name": "{{param}}"}
+
+### aws ecs.DescribeServices chain-scale
+# The scale: the service now wants 3 tasks.
+# @assert $.services[0].desiredCount == 3
+# @assert $.services[0].deploymentController.type == CODE_DEPLOY
+{"cluster": "estate", "services": ["estate-service-a"]}
+
+### scheduler list scheduler/chain schedule-gone
+# The one-off schedule deleted itself after firing.
+# @until count == 0 within 30s
+
 ### logs log/service-a service-a-log
 # @filter {{corr}}
 # @for 3s
@@ -57,4 +117,16 @@ GET {{service/a}}/messages/{{msg}}
 ### logs log/logger lambda-log
 # @filter {{corr}}
 # @for 8s
+# @assert lines >= 1
+
+### logs log/scheduler-create scheduler-create-log
+# The window starts when the step is armed (before step 1); the Lambda runs at step 10, later on a slow run (a service just restarted).
+# @filter {{corr}}
+# @for 20s
+# @assert lines >= 1
+
+### logs log/ecs-scale ecs-scale-log
+# Armed before step 1 like the others; the schedule fires about 8 s into the run, so the window is longer.
+# @filter {{corr}}
+# @for 25s
 # @assert lines >= 1

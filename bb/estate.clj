@@ -142,6 +142,27 @@
            :targets (:targets local)}]
     (daemon-client/call! "env.save" {:ws ws :name "local2" :record e})))
 
+(defn- tf-outputs
+  "`terraform output -json` of the Floci root as {name value}."
+  []
+  (into {} (for [[k v] (json/parse-string (:out (p/shell {:dir tf-dir :env (tf-env) :out :string}
+                                                           "terraform" "output" "-json" "-no-color")))]
+             [k (get v "value")])))
+
+(defn- write-chain-targets!
+  "The targets the chain adds to the workspace's `local` environment, from the Terraform outputs: the HTTP API
+  (`api/main`, Floci's execute-api path for the `$default` stage), the two Lambdas and their log groups, the schedule group.
+  Through the daemon (`env.save`, whole record), like `local2`."
+  [ws out]
+  (let [local (:env (daemon-client/call! "env.describe" {:ws ws :name "local"}))
+        fns {"scheduler-create" (get out "scheduler_create_function") "ecs-scale" (get out "ecs_scale_function")}
+        targets (merge {"api/main" (str (get-in local [:aws :endpoint]) "/_aws/execute-api/" (get out "api_id") "/%24default")
+                        "scheduler/chain" (get out "schedule_group")}
+                       (into {} (for [[k f] fns] [(str "function/" k) f]))
+                       (into {} (for [[k f] fns] [(str "log/" k) {:cloudwatch (str "/aws/lambda/" f)}])))]
+    (daemon-client/call! "env.save" {:ws ws :name "local"
+                                     :record (update local :targets merge (update-keys targets keyword))})))
+
 (defn deploy [args]
   (let [ws (ws-of args)
         auto (if (some #{"--auto-publish"} args) "true" "false")]
@@ -155,6 +176,7 @@
                                           "-var" (str "service_a_url=http://" (container ws "service-a") ":8081")
                                           "-var" (str "db_url=jdbc:postgresql://" (container ws "postgres") ":5432/deliberator"))))
     (write-local2! (ws-of args))
+    (step "chain targets in the local environment" #(write-chain-targets! (ws-of args) (tf-outputs)))
     (step "adopt services"
           (fn []
             (let [out (json/parse-string (:out (p/shell {:dir tf-dir :env (tf-env) :out :string}
