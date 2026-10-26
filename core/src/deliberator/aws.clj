@@ -381,6 +381,10 @@
                     (:cognitect.anomalies/message r)
                     (some-> t ex-message) (str cat))
        :hint (or (:hint (credential-bridge-error env r)) (hint env cat code service op-name))
+       :message (or (:message r) (:Message r) (get-in r [:ErrorResponse :Error :Message]) (get-in r [:Error :Message])
+                    (:cognitect.anomalies/message r)
+                    (some-> t ex-message) (str cat))
+       :hint (hint env cat code service op-name)
        :service service :op op-name :env (:name env) :raw raw}
       {::error true})))
 

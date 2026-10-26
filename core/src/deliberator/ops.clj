@@ -31,6 +31,7 @@
     env.save name* record* check ws                -> {env kind path [account checked read-only]}   (the one way to write environments/<name>.edn: env/validate; a remote record is written only when its profile is in its account)
     env.create name* profile* account* region* read-only description endpoint targets check ws -> as env.save   (a remote record from flags; refuses an existing name)
     env.remove name* ws                            -> {removed kind path}   (not `local`)
+    env.save name* record* ws                      -> {env kind path}   (the one way to write environments/<name>.edn: env/validate)
     runtime.set path* value* ws                    -> {ws path keys value}   (one value of runtime.edn by key path, then sync-env)
     daemon.stop                                    -> {stopping pid runs}   (the daemon exits a moment later)
     runtime.sync-env ws                            -> {ws path}
@@ -387,6 +388,12 @@
       (swap! c (fn [s] (into #{} (remove (fn [k] (and (= (store/ws-name ws) (first k)) (= (:name e) (nth k 2))))) s))))
     {:removed (:name e) :kind (:kind e)
      :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
+(defn- env-save [_ {:keys [name record] :as args}]
+  (let [ws (ws-of args)
+        r (-> (keywordize record) (assoc :name name))
+        r (cond-> r (string? (:kind r)) (update :kind keyword))
+        e (env/save! ws r)]
+    {:env (:name e) :kind (:kind e) :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
 
 (defn- runtime-set [_ {:keys [path value] :as args}]
   (runtime/set-config! (ws-of args)
@@ -502,6 +509,8 @@
 (defn- verify-account!
   "Once per [session, environment, account, profile] in the daemon's life: the remote profile must be in the
   account the record says (`check-account!`). Every operation that loads a `:remote` environment calls it
+  "Once per [session, environment, account] in the daemon's life: the remote profile must be in the
+  account the record says (`aws/check`). Every operation that loads a `:remote` environment calls it
   (scenario.run, config.refresh, aws.discover, terraform.drift, logs.fetch, service.start --secrets-from);
   without a daemon map (a direct call) the check runs every time."
   [d ws sess e]
@@ -511,6 +520,20 @@
       (when-not (contains? @checked k)
         (check-account! ws sess e)
         (swap! checked conj k)))))
+    (let [k [(store/ws-name ws) sess (:name e) (get-in e [:aws :account])]
+          checked (or (:checked d) (atom #{}))]
+      (when-not (contains? @checked k)
+        (let [r (aws/check {:ws ws :session sess} e)]
+          (cond
+            (:ok? r) (swap! checked conj k)
+            (:error r) (fail :check-failed (str "cannot verify the account of environment " (:name e) ": "
+                                                (get-in r [:error :message]))
+                             :hint (get-in r [:error :hint]) :env (:name e))
+            :else (fail :account-mismatch
+                        (str "environment " (:name e) " expects account " (:expected r)
+                             " but the profile is in account " (:account r))
+                        :expected (:expected r) :found (:account r) :env (:name e)
+                        :hint "log in to the right account (aws sso login) or fix the record")))))))
 
 
 (declare runs-dir run-edn)
@@ -819,6 +842,7 @@
    "env.remove" {:fn env-remove :class :mutate
                  :doc "Deletes environments/<name>.edn (not `local`: it follows runtime.edn). What was fetched through it (config/<name>.edn, raw/, session runs) stays."
                  :args (ws-schema :name {:type :string :required true :doc "environment name"})}
+                                :record {:type :object :required true :doc "the environment record (kind, aws, targets, ...)"})}
    "runtime.set" {:fn runtime-set :class :mutate
                   :doc "Sets one value of the workspace's runtime.edn by key path (the file is created with the defaults when absent) and points the local environment at the result, as runtime.sync-env does; e.g. path containers,postgres,init value /repo/estate/sql. A path element of digits is a number key (ports)."
                   :args (ws-schema :path {:type :strings :required true :doc "key path into runtime.edn, e.g. containers,postgres,init"}
