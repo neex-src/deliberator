@@ -63,7 +63,9 @@
   (let [e {:targets {:log/service-a {:cloudwatch "/ecs/service-a"} :log/b {:container "x"}}}]
     (is (= "/ecs/service-a" (ins/resolve-group e "log/service-a")))
     (is (= "/aws/lambda/f" (ins/resolve-group e "/aws/lambda/f")))
-    (is (= "log/b" (ins/resolve-group e "log/b")) "a target that is not a CloudWatch group is taken as a name")))
+    (let [ex (try (ins/resolve-group e "log/b") nil (catch clojure.lang.ExceptionInfo x (ex-data x)))]
+      (is (= :insights/bad-arg (:type ex)) "a container log is not a CloudWatch group")
+      (is (str/includes? (:hint ex) "{:cloudwatch")))))
 
 (deftest the-window-is-an-instant-or-a-duration-ago
   (let [now (java.time.Instant/parse "2026-10-26T12:00:00Z")]

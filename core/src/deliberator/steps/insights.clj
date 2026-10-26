@@ -11,8 +11,8 @@
   `response.json` is that document and the step's display is the result text with the bytes scanned line. A query that
   does not end `Complete` (failed, stopped over the step's budget) is a step ERROR; the budget is the step's timeout
   (`@timeout`, default 10 minutes) minus two seconds, after which the query is stopped, not abandoned; the partial text is still written.
-  The step needs a remote or emulated environment that answers CloudWatch Logs; Floci's Insights is a stub that answers
-  `Failed`, so against `local` expect an ERROR with the service's words."
+  It runs against any environment that answers CloudWatch Logs Insights: a remote account, or Floci (which answers `Complete`
+  with the rows of the group and zero statistics; the polling states, the budget and the stop are only seen on a real account)."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [deliberator.insights :as ins]
@@ -41,7 +41,7 @@
                       {:type :insights/not-complete :request-bytes req :request-ext "txt" :response-bytes resp :response-ext "json"
                        :hint (str "the partial text is in " (:path r) "; "
                                   (case (:status r)
-                                    "Failed" "a malformed query fails at GetQueryResults; Floci's Insights is a stub that always answers Failed"
+                                    "Failed" "a query the service accepted and then could not run; the raw GetQueryResults response says why"
                                     "BudgetExceeded" "raise the step's @timeout or narrow @since and the groups"
                                     "see the raw GetQueryResults response"))}))
       {:facts {"bytes-scanned" (get stats "bytesScanned" 0) "records-matched" (get stats "recordsMatched" 0)

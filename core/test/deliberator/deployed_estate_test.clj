@@ -41,7 +41,8 @@
                                                              :environment [{:name "M4_LOOKS_SECRET" :value "hunter2-m4-local"}]}]}))
           td2 (:taskDefinition (inv :RegisterTaskDefinition
                                     {:family family
-                                     :containerDefinitions [{:name "app" :image "registry.example/app:1.1.0" :memory 128 :essential true}]}))]
+                                     :containerDefinitions [{:name "app" :image "registry.example/app:1.1.0" :memory 128 :essential true
+                                                             :environment [{:name "M4_LOOKS_SECRET" :value "hunter2-m4-local"}]}]}))]
       (try
         (inv :CreateService {:cluster cluster :serviceName "m4-svc" :taskDefinition (str family ":" (:revision td2)) :desiredCount 0})
         (testing "nothing is cached before the first refresh: show says how to fetch"
@@ -106,7 +107,8 @@
         (if-not fam
           (fu/skip! (fu/current-test) "the estate has no service-a task definition on this Floci")
           (try
-            (ok! (aws/invoke! {:ws "default"} local :ecs :CreateService {:cluster "estate" :serviceName "m4-estate-a" :taskDefinition fam :desiredCount 0}) "CreateService")
+            (ok! (aws/invoke! {:ws "default"} local :ecs :CreateService {:cluster "estate" :serviceName "m4-estate-a" :taskDefinition fam :desiredCount 0
+                                                                                  :launchType "FARGATE" :networkConfiguration {:awsvpcConfiguration {:subnets ["subnet-m4"]}}}) "CreateService")
             (call "deployed.refresh" {:ws "default" :env "dlbremote"})
             (let [svc (first (filter #(= "m4-estate-a" (:name %)) (:services (d/cached "default" "dlbremote"))))]
               (is (= "estate" (:cluster svc)))
