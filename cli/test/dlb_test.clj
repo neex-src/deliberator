@@ -353,14 +353,26 @@
 
 (deftest plain-scenario-when-the-runtime-is-up
   ;; The throwaway test home has no runtime and no Postgres target, so this can only run against a
-  ;; real estate: ESTATE_WS=<ws> and DELIBERATOR_HOME=<its home> (bb estate:up --ws <ws>).
+  ;; real estate: ESTATE_WS=<ws> and DELIBERATOR_HOME=<its home> (bb estate:up --ws <ws>). The scenario is the plain kinds on
+  ;; the estate's own targets (plain.scn names the targets of steps_test's private environment: log/pg, service/floci).
   (let [ws (System/getenv "ESTATE_WS")
         home (System/getenv "DELIBERATOR_HOME")]
     (if (or (str/blank? ws) (str/blank? home))
       (clojure.test/do-report {:type :skip :message "plain-scenario-when-the-runtime-is-up: set ESTATE_WS=<ws> and DELIBERATOR_HOME=<its home> after bb estate:up"})
       (try
         (dlb home "session" "start" "PLAIN" "--ws" ws)
-        (let [r (dlb home "run" (str root "/core/test/fixtures/plain.scn") "--ws" ws)]
+        (let [scn (str (fs/create-temp-file {:prefix "estate-plain" :suffix ".scn"}))
+              _ (spit scn (str "# the plain kinds in one run, on the targets of the estate's local environment\n"
+                               "# @env local\n# @var rowId = row-{{uuid}}\n\n"
+                               "### logs log/service-a service-a-log\n# @for 1s\n\n"
+                               "### sql db/main make-table\ncreate table if not exists plain_t (id text primary key, note text, n int)\n\n"
+                               "### http health\n# @assert status == 200\n# @assert header.content-type contains json\n# @assert bytes > 0\n"
+                               "GET {{service/a}}/actuator/health\nAccept: application/json\n\n"
+                               "### sql db/main insert\n# @assert updated == 1\ninsert into plain_t values ('{{rowId}}', 'first note', 7) /* {{correlation}} */\n\n"
+                               "### sql db/main select\n# @assert rows == 1\n# @assert col.note == first note\n# @assert col.n == 7\n"
+                               "select id, note, n from plain_t where id = '{{rowId}}'\n\n"
+                               "### wait pause\n# @for 1s\n"))
+              r (dlb home "run" scn "--ws" ws)]
           (is (zero? (:exit r)) (str (:out r) (:err r)))
           (is (re-find #"▶ 001" (:out r)))
           (is (some #(str/starts-with? % "OK ") (str/split-lines (:out r))) "the four plain kinds pass against the estate"))
@@ -428,8 +440,7 @@
   "Runs argv with DELIBERATOR_NO_DEFAULT_HOME set and no home anywhere. -> {:exit :out :err}"
   [& argv]
   (select-keys (apply p/shell {:out :string :err :string :continue true
-                               :extra-env {"DELIBERATOR_NO_DEFAULT_HOME" "1"}
-                               :remove-env ["DELIBERATOR_HOME"]}
+                               :env (-> (into {} (System/getenv)) (dissoc "DELIBERATOR_HOME") (assoc "DELIBERATOR_NO_DEFAULT_HOME" "1"))}
                       argv)
                [:exit :out :err]))
 
