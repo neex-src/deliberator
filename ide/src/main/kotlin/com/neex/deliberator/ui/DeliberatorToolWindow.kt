@@ -46,6 +46,10 @@ class DeliberatorToolWindowFactory : ToolWindowFactory, DumbAware {
         val awsContent = ContentFactory.getInstance().createContent(aws, "AWS", false)
         awsContent.setDisposer(aws)
         toolWindow.contentManager.addContent(awsContent)
+        val envs = com.neex.deliberator.environments.EnvironmentsPanel(project)
+        val envsContent = ContentFactory.getInstance().createContent(envs, "Environments", false)
+        envsContent.setDisposer(envs)
+        toolWindow.contentManager.addContent(envsContent)
     }
 }
 

@@ -348,4 +348,58 @@ class ConfigChainTest : BasePlatformTestCase() {
         val ts = targets(refsAt("TABLE_NAME").filterIsInstance<TemplateEntryReference>().single())
         assertEquals(listOf(14, 282), ts.map { (it as FileLine).line })
     }
+
+    // --- M4.6: a remote environment ------------------------------------------------------------------------
+
+    /** A remote record written offline (`check false`); the profile does not exist, so anything that asks AWS fails readably. */
+    private fun saveRemote(name: String) = bg {
+        WorkspaceService.getInstance(project).call("env.save", JsonObject().apply {
+            addProperty("name", name); addProperty("check", false)
+            add("record", com.google.gson.JsonParser.parseString(
+                """{"kind":"remote","read-only":true,"aws":{"profile":"m4-no-such-profile","region":"eu-central-1","account":"123456789012"},"targets":{}}""").asJsonObject)
+        })
+    }
+
+    fun testAParameterTheSnapshotLacksOffersTheRefreshAsAQuickFix() {
+        writeSnapshot()
+        loadAll()
+        open("q/src/main/resources/application.properties")
+        myFixture.enableInspections(ConfigChainInspection::class.java)
+        val gone = deliberator().first { it.word().removePrefix("\${") == "GONE_PARAM" }
+        myFixture.editor.caretModel.moveToOffset(gone.startOffset + 3)
+        assertTrue("Refresh is offered on the missing parameter", myFixture.filterAvailableIntentions("Refresh the config snapshot of local").isNotEmpty())
+        val noEntry = deliberator().first { it.word().removePrefix("\${") == "NO_ENTRY" }
+        myFixture.editor.caretModel.moveToOffset(noEntry.startOffset + 3)
+        assertTrue("a placeholder without a task definition entry is not a stale snapshot", myFixture.filterAvailableIntentions("Refresh the config snapshot of local").isEmpty())
+    }
+
+    fun testRefreshOnARemoteEnvironmentAsksTheDaemonForThatEnvironment() {
+        saveRemote("ro1")
+        WorkspaceService.getInstance(project).selectEnv("ro1")
+        val d = bg<Any> { try { ConfigRefresh.refreshNow(project) } catch (e: DaemonException) { e } }
+        assertTrue("config.refresh went to ro1 and its profile, got: $d", d is DaemonException && d.message!!.contains("m4-no-such-profile"))
+    }
+
+    fun testARemoteSnapshotsParameterViewShowsItsAgeAndOnlyMetadataOfASecret() {
+        saveRemote("ro1")
+        val dir = wsDir!!.resolve("config")
+        Files.createDirectories(dir)
+        Files.writeString(dir.resolve("ro1.edn"), """
+            {:env "ro1" :fetched-at #inst "2026-01-01T00:00:00Z" :path "/"
+             :parameters {"/p/table" {:name "/p/table" :type "String" :value "tbl"}}
+             :secrets {"p/api-key" {:name "p/api-key" :arn "arn:aws:secretsmanager:eu:0:secret:p/api-key-AbCdEf"
+                                    :last-changed #inst "2026-01-01T00:00:00Z" :description "the key"}}}
+        """.trimIndent())
+        WorkspaceService.getInstance(project).selectEnv("ro1")
+        loadAll()
+        open("q/src/main/resources/application.properties")
+        val key = refsAt("API_KEY").filterIsInstance<ParameterReference>().single().resolve() as ParameterView
+        key.navigate(true)
+        val vf = selectedFile()
+        val text = ConfigViews.getInstance(project).textOf(vf)!!
+        for (s in listOf("secret", "the key", "never fetched", "ro1", "fetched-at", "2026-01-01T00:00:00Z", " d ")) assertTrue("$s in\n$text", text.contains(s))
+        val fe = FileEditorManager.getInstance(project).getEditors(vf).first()
+        val banner = bg { ConfigViewBanner().collectNotificationData(project, vf) }!!.apply(fe) as com.intellij.ui.EditorNotificationPanel
+        assertTrue(banner.text, banner.text.contains("Cached snapshot of ro1, fetched"))
+    }
 }

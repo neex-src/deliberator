@@ -19,8 +19,7 @@
             [core-build]
             [clojure.string :as str]
             [dlb.client]
-            [dlb.endpoint :as endpoint]
-            [estate]))
+            [dlb.endpoint :as endpoint]))
 
 (defn- arg [args k] (second (drop-while #(not= k %) args)))
 
@@ -108,7 +107,9 @@
           (println (format "%-4s %-36s %s%s" (if (zero? exit) "ok" "FAIL") chapter trailer (if run (str "\n       " run) ""))))
         (println (format "%d/%d chapters green, %d s" (- (count results) (count bad)) (count results)
                          (quot (- (System/nanoTime) t0) 1000000000)))
-        (when (some #{"--down"} args) (estate/down ["--ws" ws]))
+        (when (some #{"--down"} args)
+          ;; a task of its own with the tour's env: `estate/down` here would read DELIBERATOR_HOME from this process (B20)
+          (p/shell {:extra-env env} "bb" "estate:down" "--ws" ws))
         (when-not pre-existing? (stop-daemon! home))
         (System/exit (if (seq bad) 1 0)))
       (finally (when-not pre-existing? (stop-daemon! home))))))
