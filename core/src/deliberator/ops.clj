@@ -16,7 +16,7 @@
 
   The M1 operations (events in brackets are streamed before the terminal line):
 
-    hello client version                           -> {version pid home endpoint protocol runs compatible}
+    hello client version                           -> {version pid home endpoint protocol runs scenario-runs follows compatible}   (runs = work in flight: scenario runs + log follows)
     op.describe                                    -> [{op class doc args order events}]   (order = argument names as declared)
     workspace.open path ws                         -> {ws dir project created}   (the one op that creates a workspace on purpose)
     workspace.show ws                              -> {ws path workspace environments}   (reading ops: unknown ws is workspace/not-found)
@@ -27,7 +27,9 @@
     session.current ws                             -> {session path}
     env.list ws                                    -> {environments [{name kind account ...}]}
     env.describe name* ws                          -> {env path}
-    env.check name* ws                             -> {ok account expected targets [error]}
+    env.check name* ws                             -> {ok account expected targets [error] [warning endpoint-held-by]}
+    env.save name* record* ws                      -> {env kind path}   (the one way to write environments/<name>.edn: env/validate)
+    runtime.set path* value* ws                    -> {ws path keys value}   (one value of runtime.edn by key path, then sync-env)
     daemon.stop                                    -> {stopping pid runs}   (the daemon exits a moment later)
     runtime.sync-env ws                            -> {ws path}
     service.adopt path* taskdef name jdwp ws       -> {name created path repo module from}
@@ -203,9 +205,13 @@
       (and (not (str/includes? (str have) "+")) (= (first (str/split (str want) #"\+")) have))))
 
 (defn- hello [ctx {:keys [version]}]
-  (let [d (:daemon ctx)]
+  (let [d (:daemon ctx)
+        runs (count @(:runs d))
+        follows (if-let [f (:follows d)] @f 0)]
+    ;; `:runs` is the work in flight a replacement must not kill: scenario runs AND active log follows (the IDE's service
+    ;; console is a follow, review 2026-10-25 R32); the two parts are given too
     (cond-> {:version (:version d) :pid (:pid d) :home (str (:home d)) :endpoint (:endpoint d) :protocol 1
-             :runs (count @(:runs d))}
+             :runs (+ runs follows) :scenario-runs runs :follows follows}
       version (assoc :compatible (compatible? version (:version d))))))
 
 (declare table)
@@ -311,10 +317,35 @@
 (defn- env-check [_ {:keys [name] :as args}]
   (let [ws (ws-of args)
         e (env/load ws name)
-        r (aws/check {:ws ws} e)]
+        r (aws/check {:ws ws} e)
+        holder (when (= :local (:kind e)) (runtime/endpoint-holder ws (get-in e [:aws :endpoint])))]
     (cond-> {:env name :kind (:kind e) :ok (boolean (:ok? r)) :account (:account r) :expected (:expected r)
              :targets (name-list (:targets e))}
-      (:error r) (assoc :error (aws-error (:error r))))))
+      (:error r) (assoc :error (aws-error (:error r)))
+      (and holder (not (:ours? holder)))
+      (assoc :warning (str "port " (:port holder) " of the endpoint " (get-in e [:aws :endpoint]) " is published by container "
+                           (:container holder) ", which is not this workspace's runtime: the local environment talks to that emulator,"
+                           " not to the Floci of runtime.edn (stop it, or move this workspace's ports)")
+             :endpoint-held-by (:container holder)))))
+
+(defn- keywordize
+  "JSON's string keys -> keywords at every level (a record arrives as nested objects; the protocol keywordizes only the top)."
+  [x]
+  (cond (map? x) (into {} (map (fn [[k v]] [(if (string? k) (keyword k) k) (keywordize v)])) x)
+        (sequential? x) (mapv keywordize x)
+        :else x))
+
+(defn- env-save [_ {:keys [name record] :as args}]
+  (let [ws (ws-of args)
+        r (-> (keywordize record) (assoc :name name))
+        r (cond-> r (string? (:kind r)) (update :kind keyword))
+        e (env/save! ws r)]
+    {:env (:name e) :kind (:kind e) :path (str (store/path ws "environments" (str (store/safe-name name) ".edn")))}))
+
+(defn- runtime-set [_ {:keys [path value] :as args}]
+  (runtime/set-config! (ws-of args)
+                       (mapv (fn [k] (if (re-matches #"\d+" k) (parse-long k) (keyword k))) path)
+                       (keywordize value)))
 
 ;; handlers: runtime ---------------------------------------------------------------------------
 
@@ -571,9 +602,14 @@
 (defn- repo-list [_ args] (repo/list (ws-of args)))
 
 (defn- logs-fetch [ctx {:keys [target env since for filter follow] :as args}]
-  (let [ws (ws-of args)]
-    (logfetch/fetch! ws (or env "local") target :session (session-key ws args) :since since :for for :filter filter
-                     :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))))
+  (let [ws (ws-of args)
+        follow? (boolean (or follow (= "until-cancelled" (some-> for str str/trim str/lower-case))))
+        counter (when follow? (:follows (:daemon ctx)))]   ; an active follow is work in flight (hello :runs, R32)
+    (when counter (swap! counter inc))
+    (try
+      (logfetch/fetch! ws (or env "local") target :session (session-key ws args) :since since :for for :filter filter
+                       :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))
+      (finally (when counter (swap! counter dec))))))
 
 (defn- marker-add [_ {:keys [file line logger] :as args}] (markers/add! (ws-of args) file line :logger logger))
 (defn- marker-remove [_ {:keys [file line] :as args}] (markers/remove! (ws-of args) file line))
@@ -649,7 +685,7 @@
 (def table
   "`op` -> `{:fn (fn [ctx args]) :args schema :class :read|:mutate :doc :events}`."
   {"hello" {:fn hello :class :read
-            :doc "Handshake: the client names itself and the core version it expects; the daemon answers its version, pid, home and endpoint."
+            :doc "Handshake: the client names itself and the core version it expects; the daemon answers its version, pid, home, endpoint and the work in flight (runs = scenario runs + active log follows, also given apart)."
             :args {:client {:type :string :doc "client kind: dlb, ide, agent, ..."}
                    :version {:type :string :doc "core version the client expects; the answer says whether it matches"}}}
    "op.describe" {:fn (fn [_ _] (describe)) :class :read :args {}
@@ -685,8 +721,16 @@
                    :doc "One environment record and the file it lives in."
                    :args (ws-schema :name {:type :string :required true :doc "environment name"})}
    "env.check" {:fn env-check :class :read
-                :doc "Asks the environment who we are (STS) and compares the account with the record; lists the target names."
+                :doc "Asks the environment who we are (STS) and compares the account with the record; lists the target names. For a local environment, warns when the endpoint's port is published by a container that is not this workspace's runtime (another emulator on 4566)."
                 :args (ws-schema :name {:type :string :required true :doc "environment name"})}
+   "env.save" {:fn env-save :class :mutate
+               :doc "Writes an environment record of the workspace after validation (env/validate): the one way to create or change environments/<name>.edn, for tasks and clients alike. record is the whole record (kind local|remote, aws, targets, description, topology, read-only), as env.describe returns it under env; name wins over the record's. No account check yet (M4.1)."
+               :args (ws-schema :name {:type :string :required true :doc "environment name (the file environments/<name>.edn)"}
+                                :record {:type :object :required true :doc "the environment record (kind, aws, targets, ...)"})}
+   "runtime.set" {:fn runtime-set :class :mutate
+                  :doc "Sets one value of the workspace's runtime.edn by key path (the file is created with the defaults when absent) and points the local environment at the result, as runtime.sync-env does; e.g. path containers,postgres,init value /repo/estate/sql. A path element of digits is a number key (ports)."
+                  :args (ws-schema :path {:type :strings :required true :doc "key path into runtime.edn, e.g. containers,postgres,init"}
+                                   :value {:type :any :required true :doc "the value: a string, number, boolean or object"})}
    "runtime.ensure" {:fn runtime-ensure :class :mutate
                      :doc "Reconciles the local runtime (network, images, containers) with runtime.edn and waits until healthy."
                      :events ["runtime.pulling" "runtime.starting" "runtime.ready"]

@@ -14,6 +14,7 @@
             [deliberator.logfetch :as logfetch]
             [deliberator.markers :as markers]
             [deliberator.ops :as ops]
+            [deliberator.runtime :as runtime]
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.test-util :as tu]
@@ -647,3 +648,68 @@
         (is (= (/ awsdiscover/cap 50) @pages) "stops at the cap, no page more")
         (is (= [] (get-in r [:resources "sqs"])) "a kind with nothing answers an empty list")
         (is (= {} (:errors r)))))))
+
+;; --- env.save and runtime.set: the daemon writes environments/ and runtime.edn, tasks do not (review R33) ----------
+
+(deftest env-save-validates-and-writes-the-record
+  (tu/with-temp-home
+    (let [ws "w"
+          _ (call "workspace.open" {:ws ws})
+          local (:env (call "env.describe" {:ws ws :name "local"}))
+          ;; what a client sends: JSON, so nested keys are strings and kind is a string
+          json-round (fn [m] (json/read-str (json/write-str m)))
+          record (json-round {:kind "local" :description "second region"
+                              :aws (assoc (:aws local) :region "eu-west-1")
+                              :targets (:targets local)})
+          r (call "env.save" {:ws ws :name "local2" :record record})]
+      (is (= {:env "local2" :kind :local} (select-keys r [:env :kind])))
+      (is (str/ends-with? (:path r) "/environments/local2.edn"))
+      (let [e (env/load ws "local2")]
+        (is (= :local (:kind e)))
+        (is (= "eu-west-1" (get-in e [:aws :region])))
+        (is (= (:targets local) (:targets e)) "namespaced target keys survive the JSON round trip")
+        (is (= "second region" (:description e))))
+      (is (some #{"local2"} (map :name (:environments (call "env.list" {:ws ws})))))
+      (testing "an invalid record is refused by env/validate, nothing is written"
+        (is (= "env/invalid" (thrown-type #(call "env.save" {:ws ws :name "bad" :record (json-round {:kind "local" :aws {} :targets {}})}))))
+        (is (not (some #{"bad"} (map :name (:environments (call "env.list" {:ws ws})))))))
+      (testing "name wins over the record's"
+        (call "env.save" {:ws ws :name "local3" :record (assoc record "name" "other")})
+        (is (= "local3" (:name (env/load ws "local3"))))))))
+
+(deftest runtime-set-changes-one-value-of-runtime-edn
+  (tu/with-temp-home
+    (let [ws "w"
+          _ (call "workspace.open" {:ws ws})
+          r (call "runtime.set" {:ws ws :path ["containers" "postgres" "init"] :value "/repo/estate/sql"})]
+      (is (= [:containers :postgres :init] (:keys r)))
+      (is (= "/repo/estate/sql" (get-in (store/read-edn (runtime/config-path ws)) [:containers :postgres :init])))
+      (is (= "/repo/estate/sql" (:value r)))
+      (testing "digits in the path are number keys (host ports), and the local environment follows"
+        (call "runtime.set" {:ws ws :path ["containers" "floci" "ports" "4566"] :value 24566})
+        (is (= {4566 24566} (get-in (store/read-edn (runtime/config-path ws)) [:containers :floci :ports])))
+        (is (= "http://localhost:24566" (get-in (env/load ws "local") [:aws :endpoint])) "sync-env ran"))
+      (is (= "runtime/bad-path" (thrown-type #(call "runtime.set" {:ws ws :path [] :value 1})))))))
+
+;; --- an active follow is work in flight (review R32) ---------------------------------------------------------------
+
+(deftest a-follow-counts-as-work-in-flight-for-hello
+  (tu/with-temp-home
+    (let [ws "w"
+          _ (call "workspace.open" {:ws ws})
+          _ (call "session.start" {:ws ws :key "S"})
+          f (write! (tu/temp-home) "app.log" "one\n")
+          d {:runs (atom {}) :follows (atom 0) :checked (atom #{}) :version "x" :pid 1 :home "h" :endpoint "e"}
+          hello #(ops/call! "hello" {:daemon d} {})
+          cancelled (atom false)
+          fut (future (ops/call! "logs.fetch" {:daemon d :emit! (fn [_]) :cancelled? #(deref cancelled)}
+                                 {:ws ws :target f :follow true}))]
+      (is (loop [n 0] (cond (= 1 @(:follows d)) true (> n 100) false :else (do (Thread/sleep 50) (recur (inc n)))))
+          "the follow is counted while it runs")
+      (is (= {:runs 1 :scenario-runs 0 :follows 1} (select-keys (hello) [:runs :scenario-runs :follows])))
+      (reset! cancelled true)
+      (is (true? (:follow (deref fut 10000 nil))))
+      (is (= {:runs 0 :scenario-runs 0 :follows 0} (select-keys (hello) [:runs :scenario-runs :follows])))
+      (testing "a one-shot fetch is not counted"
+        (call "logs.fetch" {:ws ws :target f})
+        (is (= 0 @(:follows d)))))))

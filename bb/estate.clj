@@ -17,8 +17,8 @@
             nothing, a stale state would lie).
 
   The workspace is `--ws W` (default \"default\"); its home is $DELIBERATOR_HOME. The runtime steps
-  (`runtime up|status|down`, `sync-env`, `service.*`) go through the daemon (`daemon-client`; the service ops need it); only
-  Maven and Terraform run out of process. `--no-daemon` runs them in one-shot JVMs as before."
+  (`runtime up|status|down`, `sync-env`, `runtime.set`, `env.save`, `service.*`) go through the daemon (`daemon-client`; the
+  service ops need it; nothing here writes `environments/` or `runtime.edn` itself); only Maven and Terraform run out of process. `--no-daemon` runs them in one-shot JVMs as before."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]
@@ -133,15 +133,14 @@
 (defn- write-local2!
   "The environment `local2` of the workspace: the same Floci as `local`, region eu-west-1, where terraform seeded
   the same parameter names and an `estate/api-key` of its own. The stand-in for a remote environment until M4
-  (`dlb service start a --secrets-from local2`)."
+  (`dlb service start a --secrets-from local2`). Written through the daemon (`env.save`, validated), never as a file (R33)."
   [ws]
-  (let [dir (str (home) "/workspaces/" ws "/environments")
-        local (edn/read-string (slurp (str dir "/local.edn")))
-        e {:name "local2" :kind :local
+  (let [local (:env (daemon-client/call! "env.describe" {:ws ws :name "local"}))
+        e {:kind "local"
            :description "Second local environment (eu-west-1 of the same Floci): other secret values, stand-in for a remote environment."
            :aws (assoc (:aws local) :region "eu-west-1")
            :targets (:targets local)}]
-    (spit (str dir "/local2.edn") (with-out-str (clojure.pprint/pprint e)))))
+    (daemon-client/call! "env.save" {:ws ws :name "local2" :record e})))
 
 (defn deploy [args]
   (let [ws (ws-of args)
@@ -170,14 +169,15 @@
 
 (defn- set-postgres-init!
   "The estate's SQL init directory is infrastructure of the estate: set it as Postgres' `:init` in the
-  workspace's runtime.edn (created by `sync-env` when absent) before the infrastructure comes up."
+  workspace's runtime.edn (created by `sync-env` when absent) before the infrastructure comes up. Through the daemon
+  (`runtime.set`), never by editing the file (R33)."
   [args ws]
   (runtime args "sync-env" "--ws" ws)
   (let [f (str (home) "/workspaces/" ws "/runtime.edn")
         cfg (edn/read-string (slurp f))
         init (str repo "/estate/sql")]
     (when (and (get-in cfg [:containers :postgres]) (not= init (get-in cfg [:containers :postgres :init])))
-      (spit f (with-out-str (clojure.pprint/pprint (assoc-in cfg [:containers :postgres :init] init)))))))
+      (daemon-client/call! "runtime.set" {:ws ws :path ["containers" "postgres" "init"] :value init}))))
 
 (defn up [args]
   (let [ws (ws-of args) t0 (System/nanoTime)]
