@@ -54,6 +54,8 @@ provider "aws" {
     ssm            = var.endpoint
     secretsmanager = var.endpoint
     ecs            = var.endpoint
+    scheduler      = var.endpoint
+    apigatewayv2   = var.endpoint
     cloudwatch     = var.endpoint
   }
 }

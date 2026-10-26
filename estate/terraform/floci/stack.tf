@@ -1,7 +1,7 @@
 # The estate stack on Floci (ECS runs in mock mode there: cluster and task definitions are records).
 module "stack" {
   source            = "../modules/stack"
-  lambda_source_dir = "${path.module}/../../lambda/logger"
+  lambda_dir        = "${path.module}/../../lambda"
 
   aws_endpoint_url      = var.container_endpoint
   container_credentials = { AWS_ACCESS_KEY_ID = "test", AWS_SECRET_ACCESS_KEY = "test" }
@@ -11,6 +11,10 @@ module "stack" {
   db_password           = "deliberator"
   auto_publish          = var.auto_publish
   service_images        = { a = "estate/service-a:local", b = "estate/service-b:local" }
+
+  # the chain: an ECS service with the CODE_DEPLOY controller (mock mode on Floci), Lambdas that reach the emulator
+  ecs_cluster        = aws_ecs_cluster.estate.name
+  lambda_environment = { AWS_ENDPOINT_URL = var.container_endpoint }
 }
 
 resource "aws_ecs_cluster" "estate" {
@@ -18,6 +22,12 @@ resource "aws_ecs_cluster" "estate" {
 }
 
 output "inbox_queue" { value = module.stack.inbox_queue }
+output "api_id" { value = module.stack.api_id }
+output "chain_parameter" { value = module.stack.chain_parameter }
+output "schedule_group" { value = module.stack.schedule_group }
+output "ecs_service" { value = module.stack.ecs_service }
+output "scheduler_create_function" { value = module.stack.scheduler_create_function }
+output "ecs_scale_function" { value = module.stack.ecs_scale_function }
 output "table" { value = module.stack.table }
 output "task_definitions" {
   value     = module.stack.task_definitions
