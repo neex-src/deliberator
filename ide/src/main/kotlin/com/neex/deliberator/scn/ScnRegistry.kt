@@ -49,6 +49,7 @@ class ScnRegistry : PersistentStateComponent<ScnRegistry.State> {
     @Volatile private var persisted: ScnKinds? = null
     private val targetCache = ConcurrentHashMap<String, Targets>()
     private val warming = AtomicBoolean(false)
+    private val targetsRefreshing = AtomicBoolean(false)
 
     override fun getState(): State = state
     override fun loadState(s: State) {
@@ -133,6 +134,17 @@ class ScnRegistry : PersistentStateComponent<ScnRegistry.State> {
         }
     }
 
+    /**
+     * [refreshTargets] on a pooled thread, one at a time; the caller (completion) answers from [targets] now and sees the fresh
+     * list next time. Never blocks, never starts a daemon.
+     */
+    fun refreshTargetsAsync(project: Project) {
+        if (known == null || !targetsRefreshing.compareAndSet(false, true)) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try { refreshTargets(project) } catch (_: Exception) {} finally { targetsRefreshing.set(false) }
+        }
+    }
+
     /** True when a connection is known and the project's target list is missing or older than [maxAgeMs]. */
     fun needsTargets(project: Project, maxAgeMs: Long = 30_000): Boolean =
         known != null && targetKey(project)?.let { k -> targetCache[k]?.let { System.currentTimeMillis() - it.fetchedAt > maxAgeMs } ?: true } == true
@@ -158,13 +170,18 @@ class ScnRegistry : PersistentStateComponent<ScnRegistry.State> {
     }
 }
 
-/** Calls the editor makes: `ws` is added when the project is bound to a workspace. */
+/**
+ * Calls the editor makes: `ws` is added when the project is bound to a workspace, and every call has a budget ([TIMEOUT_MS],
+ * `daemon/timeout` after it): the editor's threads (completion, the annotator pass, a read action) may wait a little, never hang.
+ */
 internal object ScnDaemon {
-    fun call(client: DaemonClient, project: Project?, op: String, args: JsonObject = JsonObject()): JsonElement {
+    const val TIMEOUT_MS = 3_000L
+
+    fun call(client: DaemonClient, project: Project?, op: String, args: JsonObject = JsonObject(), timeoutMs: Long = TIMEOUT_MS): JsonElement {
         val a = JsonObject()
         args.entrySet().forEach { a.add(it.key, it.value) }
         project?.let { WorkspaceService.getInstance(it).ws }?.let { a.addProperty("ws", it) }
-        val t = client.call(op, a)
+        val t = client.call(op, a, timeoutMs)
         if (!t.ok) throw DaemonException(t.errorMessage ?: "$op failed", t.errorType ?: "daemon/error")
         return t.result ?: JsonArray()
     }

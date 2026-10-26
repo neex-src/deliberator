@@ -138,8 +138,9 @@ class StepGutterIcon(private val view: RunView, val step: Int, private val icon:
 /**
  * The run view of one `.scn` editor: under each step of the latest run a block inlay with that step's section of
  * `result.txt` (collapsed to one line, click to expand), a banner above line 1, gutter icons on the step heads.
- * It paints; it never writes into the document. A section stays at the step it was attached to when the run was
- * read; once the buffer differs from what ran, everything is marked stale and nothing is re-attached by index.
+ * It paints; it never writes into the document. Results are tied to steps by the head text the file had when the run
+ * started ([StepHeads]), so a step inserted or removed during a run moves nothing onto the wrong step; once the buffer
+ * differs from what ran (during the run or after), everything is marked stale and, after the run, nothing is re-attached.
  */
 class RunView(val editor: Editor, val project: Project, val file: VirtualFile) : Disposable {
     private val runner = ScnRunner.getInstance(project)
@@ -175,7 +176,8 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
         })
         editor.document.addDocumentListener(object : DocumentListener {
             override fun documentChanged(event: DocumentEvent) {
-                if (shown != null && !runner.isRunning(path)) stale = true
+                // an edit after the run, or during it (the sections then follow their steps by head text): the view is stale either way
+                if (shown != null || runner.isRunning(path)) stale = true
                 scheduleGutter()
             }
         }, this)
@@ -218,6 +220,16 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
         return runCatching { sha256(file.contentsToByteArray()) != sha }.getOrDefault(false)
     }
 
+    /**
+     * File step position (the step's index now) → the run's step number, by head text ([StepHeads.attach]) when the runner recorded
+     * the heads of the file that ran (a run of this session), else by index (an older run shown from the history; the sha guards it).
+     */
+    private fun attachment(steps: List<com.neex.deliberator.scn.ScnStep>, st: RunState, snap: RunSnapshot?, running: Boolean): Map<Int, Int> {
+        val known = running || (snap != null && snap === st.headsSnapshot)
+        val runHeads = if (known) st.headsAtStart.withIndex().associate { (i, h) -> i + 1 to h } else emptyMap()
+        return StepHeads.attach(steps.map { it.headText }, runHeads)
+    }
+
     /** Rebuilds inlays, banner and gutter from the runner's state. EDT. */
     fun refresh() {
         if (disposed || editor.isDisposed) return
@@ -226,13 +238,14 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
         val running = st.running
         if (snap !== shown) {
             shown = snap
-            stale = snap != null && !running && differsFromRun(snap)
             expandedSteps.clear()
             allExpanded = false
         }
-        if (running) stale = false
+        // computed every time, also while the run goes on (the confirm loop swaps the snapshot with running still true; an edit during the run)
+        stale = (snap ?: st.progress)?.let { differsFromRun(it) } ?: (running && stale)
         PsiDocumentManager.getInstance(project).commitDocument(editor.document)
         val steps = (PsiDocumentManager.getInstance(project).getPsiFile(editor.document) as? ScnFile)?.steps.orEmpty()
+        val attach = attachment(steps, st, snap, running)
         val keepInlays = stale && inlays.isNotEmpty() && !running
         if (!keepInlays) {
             inlays.forEach { Disposer.dispose(it) }
@@ -241,7 +254,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
             val doc = editor.document
             bannerText?.let { add(0, true, ResultRenderer(this, null, null, null, it)) }
             for (s in steps) {
-                val n = s.index
+                val n = attach[s.index] ?: continue   // a step inserted since the run started has no result
                 // during the run the file is the truth for the steps it already holds; the events only fill the gap before it is rewritten
                 val section = if (running) st.progress?.sections?.get(n) else snap?.sections?.get(n)
                 val live = if (running && section == null) st.live[n] else null
@@ -252,7 +265,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
         } else {
             inlays.forEach { it.update() }
         }
-        rebuildGutter(steps, st, snap, running)
+        rebuildGutter(steps, attach, st, snap, running)
     }
 
     private fun add(offset: Int, above: Boolean, r: ResultRenderer) {
@@ -267,23 +280,26 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
         return t + "  ·  ${snap.runId}" + (if (stale) "  ·  edited since this run" else "")
     }
 
-    private fun rebuildGutter(steps: List<com.neex.deliberator.scn.ScnStep>, st: RunState, snap: RunSnapshot?, running: Boolean) {
+    private fun rebuildGutter(steps: List<com.neex.deliberator.scn.ScnStep>, attach: Map<Int, Int>, st: RunState, snap: RunSnapshot?, running: Boolean) {
         highlighters.forEach { editor.markupModel.removeHighlighter(it) }
         highlighters.clear()
         val doc = editor.document
         for (s in steps) {
-            val n = s.index
-            val (icon, tip, cancels) = gutterState(n, st, snap, running)
+            val here = s.index   // what a click runs: the step's position in the file now
+            val (icon, tip, cancels) = gutterState(here, attach[here], st, snap, running)
             val line = doc.getLineNumber(s.textRange.startOffset)
             val h = editor.markupModel.addLineHighlighter(null, line, HighlighterLayer.ADDITIONAL_SYNTAX)
-            h.gutterIconRenderer = StepGutterIcon(this, n, icon, tip, cancels)
+            h.gutterIconRenderer = StepGutterIcon(this, here, icon, tip, cancels)
             highlighters += h
         }
     }
 
-    private fun gutterState(n: Int, st: RunState, snap: RunSnapshot?, running: Boolean): Triple<Icon, String, Boolean> {
-        val base = "Step $n"
+    /** The icon of the step at file position [here]; [n] is its step number in the run shown, null when the run has no such step. */
+    private fun gutterState(here: Int, n: Int?, st: RunState, snap: RunSnapshot?, running: Boolean): Triple<Icon, String, Boolean> {
+        val base = "Step $here"
+        val plain = Triple<Icon, String, Boolean>(AllIcons.RunConfigurations.TestState.Run, "Run $base (Ctrl+Enter), run from here, run all", false)
         if (running) {
+            if (n == null) return plain
             val live = st.live[n]
             val section = st.progress?.sections?.get(n)
             return when {
@@ -291,12 +307,12 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
                 section != null -> Triple(statusIcon(section.status), "$base ${section.status}", false)
                 live != null -> Triple(statusIcon(live.status), "$base ${live.status}", false)
                 st.asked.isEmpty() || n in st.asked -> Triple(AllIcons.RunConfigurations.TestNotRan, "$base waits for its turn", false)
-                else -> Triple(AllIcons.RunConfigurations.TestState.Run, "Run $base (Ctrl+Enter), run from here, run all", false)
+                else -> plain
             }
         }
-        val section = if (stale) null else snap?.sections?.get(n)
+        val section = if (stale || n == null) null else snap?.sections?.get(n)
         return if (section != null) Triple(statusIcon(section.status), "$base ${section.status}. Click: run this step, run from here, run all", false)
-        else Triple(AllIcons.RunConfigurations.TestState.Run, "Run $base (Ctrl+Enter), run from here, run all", false)
+        else plain
     }
 
     private fun statusIcon(status: String): Icon = when (status) {

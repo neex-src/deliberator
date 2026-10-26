@@ -21,6 +21,7 @@
     workspace.open path ws                         -> {ws dir project created}   (the one op that creates a workspace on purpose)
     workspace.show ws                              -> {ws path workspace environments}   (reading ops: unknown ws is workspace/not-found)
     session.note name* text* session ws            -> {path}
+    explore.write name* text* if-missing ws        -> {path created written}   (<workspace project>/explore/<name>, for the IDE's explorer)
     session.start key* title ws                    -> {session path}   (reopens an existing key)
     session.end key ws                             -> {session path}   (default: the current session)
     session.list ws                                -> {sessions current}
@@ -263,6 +264,23 @@
   (let [ws (ws-of args)]
     {:ws (store/ws-name ws) :path (str (store/path ws)) :workspace (workspace/load ws)
      :environments (env/names ws)}))
+
+(defn- explore-write
+  "Writes `text` as `<workspace project>/explore/<name>` (the daemon names the place, the IDE opens the path it gets);
+  `if-missing` leaves an existing file alone (the explorer's `explore-<env>.scn` is created once, then edited in the editor)."
+  [_ {:keys [name text if-missing] :as args}]
+  (let [ws (ws-of args)
+        _ (when-not (workspace-exists? ws) (fail :workspace/not-found (str "workspace " (store/ws-name ws) " does not exist")))
+        w (workspace/load ws)
+        project (or (:project w) (str (store/path ws "project")))
+        safe (-> (str name) (str/replace #"[^A-Za-z0-9._-]+" "-") (str/replace #"^[.-]+" ""))
+        _ (when (str/blank? safe) (fail :bad-args "explore.write: name is empty" :problems ["name"]))
+        f (.toPath (io/file project "explore" safe))
+        existed (exists? f)]
+    (if (and existed if-missing)
+      {:path (str f) :created false :written false}
+      (do (store/write-bytes-atomic! f (.getBytes (str text) "UTF-8"))
+          {:path (str f) :created (not existed) :written true}))))
 
 (defn- session-info [ws s] (when s {:session s :path (str (session/dir ws (:key s)))}))
 
@@ -831,6 +849,11 @@
                                     :session {:type :string :doc "session key; default the current session"})}
    "workspace.show" {:fn workspace-show :class :read :args (ws-schema)
                      :doc "The workspace record, its path and its environments."}
+   "explore.write" {:fn explore-write :class :mutate
+                    :doc "Writes a text file of the explorer (a Terraform transcript, a drift report, the explore-<env>.scn the AWS tab appends to) as <workspace project>/explore/<name>; the daemon names the place, the answer is the path. if-missing: leave an existing file as it is."
+                    :args (ws-schema :name {:type :string :required true :doc "file name under explore/ (letters, digits, . _ - kept)"}
+                                     :text {:type :string :required true :doc "the text to write"}
+                                     :if-missing {:type :bool :doc "write only when the file does not exist yet"})}
    "session.start" {:fn session-start :class :mutate
                     :doc "Starts (or reopens) a session and makes it current."
                     :args (ws-schema :key {:type :string :required true :doc "session key, e.g. a ticket id"}

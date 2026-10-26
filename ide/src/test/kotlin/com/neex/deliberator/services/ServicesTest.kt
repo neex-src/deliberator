@@ -241,6 +241,7 @@ class ServicesTest : BasePlatformTestCase() {
     fun testStartingAServiceTheTopologyTurnedOffEndsTheProcessWithTheTypedError() {
         adoptFixture()
         bg { ops().setTopology("ok", "off") }
+        bg { svc.startSession("T-6", null) }
         val h = ServiceProcessHandler(project, "ok", "local", JsonObject(), null, false)
         val text = captured(h)
         h.begin()

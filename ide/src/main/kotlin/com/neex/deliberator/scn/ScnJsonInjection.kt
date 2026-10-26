@@ -18,7 +18,7 @@ private val JSON_KINDS = setOf("aws", "sqs", "dynamodb", "eventbridge", "lambda"
  * JSON in the body of the AWS steps: colours, brace matching, folding, the JSON plugin's own checks. A `{{var}}` is not part
  * of the injected text (the body is split around it) and stands in as `0`, so `"{{id}}"` and `{"qty": {{qty}}}` both stay valid JSON.
  */
-class ScnJsonInjector : MultiHostInjector {
+class ScnJsonInjector : MultiHostInjector, com.intellij.openapi.project.DumbAware {
     override fun elementsToInjectIn(): List<Class<out PsiElement>> = listOf(ScnBody::class.java)
 
     override fun getLanguagesToInject(registrar: MultiHostRegistrar, context: PsiElement) {

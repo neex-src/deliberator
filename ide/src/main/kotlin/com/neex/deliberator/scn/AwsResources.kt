@@ -6,34 +6,56 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.neex.deliberator.workspace.WorkspaceService
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** One thing that exists in the environment: its [name] and a [ref] (queue URL, ARN, parameter type) when there is one. */
 data class LiveResource(val name: String, val ref: String?)
 
 /**
- * What exists in the project's environment (`aws.discover`), cached per workspace and environment. [get] answers at once from the cache
- * and, when it is older than [ttlMs], fetches again over the connection the editor already has (never starts a daemon). Blocking
- * on the first fetch only: background threads (completion) only.
+ * What exists in the project's environment (`aws.discover`), cached per workspace and environment. [get] answers at once from the
+ * cache (empty before the first fetch) and, when the copy is older than [ttlMs], refreshes it on a pooled thread over the connection
+ * the editor already has (never starts a daemon, never blocks the caller): the editor's threads read caches only. [fetchNow] is the
+ * blocking fetch for background callers that want the current answer (the AWS tab's Refresh).
  */
 @Service(Service.Level.APP)
 class AwsResources {
     private class Entry(val at: Long, val byKind: Map<String, List<LiveResource>>)
 
     private val cache = ConcurrentHashMap<String, Entry>()
+    private val refreshing = AtomicBoolean(false)
 
-    fun get(project: Project, ttlMs: Long = 15_000): Map<String, List<LiveResource>> {
+    private fun key(project: Project): String? {
         val svc = WorkspaceService.getInstance(project)
-        val ws = svc.ws ?: return emptyMap()
-        val key = "$ws/${svc.selectedEnv}"
+        val ws = svc.ws ?: return null
+        return "$ws/${svc.selectedEnv}"
+    }
+
+    /** The cached resources, refreshed in the background when older than [ttlMs]. Never blocks. */
+    fun get(project: Project, ttlMs: Long = 15_000): Map<String, List<LiveResource>> {
+        val key = key(project) ?: return emptyMap()
         val e = cache[key]
-        if (e != null && System.currentTimeMillis() - e.at < ttlMs) return e.byKind
-        val client = ScnRegistry.getInstance().knownClient() ?: return e?.byKind ?: emptyMap()
+        if (e == null || System.currentTimeMillis() - e.at >= ttlMs) refreshAsync(project)
+        return e?.byKind ?: emptyMap()
+    }
+
+    /** `aws.discover` now, over the known connection; the cache follows. Blocking: background threads only. Empty when no daemon is known. */
+    fun fetchNow(project: Project): Map<String, List<LiveResource>> {
+        val svc = WorkspaceService.getInstance(project)
+        val key = key(project) ?: return emptyMap()
+        val client = ScnRegistry.getInstance().knownClient() ?: return cache[key]?.byKind ?: emptyMap()
         return try {
-            val r = ScnDaemon.call(client, project, "aws.discover", JsonObject().apply { addProperty("env", svc.selectedEnv) })
+            val r = ScnDaemon.call(client, project, "aws.discover", JsonObject().apply { addProperty("env", svc.selectedEnv) }, timeoutMs = 60_000)
             val byKind = parse(r.takeIf { it.isJsonObject }?.asJsonObject)
             cache[key] = Entry(System.currentTimeMillis(), byKind)
             byKind
-        } catch (_: Exception) { e?.byKind ?: emptyMap() }
+        } catch (_: Exception) { cache[key]?.byKind ?: emptyMap() }
+    }
+
+    private fun refreshAsync(project: Project) {
+        if (ScnRegistry.getInstance().knownClient() == null || !refreshing.compareAndSet(false, true)) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try { if (!project.isDisposed) fetchNow(project) } finally { refreshing.set(false) }
+        }
     }
 
     /** Forget what was fetched (after a step that creates or deletes things). */

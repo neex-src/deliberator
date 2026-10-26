@@ -57,6 +57,10 @@ class RunState(val path: String) {
     @Volatile var runDir: String? = null
     /** The progressive `result.txt` read during the run: the sections of the steps finished so far (null before the first read). */
     @Volatile var progress: RunSnapshot? = null
+    /** The `###` head lines of the file as it was saved for the run in flight, in step order: what the view keys live results by (a step inserted during the run shifts nothing). */
+    @Volatile var headsAtStart: List<String> = emptyList()
+    /** The snapshot [headsAtStart] belongs to (set when its run ends); an older run shown from the history has no heads and attaches by index. */
+    @Volatile var headsSnapshot: RunSnapshot? = null
     @Volatile var finishedEvents = 0
     internal val reading = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile internal var dirty = false
@@ -90,7 +94,7 @@ class ScnRunner(private val project: Project) : Disposable {
     @Volatile var sessionKeyAsker: () -> String? = {
         var key: String? = null
         ApplicationManager.getApplication().invokeAndWait({
-            key = Messages.showInputDialog(project, "Running a scenario needs a session. Session key:", "Start Session", null,
+            key = Messages.showInputDialog(project, "Runs and followed logs are kept in a session; there is none yet. Session key:", "Start Session", null,
                 "S-" + java.time.LocalDate.now().toString().replace("-", ""), null)?.trim()?.takeIf { it.isNotEmpty() }
         }, ModalityState.nonModal())
         key
@@ -127,6 +131,8 @@ class ScnRunner(private val project: Project) : Disposable {
             st.started = emptySet()
             st.live = emptyMap()
             st.progress = null
+            st.headsAtStart = runCatching { StepHeads.of(String(file.contentsToByteArray(), StandardCharsets.UTF_8)) }.getOrDefault(emptyList())
+            st.headsSnapshot = null
         }
         publish(path)
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -221,6 +227,7 @@ class ScnRunner(private val project: Project) : Disposable {
     private fun finished(path: String, snap: RunSnapshot): RunSnapshot {
         val st = state(path)
         st.snapshot = snap
+        st.headsSnapshot = snap
         st.lastSections = st.lastSections + snap.sections
         st.live = emptyMap()
         st.progress = null

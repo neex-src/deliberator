@@ -72,7 +72,10 @@ object ResponsePeek {
             .setDimensionServiceKey(project, "deliberator.responsePeek", false)
             .setMinSize(Dimension(520, 260))
             .createPopup()
-        Disposer.register(popup) { EditorFactory.getInstance().releaseEditor(viewer) }
+        Disposer.register(popup) {
+            EditorFactory.getInstance().releaseEditor(viewer)
+            if (current === popup) current = null   // nothing of a closed peek (popup, editor, project) is kept
+        }
         object : com.intellij.openapi.actionSystem.AnAction(), DumbAware {
             override fun actionPerformed(e: AnActionEvent) {
                 val line = lines.getOrNull(doc.getLineNumber(viewer.caretModel.offset)) ?: return

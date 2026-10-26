@@ -37,6 +37,37 @@ data class StepSection(val n: Int, val head: String, val lines: List<String>) {
     }
 }
 
+/**
+ * Step head lines, the key that ties a run's results to the steps of a file that may have changed since: a step inserted or removed
+ * above during a run shifts the indexes, not the head texts. Whitespace is normalised; `result.txt` reconstructs the head from the
+ * parsed words, so the comparison is word-wise.
+ */
+object StepHeads {
+    private val HEAD_LINE = Regex("^###\\s+(.*)$")
+
+    fun norm(head: String): String = head.trim().removePrefix("###").trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+
+    /** The normalised head of every `### ` line of [text], in order (1-based step n = position + 1). */
+    fun of(text: String): List<String> = text.lineSequence().mapNotNull { l -> HEAD_LINE.matchEntire(l.trimEnd())?.let { norm(it.groupValues[1]) } }.toList()
+
+    /**
+     * File step position (1-based, the step's index now) → run step number, matched by head text (the first unused run step with the
+     * same head; equal heads keep their order). Identity when nothing is known about the run's heads. A file step whose head is in no
+     * run step gets nothing (it was inserted since); a run step whose head is gone shows nowhere.
+     */
+    fun attach(fileHeads: List<String>, runHeads: Map<Int, String>): Map<Int, Int> {
+        if (runHeads.isEmpty()) return fileHeads.indices.associate { it + 1 to it + 1 }
+        val used = HashSet<Int>()
+        val out = LinkedHashMap<Int, Int>()
+        fileHeads.forEachIndexed { i, h ->
+            val n = runHeads.entries.sortedBy { it.key }.firstOrNull { it.key !in used && it.value == norm(h) }?.key ?: return@forEachIndexed
+            used += n
+            out[i + 1] = n
+        }
+        return out
+    }
+}
+
 /** A run as the view needs it: the file text, its sections by step number, the trailer, where it lives. */
 data class RunSnapshot(
     val runId: String,

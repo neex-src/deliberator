@@ -74,12 +74,17 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
         publish(model.copy(selectedEnv = name))
     }
 
-    /** The bound workspace, applying the directory convention once when nothing is persisted. Blocking. */
+    /**
+     * The bound workspace, applying the directory convention once when nothing is persisted. Blocking. The convention counts as
+     * tried only once the daemon answered (a daemon that was not reachable is asked again next time); two callers at once
+     * (`ReattachOnOpen` and the tool window's first refresh) ask once.
+     */
+    @Synchronized
     fun resolve(): String? {
         ws?.let { return it }
         if (conventionTried) return null
+        val found = project.basePath?.let { conventionWs(it) { client() } }   // a DaemonException leaves conventionTried false
         conventionTried = true
-        val found = project.basePath?.let { conventionWs(it) { client() } }
         if (found != null) state.ws = found
         return found
     }

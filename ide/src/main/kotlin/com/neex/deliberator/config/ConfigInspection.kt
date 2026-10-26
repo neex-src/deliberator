@@ -16,7 +16,7 @@ import com.intellij.psi.PsiFile
  * Registered without a language: it works on any PSI of an `application*.properties|yml|yaml` file, including a plain-text mapping when the
  * Properties or YAML plugin is off; files without PSI are not inspected by the platform at all.
  */
-class ConfigChainInspection : LocalInspectionTool() {
+class ConfigChainInspection : LocalInspectionTool(), com.intellij.openapi.project.DumbAware {
     override fun checkFile(file: PsiFile, manager: InspectionManager, isOnTheFly: Boolean): Array<ProblemDescriptor>? {
         if (!Placeholders.isConfigFileName(file.name)) return null
         val vf = file.originalFile.virtualFile?.takeIf { it.isInLocalFileSystem } ?: return null
