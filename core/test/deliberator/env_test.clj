@@ -11,7 +11,7 @@
 (use-fixtures :once (fn [f] (f) (env/close-clients!)))
 
 (def remote {:name "dev" :kind :remote
-             :aws {:profile "dlbtest-dev" :region "eu-central-1" :account "123456789012"}
+             :aws {:profile "dlbtest-dev" :region "eu-central-1" :account "210987654321"}
              :targets {:service/a "https://a.example.test"}})
 
 (defn invalid-problems [m]
@@ -29,7 +29,7 @@
       (is (= :local (:kind e)))
       (is (= (or (System/getenv "DELIBERATOR_LOCAL_ENDPOINT") (System/getProperty "deliberator.local.endpoint") "http://localhost:4566")
              (get-in e [:aws :endpoint])))
-      (is (= "000000000000" (get-in e [:aws :account])))
+      (is (= env/fake-account (get-in e [:aws :account])))
       (is (= "eu-central-1" (get-in e [:aws :region])))
       (is (= ["local"] (env/names "w")))
       (is (= e (store/read-edn (store/path "w" "environments" "local.edn"))))

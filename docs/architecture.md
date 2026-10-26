@@ -116,7 +116,7 @@ in the session, the file stays where it is, and `run.edn` records the path and s
            :log/service-a {:container "deliberator-default-service-a"} :db/main "jdbc:postgresql://…"}}
 
 {:name "dev" :kind :remote :read-only true
- :aws {:profile "sso-dev" :region "eu-central-1" :account "123456789012"}
+ :aws {:profile "sso-dev" :region "eu-central-1" :account "000000000000"}
  :targets {:service/a "https://…" :log/service-a {:cloudwatch "/ecs/service-a"} …}}
 ```
 
@@ -124,9 +124,10 @@ A `:local` environment cannot name a profile and must name an endpoint whose hos
 network: loopback, an RFC 1918 / link-local / CGNAT address, a bare container name (`floci`), or
 `*.internal|*.local|*.localhost|*.lan|*.home.arpa|*.test`. AWS's own domains (`amazonaws.com`, `amazonaws.com.cn`,
 `api.aws`) and any other public name are refused at load time, with the reason. Its clients are built from the
-record only, never from `~/.aws` or ambient `AWS_*` variables. The account id of the local record is Floci's
-`000000000000`: the one in the emulator's ARNs and in the estate's Terraform. Making it match a real account (so
-hardcoded ARNs in a real repository line up) needs Floci's account-id setting and is roadmap piece M6.2, not done.
+record only, never from `~/.aws` or ambient `AWS_*` variables. The account id of the local record is Floci's own `000000000000` until the workspace names the real one
+(`workspace.open --account 000000000000`, or `env.save` of `local`): the runtime then starts Floci with `FLOCI_DEFAULT_ACCOUNT_ID`,
+so the ARNs of the emulator and of Terraform applied onto it carry the real account and hardcoded ARNs of a real repository line up
+.
 A `:remote` environment takes its credentials from `:profile` (static keys from the shared credentials file, else
 `aws configure export-credentials` for SSO/assume-role profiles); `:read-only` defaults to true; an
 `:endpoint` is accepted on it only so tests can point a remote-shaped record at the emulator. Scenarios name targets
@@ -182,7 +183,8 @@ own AWS client run only against a `:local` environment and cannot reach real AWS
 - an `op` step is refused on a remote environment and when its body names one (`env`, `secrets-from`, `name` of an
   `env.*` operation), reads included;
 - `terraform.local` runs terraform with the same scrub (no `AWS_*`, empty config file) against a root whose provider
-  block points at the emulator; the per-repository override file that would let any root run locally is roadmap M6.1.
+  blocks point at the emulator: its own (the estate's Floci root) or through the override file it writes next to the root's
+  `.tf` files (`deliberator_override.tf.json`); a root the override cannot cover is refused.
 
 **`sqs receive` on a remote environment is a peek**: `VisibilityTimeout 0`, nothing deleted (the remote question is what
 is in the queue, never consuming it); `# @delete` is the consuming receive, one mutation confirmed before the receive as
@@ -237,7 +239,7 @@ Operations are `area.verb`: `workspace.*`, `session.*`, `env.*`, `runtime.*`, `s
 schema and class. The CLI's help and the IDE's operations form are generated from `op.describe`,
 so an operation exists in both the moment the core has it; an agent's tool list generated the same
 way (§4.H of the brief) is planned, not built. Planned families, not built: `worktree.*`, `pr.*`,
-`ci.*` (M5), `provider.*` (M6). There is no `query.*` family and none is planned: a named query is a one-step `.scn` under the session's `queries/`. Results are
+`ci.*` (M5), `provider.*` (M6). Terraform: `terraform.local` (plan, apply, destroy, override), `terraform.graph`, `terraform.apply-all`, `terraform.locate`, `terraform.drift`. There is no `query.*` family and none is planned: a named query is a one-step `.scn` under the session's `queries/`. Results are
 small by rule: a summary plus paths; full data is on disk.
 
 **Providers** (M6, planned, not built) speak the same framing on stdio. `providers/<name>.edn`
@@ -364,7 +366,7 @@ operation.
 | M3 services | service containers, topology switching, hot reload, config chain navigation and inspection, secrets gating | DCEVM reload into a container JVM on Java 21 and 25 | done headless 2026-10-16; the GUI checks of `docs/demo-m3.md` §9 partly walked |
 | M4 remote | SSO environments, read-only inspection, deployed versions, Logs Insights with bytes scanned, named queries, cached views | SSO profile use from the daemon; Insights statistics shape | built in core and CLI (2026-10-26): `:remote` records with profile credentials and `env.create`, confirmation tokens, `audit.log`, remote reads and drift in the explorer, `config.refresh`, `deployed.refresh|show`, `logs.insights` (bytes scanned in every result; the `logs insights` step), named queries as `queries/<name>.scn`; the IDE views (Environments, exception to logs) and real SSO by hand are open (roadmap §3) |
 | M5 CI/CD + PRs | Actions job logs as text, poll-tail, fail-vs-success diff, local pipeline (`act` + Floci CodeDeploy), PR worktrees with checks | `act` on Podman; what Floci does with a CodeDeploy deployment | not started |
-| M6 Terraform + fakes | override files, scrubbed wrapper, cross-repo apply order, resource → container links; record/replay HTTP fakes, identity-fake extension shape | Terraform AWS provider 6.x against Floci for the estate module | partly built: `terraform.local` plan/apply onto Floci and `terraform.drift`; override file, apply order, links and fakes not built (roadmap §4, §6) |
+| M6 Terraform + fakes | override files, scrubbed wrapper, cross-repo apply order, resource → container links; record/replay HTTP fakes, identity-fake extension shape | Terraform AWS provider 6.x against Floci for the estate module | M6a built in core and CLI (2026-10-26): override file per root, workspace account id in Floci, `terraform.graph` and `apply-all`, `terraform.locate`, `service.list` links; gate passed (AWS provider 6.x applies the estate module on Floci); the explorer wiring is the IDE's, fakes (M6b) not built (roadmap §4, §6) |
 
 The fake-external-systems category (brief §4.I) is designed as: a fake is a runtime container
 declared like a service plus a provider that records and replays; recordings are scrubbed before

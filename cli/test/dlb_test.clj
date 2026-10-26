@@ -399,6 +399,43 @@
     (is (str/includes? (:out (dlb *home* "help" "repo")) "dlb repo attach <path>"))
     (is (str/includes? (:out (dlb *home* "help" "scenario")) "dlb scenario kinds"))))
 
+;; --- M6a: Terraform to local --------------------------------------------------------------------------
+
+(deftest terraform-graph-and-locate-from-the-shell
+  (let [g (dlb *home* "terraform" "graph" "estate/terraform/aws,estate/terraform/iam" "--json")
+        m (json-line (:out g))
+        order (get-in m [:result :order])]
+    (is (zero? (:exit g)) (:err g))
+    (testing "relative roots are sent absolute; the IAM root comes first although it was listed second"
+      (is (= [(str (fs/normalize root) "/estate/terraform/iam") (str (fs/normalize root) "/estate/terraform/aws")] order)))
+    (is (= [["iam" "aws" "data"]] (map (juxt :from :to :via) (get-in m [:result :edges])))))
+  (let [r (dlb *home* "terraform" "graph" "estate/terraform/aws,estate/terraform/iam")]
+    (is (zero? (:exit r)))
+    (is (str/includes? (:out r) "edges: 1") (:out r))
+    (is (re-find #"order: .*estate/terraform/iam, .*estate/terraform/aws" (:out r)) (:out r)))
+  (testing "locate: where an address is declared"
+    (let [r (dlb *home* "terraform" "locate" "estate/terraform/floci" "module.stack.aws_sqs_queue.inbox" "--json")
+          res (:result (json-line (:out r)))]
+      (is (zero? (:exit r)) (:err r))
+      (is (str/ends-with? (:file res) "estate/terraform/modules/stack/main.tf"))
+      (is (pos? (:line res))))
+    (let [r (dlb *home* "terraform" "locate" "estate/terraform/floci" "aws_nothing.here")]
+      (is (= 2 (:exit r)))
+      (is (str/includes? (:err r) "tf/not-found") (:err r)))))
+
+(deftest workspace-open-takes-the-account
+  (let [r (dlb *home* "workspace" "open" "acct10" "--account" "000000000000" "--json")]
+    (is (zero? (:exit r)) (:err r))
+    (is (= "000000000000" (get-in (json-line (:out r)) [:result :account]))))
+  (let [r (dlb *home* "workspace" "open" "acct10" "--account" "nope")]
+    (is (= 2 (:exit r)))
+    (is (str/includes? (:err r) "bad-args") (:err r))))
+
+(deftest terraform-apply-all-help-names-the-roots
+  (let [h (:out (dlb *home* "help" "terraform" "apply-all"))]
+    (is (str/includes? h "dlb terraform apply-all <roots>") h)
+    (is (str/includes? h "[--action string]"))))
+
 ;; --- piece 10: explicit workspaces, typed log errors, ws ignored by ws-less ops ------------------------
 
 (deftest workspace-open-is-the-only-way-in-for-reads

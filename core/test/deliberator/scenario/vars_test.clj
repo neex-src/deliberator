@@ -15,7 +15,7 @@
   (binding [store/*clock* (t/fixed-clock "2026-10-16T10:15:02Z")]
     (let [v (vars/snapshot header :correlation "run-1"
                            :env {:name "local" :kind :local
-                                 :aws {:region "eu-central-1" :account "123456789012"
+                                 :aws {:region "eu-central-1" :account "000000000000"
                                        :credentials {:secret-access-key "s3cr3t"} :secret-key "k"}
                                  :token "t"})]
       (is (re-matches #"[0-9a-f-]{36}" (v "uuid")))
@@ -24,7 +24,7 @@
       (is (= "2026-10-16T10:15:02Z" (v "now")))
       (is (= "1792145702" (v "now.epoch")))
       (is (= "run-1" (v "correlation")))
-      (is (= ["local" "local" "eu-central-1" "123456789012"]
+      (is (= ["local" "local" "eu-central-1" "000000000000"]
              (map v ["env.name" "env.kind" "env.region" "env.account"])))
       (is (not-any? #(re-find #"(?i)secret|token|key|s3cr3t" %) (keys v)) "nothing secret-looking")
       (is (not-any? #(= "s3cr3t" %) (vals v)))

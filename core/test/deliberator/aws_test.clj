@@ -15,7 +15,7 @@
   (:import (java.time Instant)
            (java.util UUID)))
 
-(use-fixtures :once (fn [f] (f) (env/close-clients!)))
+(use-fixtures :once (fn [f] (try (f) (finally (fu/drop-queues! "dlbtest-") (env/close-clients!)))))
 
 (def ctx {:ws "w"})
 

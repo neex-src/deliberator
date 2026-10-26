@@ -9,6 +9,7 @@
             [deliberator.env :as env]
             [deliberator.markers :as markers]
             [deliberator.ops :as ops]
+            [deliberator.runtime :as runtime]
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.test-util :as tu]
@@ -166,6 +167,20 @@
       (is (.isDirectory (io/file own)))
       (is (= own (:project (:workspace (call "workspace.show" {:ws "typo"}))))))
     (is (= :bad-args (thrown-type #(call "workspace.open" {:ws "typo" :path "rel"}))))))
+
+(deftest workspace-open-takes-the-account-the-runtime-then-gives-floci
+  ;; M6.2: the account id of the real accounts this workspace mirrors lives in the local environment
+  (tu/with-temp-home
+    (is (= "000000000000" (:account (call "workspace.open" {:ws "acc"}))) "Floci's own fake one until told")
+    (is (= "000000000000" (:account (call "workspace.open" {:ws "acc" :account "000000000000"}))))
+    (is (= "000000000000" (get-in (:env (call "env.describe" {:ws "acc" :name "local"})) [:aws :account])))
+    (is (= "000000000000" (:account (call "workspace.open" {:ws "acc"}))) "a later open without it keeps it")
+    (is (= "000000000000" (get-in (first (runtime/desired-all "acc" (runtime/default-config))) [:env "FLOCI_DEFAULT_ACCOUNT_ID"])))
+    (is (= :bad-args (thrown-type #(call "workspace.open" {:ws "acc" :account "12345"}))))
+    (is (= :bad-args (thrown-type #(call "workspace.open" {:ws "acc" :account "85103289631x"}))))
+    (testing "a new workspace can be born with it, and a fresh local-for follows runtime.edn's world"
+      (is (= "111122223333" (:account (call "workspace.open" {:ws "born" :account "111122223333"}))))
+      (is (= "111122223333" (get-in (runtime/desired-all "born" (runtime/default-config)) [0 :env "FLOCI_DEFAULT_ACCOUNT_ID"]))))))
 
 (def ^:private ctx {:emit! (fn [_]) :on-cancel! (fn [_]) :daemon {:runs (atom {}) :checked (atom #{})}})
 

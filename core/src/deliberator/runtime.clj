@@ -168,6 +168,16 @@
   [d]
   (assoc d :hash (subs (store/sha256 (.getBytes ^String (pr-str (sorted-deep (dissoc d :health :service? :secret-values :hash))) StandardCharsets/UTF_8)) 0 16)))
 
+(defn- floci-account-env
+  "`[[\"FLOCI_DEFAULT_ACCOUNT_ID\" account]]` for the Floci role when the workspace's `local` environment names another account
+  than Floci's own fake one (M6.2: the account the ARNs of the emulator carry, so hardcoded ARNs of a real repository line up);
+  an explicit `:env` of the role in `runtime.edn` wins over it."
+  [ws role]
+  (when (= :floci role)
+    (let [a (get-in (env/load ws "local") [:aws :account])]
+      (when (and (string? a) (not= a env/fake-account))
+        [["FLOCI_DEFAULT_ACCOUNT_ID" a]]))))
+
 (defn desired
   "One container of the config resolved into what will be created:
   `{:role :name :image :ports {cp hp} :host-ip :env :command :mounts :health :podman-socket
@@ -197,7 +207,8 @@
                                 :destination "/docker-entrypoint-initdb.d" :options ["ro" "z"]}])))
         d {:role rn :name name :image (:image spec) :ports ports
            :host-ip (or (:host-ip spec) "127.0.0.1")
-           :env (into (sorted-map) (for [[k v] (:env spec)] [(str (clojure.core/name k)) (template v ctx)]))
+           :env (into (sorted-map) (concat (floci-account-env ws role)
+                                           (for [[k v] (:env spec)] [(str (clojure.core/name k)) (template v ctx)])))
            :command (or (:command spec) (cond jar (service-command spec) exploded (exploded-command spec))) :mounts mounts :network network
            :health (if (or jar exploded) (service-health spec) (:health spec))
            :podman-socket (:podman-socket spec)}

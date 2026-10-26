@@ -2,7 +2,7 @@
 # Credentials would come from AWS_PROFILE / the environment, never from files in the repo.
 terraform {
   required_providers {
-    aws = { source = "hashicorp/aws", version = "~> 5.0" }
+    aws = { source = "hashicorp/aws", version = "~> 6.0" }
   }
 }
 
