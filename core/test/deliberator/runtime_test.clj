@@ -33,6 +33,26 @@
 
 (defn- names-now [c] (set (mapcat :Names (podman/list-containers c :all true))))
 
+(deftest a-health-body-is-persisted-only-when-it-changed-or-fails
+  ;; review 2026-10-25 R26: the IDE's 15 s status tick must not write a blob per probe
+  (tu/with-temp-home
+    (let [puts (atom 0)
+          persist! #'runtime/persist-probe!
+          url "http://localhost:1/health"
+          body #(.getBytes ^String % "UTF-8")]
+      (with-redefs [store/raw-put! (fn [& _] (swap! puts inc) {})]
+        (persist! "w" url (body "{\"s\":\"ok\"}") 200 "application/json")
+        (persist! "w" url (body "{\"s\":\"ok\"}") 200 "application/json")
+        (persist! "w" url (body "{\"s\":\"ok\"}") 200 "application/json")
+        (is (= 1 @puts) "the same 2xx body three times is persisted once")
+        (persist! "w" url (body "{\"s\":\"changed\"}") 200 "application/json")
+        (is (= 2 @puts) "a changed body is persisted")
+        (persist! "w" url (body "{\"s\":\"changed\"}") 503 "application/json")
+        (persist! "w" url (body "{\"s\":\"changed\"}") 503 "application/json")
+        (is (= 4 @puts) "a non-2xx probe is persisted every time")
+        (persist! "w" "http://localhost:2/health" (body "{\"s\":\"changed\"}") 200 "application/json")
+        (is (= 5 @puts) "the memory is per URL")))))
+
 ;; --- pure ------------------------------------------------------------------------------------
 
 (deftest desired-state

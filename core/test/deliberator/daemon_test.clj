@@ -268,7 +268,7 @@
       (let [e (:error (:terminal (tc/request c "runtime.logs" {:ws "w1" :role "nosuchrole"})))]
         (is (string? (:message e)))
         (is (string? (:type e))))
-      (is (= "bad-args" (get-in (tc/request c "runtime.logs" {:ws "w1" :role "x" :since "yesterday"})
+      (is (= "logs/bad-arg" (get-in (tc/request c "runtime.logs" {:ws "w1" :role "x" :since "yesterday"})
                                 [:terminal :error :type]))))))
 
 ;; --- scenarios ----------------------------------------------------------------------------------

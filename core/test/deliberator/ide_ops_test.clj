@@ -14,6 +14,7 @@
             [deliberator.logfetch :as logfetch]
             [deliberator.markers :as markers]
             [deliberator.ops :as ops]
+            [deliberator.protocol :as protocol]
             [deliberator.runtime :as runtime]
             [deliberator.session :as session]
             [deliberator.store :as store]
@@ -657,7 +658,7 @@
           _ (call "workspace.open" {:ws ws})
           local (:env (call "env.describe" {:ws ws :name "local"}))
           ;; what a client sends: JSON, so nested keys are strings and kind is a string
-          json-round (fn [m] (json/read-str (json/write-str m)))
+          json-round (fn [m] (json/read-str (protocol/encode m)))
           record (json-round {:kind "local" :description "second region"
                               :aws (assoc (:aws local) :region "eu-west-1")
                               :targets (:targets local)})
@@ -671,7 +672,7 @@
         (is (= "second region" (:description e))))
       (is (some #{"local2"} (map :name (:environments (call "env.list" {:ws ws})))))
       (testing "an invalid record is refused by env/validate, nothing is written"
-        (is (= "env/invalid" (thrown-type #(call "env.save" {:ws ws :name "bad" :record (json-round {:kind "local" :aws {} :targets {}})}))))
+        (is (= :env/invalid (thrown-type #(call "env.save" {:ws ws :name "bad" :record (json-round {:kind "local" :aws {} :targets {}})}))))
         (is (not (some #{"bad"} (map :name (:environments (call "env.list" {:ws ws})))))))
       (testing "name wins over the record's"
         (call "env.save" {:ws ws :name "local3" :record (assoc record "name" "other")})
@@ -689,7 +690,7 @@
         (call "runtime.set" {:ws ws :path ["containers" "floci" "ports" "4566"] :value 24566})
         (is (= {4566 24566} (get-in (store/read-edn (runtime/config-path ws)) [:containers :floci :ports])))
         (is (= "http://localhost:24566" (get-in (env/load ws "local") [:aws :endpoint])) "sync-env ran"))
-      (is (= "runtime/bad-path" (thrown-type #(call "runtime.set" {:ws ws :path [] :value 1})))))))
+      (is (= :runtime/bad-path (thrown-type #(call "runtime.set" {:ws ws :path [] :value 1})))))))
 
 ;; --- an active follow is work in flight (review R32) ---------------------------------------------------------------
 

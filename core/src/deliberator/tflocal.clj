@@ -6,6 +6,7 @@
   runs out (`deliberator.process`). Variables the root declares are filled from the workspace (no stored state):
   `endpoint` is the environment's endpoint, `container_endpoint`, `service_a_url` and `db_url` come from the runtime's container
   names (`store/container-name`); an explicit `vars` map overrides. Action `vars` only returns the final values, nothing runs."
+  (:refer-clojure :exclude [run!])
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [deliberator.env :as env]
