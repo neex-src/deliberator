@@ -236,7 +236,7 @@
           end :deliberator.steps.logs/end
           th (Thread.
               ^Runnable
-              (fn []
+              (bound-fn []
                 (try
                   (loop [seen {}]
                     (when-not @stop?
