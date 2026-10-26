@@ -207,7 +207,9 @@ class ConfigViewBanner : EditorNotificationProvider, DumbAware {
         if (!views.isView(file)) return null
         val (env, p) = views.paramOf(file) ?: return null
         val chain = ConfigChains.getInstance(project).cached(views.serviceOf(file) ?: return null, env)
-        val at = p.fetchedAt ?: chain?.snapshot?.fetchedAt
+        // the view's own Param is the one it was opened with: the age comes from what the cached chain says now (after a Refresh)
+        val now = chain?.parameters()?.firstOrNull { it.kind == p.kind && it.name == p.name }
+        val at = now?.fetchedAt ?: chain?.snapshot?.fetchedAt ?: p.fetchedAt
         val text = if (at == null) "No snapshot of $env yet." else "Cached snapshot of $env, fetched ${ConfigText.age(at)}."
         return Function { ed ->
             EditorNotificationPanel(ed, EditorNotificationPanel.Status.Info).apply {

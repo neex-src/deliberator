@@ -199,8 +199,10 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                 val d = Drift.parse(r)
                 drift = d
                 val report = writeText("drift-${env()}.txt", d.text())
+                // the tree shows what exists now (an apply just changed it, the cache was dropped): fetched here, off the EDT, not read from a cache that is empty
+                val res = AwsResources.getInstance().fetchNow(project)
                 ApplicationManager.getApplication().invokeLater({
-                    render(AwsResources.getInstance().get(project))
+                    render(res)
                     status.text = "${env()}: ${d.matching}/${d.declared} declared present, ${d.missing.size} missing, ${d.undeclared.size} undeclared"
                 }, ModalityState.any())
                 ApplicationManager.getApplication().invokeLater({ Ui.openFile(project, report) }, ModalityState.nonModal())

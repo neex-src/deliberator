@@ -108,7 +108,8 @@ class ConfigChains(private val project: Project) : Disposable {
         interest += k
         loads++
         chainLoads++
-        if (!chain.sameFacts(before)) changed()
+        // same facts but a newer snapshot (Refresh): the open views show its age, they render again
+        if (!chain.sameFacts(before) || chain.snapshot?.fetchedAt != before?.snapshot?.fetchedAt) changed()
         return chain
     }
 

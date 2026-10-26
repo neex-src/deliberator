@@ -234,6 +234,7 @@ class ServiceProcessHandler(
             finish(1)
             return
         }
+        if (stopped.get()) { finish(0); return }   // Stop came before anything started: nothing to start
         try {
             if (prestarted == null) {
                 print("> service.start $service")
@@ -257,7 +258,14 @@ class ServiceProcessHandler(
             finish(1)
             return
         }
-        if (stopped.get()) { print("stopped while starting: the service is stopped again") ; return }
+        if (stopped.get()) {
+            // Stop came while the start was in flight (before the call was handed out, or the wait ran out): what the start made is stopped here
+            print("stopped while starting: stopping the service again")
+            print("> service.stop $service")
+            try { ops.stop(service); print("service $service stopped") } catch (e: Exception) { print("service.stop failed - ${e.message}") }
+            finish(0)
+            return
+        }
         tail()
     }
 
