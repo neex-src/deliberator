@@ -30,7 +30,7 @@
 # reach real AWS from a shell step; `$` is the CLI's JSON here, like any other step's response.
 # @assert $.QueueUrls[0] contains estate-
 # @assert out contains estate-inbox
-aws sqs list-queues --output json
+aws sqs list-queues --queue-name-prefix estate- --output json
 
 ### aws sns.CreateTopic create-topic
 # @capture arn = $.TopicArn
