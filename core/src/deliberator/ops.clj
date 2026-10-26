@@ -1027,6 +1027,7 @@
                     :args (ws-schema :groups {:type :strings :required true :doc "log group names (comma separated on the command line) or log/ targets of the environment"}
                                      :query {:type :string :required true :doc "the Logs Insights query, e.g. fields @timestamp, @message | sort @timestamp desc | limit 20"}
                                      :env {:type :string :doc "environment name; default local (Floci answers with the rows of the group and zero statistics)"}
+                                     :env {:type :string :doc "environment name; default local (Floci's Insights is a stub)"}
                                      :since {:type :string :doc "start of the window: ISO-8601 instant or a duration ago like 30m; default 1h"}
                                      :until {:type :string :doc "end of the window: instant or duration ago; default now"}
                                      :name {:type :string :doc "name the query: its text is saved as sessions/<k>/queries/<name>.insights"}

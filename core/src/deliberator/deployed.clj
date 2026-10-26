@@ -185,27 +185,19 @@
      :errors (into (vec (:errors ls)) (keep :error) detail)
      :truncated (when (> (count fns) lambda-cap) (count fns))}))
 
-(def ^:private absent-codes
-  "Error codes that say the service is not there for this account or emulator (not subscribed, not implemented): the
-  section is `:absent`, not failed (\"where present\")."
-  #{"SubscriptionRequiredException" "OptInRequired" "UnknownOperationException" "UnknownOperation" "NotImplemented"
-    "NotImplementedException" "UnsupportedOperation" "InvalidAction"})
-
 (defn- codedeploy-section! [inv]
-  (let [ls (paged! inv :codedeploy :ListDeployments {} :deployments :nextToken :nextToken nil)]
-    (if (and (seq (:errors ls)) (absent-codes (:code (first (:errors ls)))))
-      {:rows [] :refs (:refs ls) :errors [] :absent (:code (first (:errors ls)))}
-      (let [detail (doall (for [id (take deployment-cap (:items ls))]
-                            (call! inv :GetDeployment :codedeploy {:deploymentId id} {:deployment id})))]
-        {:rows (vec (for [d detail :when (:r d)] (deployment-row (:r d))))
-         :refs (into (vec (:refs ls)) (map :ref) detail)
-         :errors (into (vec (:errors ls)) (keep :error) detail)}))))
+  (let [ls (paged! inv :codedeploy :ListDeployments {} :deployments :nextToken :nextToken nil)
+        detail (doall (for [id (take deployment-cap (:items ls))]
+                        (call! inv :GetDeployment :codedeploy {:deploymentId id} {:deployment id})))]
+    {:rows (vec (for [d detail :when (:r d)] (deployment-row (:r d))))
+     :refs (into (vec (:refs ls)) (map :ref) detail)
+     :errors (into (vec (:errors ls)) (keep :error) detail)}))
 
 ;; --- views --------------------------------------------------------------------------------------------------
 
 (defn text-view
   "The tab separated view: kind, cluster, name, revision|version, tags|code sha, desired/running, updated."
-  [{:keys [env fetched-at services deployments errors absent]}]
+  [{:keys [env fetched-at services deployments errors]}]
   (str "# deployed in " env ", fetched " fetched-at "\n"
        "# kind\tcluster\tname\trevision/version\timages/tags\tdesired/running\tupdated\n"
        (apply str (for [s services]
@@ -221,8 +213,6 @@
        (when (seq deployments)
          (str "# codedeploy\n"
               (apply str (for [d deployments] (str "deployment\t" (:application d) "/" (:group d) "\t" (:id d) "\t" (:status d) "\t" (:created-at d) "\n")))))
-       (when (seq absent)
-         (str "# absent: " (str/join ", " (for [[sec code] absent] (str (name sec) " (" code ")"))) "\n"))
        (when (seq errors)
          (str "# errors\n"
               (apply str (for [[sec es] errors, e es] (str (name sec) "\t" (:op e) "\t" (:code e) " " (:message e) "\n")))))))
@@ -246,7 +236,7 @@
         inv (fn [svc op req] (aws/invoke! ctx e svc op req))
         sections {:ecs (ecs-section! inv) :lambda (lambda-section! inv) :codedeploy (codedeploy-section! inv)}
         errors (into (sorted-map) (for [[k v] sections :when (seq (:errors v))] [k (:errors v)]))
-        answered? (fn [[_ v]] (or (seq (:rows v)) (and (empty? (:errors v)) (not (:absent v)))))   ; absent or failed is not an answer
+        answered? (fn [[_ v]] (or (seq (:rows v)) (empty? (:errors v))))
         now (store/now)]
     (when-not (some answered? sections)
       (let [first-err (-> errors vals first first)]
@@ -260,7 +250,6 @@
                         :clusters (get-in sections [:ecs :clusters])
                         :raw (vec (mapcat :refs (vals sections)))}
                  (seq errors) (assoc :errors errors)
-                 (get-in sections [:codedeploy :absent]) (assoc :absent {:codedeploy (get-in sections [:codedeploy :absent])})
                  (get-in sections [:lambda :truncated]) (assoc :truncated {:lambda (get-in sections [:lambda :truncated])}))
           target (store/write-edn! (cache-path ws (:name e)) snap)
           txt (store/write-bytes-atomic! (text-path ws (:name e)) (.getBytes ^String (text-view snap) StandardCharsets/UTF_8))]
@@ -268,8 +257,7 @@
                :ecs (count (get-in sections [:ecs :rows])) :lambda (count (get-in sections [:lambda :rows]))
                :deployments (count (:deployments snap))
                :path (str target) :text (str txt) :raw (count (:raw snap))}
-        (seq errors) (assoc :errors errors)
-        (seq (:absent snap)) (assoc :absent (:absent snap))))))
+        (seq errors) (assoc :errors errors)))))
 
 (defn show
   "The cached view of `env-name` with its age, narrowed by `:service`; never calls AWS. `:now` for tests."
@@ -288,9 +276,8 @@
         (fail :deployed/not-found (str "no service " service " in the cached view of " env-name)
               :names (vec (sort (distinct (map :name all))))
               :hint "the names the cache holds are listed; dlb deployed refresh refetches"))
-      (cond-> {:env (:env snap) :fetched-at (:fetched-at snap) :age-ms age :age (age-text age)
+      (cond-> {:env (:name snap) :fetched-at (:fetched-at snap) :age-ms age :age (age-text age)
                :services picked :count (count picked)
                :path (str (cache-path ws env-name)) :text (str (text-path ws env-name))}
         (str/blank? service) (assoc :deployments (:deployments snap))
-        (seq (:errors snap)) (assoc :errors (:errors snap))
-        (seq (:absent snap)) (assoc :absent (:absent snap))))))
+        (seq (:errors snap)) (assoc :errors (:errors snap))))))

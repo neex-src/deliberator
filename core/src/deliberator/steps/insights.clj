@@ -9,10 +9,9 @@
   (what Insights bills for), `records-matched`, `records-scanned`, `rows`, `status`. `$` is
   `{status, statistics{bytesScanned ...}, results[{field: value}], raw[{op request response}]}`; the persisted
   `response.json` is that document and the step's display is the result text with the bytes scanned line. A query that
-  does not end `Complete` (failed, stopped over the step's budget) is a step ERROR; the budget is the step's timeout
-  (`@timeout`, default 10 minutes) minus two seconds, after which the query is stopped, not abandoned; the partial text is still written.
-  It runs against any environment that answers CloudWatch Logs Insights: a remote account, or Floci (which answers `Complete`
-  with the rows of the group and zero statistics; the polling states, the budget and the stop are only seen on a real account)."
+  does not end `Complete` (failed, stopped over the step's timeout) is a step ERROR; the partial text is still written.
+  The step needs a remote or emulated environment that answers CloudWatch Logs; Floci's Insights is a stub that answers
+  `Failed`, so against `local` expect an ERROR with the service's words."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [deliberator.insights :as ins]
@@ -33,21 +32,19 @@
         stats (:statistics r)
         doc {"status" (:status r) "query-id" (:query-id r) "statistics" stats
              "results" (:result-rows r) "raw" (mapv #(into {} (for [[k v] % :when v] [(name k) v])) (:raw r))}
-        resp (pretty doc)
-        req (c/utf8 (str (str/trimr (or query "")) "\n"))]
+        resp (pretty doc)]
     (if (not= "Complete" (:status r))
       (throw (ex-info (str "Logs Insights query " (:query-id r) " ended " (:status r) "; "
                            (ins/human-bytes (get stats "bytesScanned")) " scanned")
-                      {:type :insights/not-complete :request-bytes req :request-ext "txt" :response-bytes resp :response-ext "json"
+                      {:type :insights/not-complete :response-bytes resp :response-ext "json"
                        :hint (str "the partial text is in " (:path r) "; "
                                   (case (:status r)
-                                    "Failed" "a query the service accepted and then could not run; the raw GetQueryResults response says why"
+                                    "Failed" "a malformed query fails at GetQueryResults; Floci's Insights is a stub that always answers Failed"
                                     "BudgetExceeded" "raise the step's @timeout or narrow @since and the groups"
                                     "see the raw GetQueryResults response"))}))
       {:facts {"bytes-scanned" (get stats "bytesScanned" 0) "records-matched" (get stats "recordsMatched" 0)
                "records-scanned" (get stats "recordsScanned" 0) "rows" (:rows r) "status" (:status r)}
        :body-json (json/read-str (c/text resp))
-       :request-bytes req :request-ext "txt"
        :response-bytes resp :response-ext "json" :display (:text r) :lines (:rows r)
        :source :aws :op "logs.insights" :content-type "application/json"})))
 

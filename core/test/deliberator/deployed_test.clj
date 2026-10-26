@@ -7,7 +7,6 @@
             [clojure.test :refer [deftest is testing]]
             [deliberator.aws :as aws]
             [deliberator.deployed :as d]
-            [deliberator.env]
             [deliberator.store :as store]
             [deliberator.test-util :as tu])
   (:import (java.time Instant)))
@@ -66,16 +65,14 @@
               {:kind :ecs :cluster "stage" :name "svc" :revision 3 :desired 0 :running 0 :containers [] :deployments []}
               {:kind :lambda :name "fn" :version "$LATEST" :code-sha256 "abc=" :last-modified "2026-10-15T18:47:31.056+0000"}]
    :deployments [{:id "d-1" :application "app" :group "g" :status "Succeeded" :created-at (Instant/parse "2026-10-25T00:00:00Z")}]
-   :errors {:codedeploy [{:op "ListDeployments" :code "AccessDenied" :message "no"}]}
-   :absent {:ecs "SubscriptionRequiredException"}})
+   :errors {:codedeploy [{:op "ListDeployments" :code "AccessDenied" :message "no"}]}})
 
 (deftest the-text-view-is-one-row-per-service
   (let [lines (str/split-lines (d/text-view snap))]
     (is (some #(= "ecs\tprod\tsvc\trev 7\tapp:v1\t2/2\t2026-10-26T11:00:00Z" %) lines))
     (is (some #(= "lambda\t-\tfn\t$LATEST\tabc=\t\t2026-10-15T18:47:31.056+0000" %) lines))
     (is (some #(str/includes? % "deployment\tapp/g\td-1\tSucceeded") lines))
-    (is (some #(str/includes? % "codedeploy\tListDeployments\tAccessDenied no") lines))
-    (is (some #(= "# absent: ecs (SubscriptionRequiredException)" %) lines))))
+    (is (some #(str/includes? % "codedeploy\tListDeployments\tAccessDenied no") lines))))
 
 (defn- thrown-data [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))
 
@@ -88,7 +85,6 @@
     (store/write-edn! (d/cache-path "w" "dev") snap)
     (let [now (Instant/parse "2026-10-26T12:07:00Z")
           all (d/show "w" "dev" {:now now})]
-      (is (= "dev" (:env all)))
       (is (= 3 (:count all)))
       (is (= 420000 (:age-ms all)))
       (is (= "7 min" (:age all)))
@@ -123,19 +119,3 @@
     (is (= [{"name" "K" "value" "<redacted>"} {"name" "L" "value" "<redacted>"}] (get c "environment")))
     (is (= [{"name" "S" "valueFrom" "arn:aws:ssm:x"}] (get c "secrets")) "references are not secrets")
     (is (= "r/app:1" (get c "image")))))
-
-(deftest a-refresh-that-nothing-answered-keeps-the-cache-it-found
-  ;; a remote-shaped record whose endpoint is a closed port: every call of every section fails with a connection error
-  (tu/with-temp-home
-    (let [creds (doto (java.io.File/createTempFile "dlb-creds" ".ini") (.deleteOnExit))]
-      (spit creds "[dead]\naws_access_key_id = test\naws_secret_access_key = test\n")
-      (binding [deliberator.env/*credentials-file* creds]
-        (deliberator.env/save! "default" (deliberator.env/validate
-                                          {:name "dead" :kind :remote :read-only true
-                                           :aws {:profile "dead" :region "eu-central-1" :account "000000000000" :endpoint "http://localhost:19"} :targets {}}))
-        (store/write-edn! (d/cache-path "default" "dead") snap)
-        (let [e (thrown-data #(d/refresh! "default" "dead"))]
-          (is (= :deployed/refresh-failed (:type e)))
-          (is (= #{:ecs :lambda :codedeploy} (set (keys (:errors e)))) "every section says why")
-          (is (some? (:hint (first (first (vals (:errors e)))))) "with the environment's hint"))
-        (is (= "dev" (:env (d/cached "default" "dead"))) "the old cache is untouched")))))

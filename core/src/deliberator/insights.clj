@@ -66,13 +66,10 @@
   (into (sorted-map) (for [[k v] (:statistics r)] [(name k) (whole v)])))
 
 (defn resolve-group
-  "A log group name as given, or the group of the environment target of that name (`log/service-a` -> `{:cloudwatch g}`).
-  A name that IS a target of the environment but not a CloudWatch one (a container or a file log) is refused with the way out."
+  "A log group name as given, or the group of the environment target of that name (`log/service-a` -> `{:cloudwatch g}`)."
   [e g]
   (let [t (get-in e [:targets (keyword g)])]
     (cond (and (map? t) (string? (:cloudwatch t))) (:cloudwatch t)
-          (some? t) (fail :insights/bad-arg (str g " is a target of environment " (:name e) " but not a CloudWatch log group: " (pr-str t))
-                          :hint "Logs Insights reads CloudWatch log groups: pass a group name (/aws/lambda/fn) or a log/ target mapped to {:cloudwatch \"group\"}")
           :else g)))
 
 ;; --- the derived text (pure) ----------------------------------------------------------------------
@@ -156,12 +153,8 @@
         _ (when (empty? groups) (fail :insights/bad-arg "logs insights needs at least one log group" :hint "--groups /aws/lambda/fn (a log group name or a log/ target of the environment)"))
         _ (when (> (count groups) max-groups) (fail :insights/bad-arg (str "at most " max-groups " log groups per query")))
         _ (when (str/blank? query) (fail :insights/bad-arg "logs insights needs a query" :hint "e.g. fields @timestamp, @message | sort @timestamp desc | limit 20"))
-        ;; StartQuery takes epoch seconds: the start rounds down and the end UP, so that `until` = now still holds the events
-        ;; of the current second
-        floor-s #(.truncatedTo ^Instant % java.time.temporal.ChronoUnit/SECONDS)
-        ceil-s #(let [f (floor-s %)] (if (= f %) % (.plusSeconds ^Instant f 1)))
-        t1 (ceil-s (if (str/blank? until) now (parse-instant until now)))
-        t0 (floor-s (parse-instant (if (str/blank? since) default-since since) now))
+        t1 (if (str/blank? until) now (parse-instant until now))
+        t0 (parse-instant (if (str/blank? since) default-since since) now)
         _ (when-not (.isBefore t0 t1) (bad (str "the window is empty: since " t0 " is not before until " t1)))
         qfile (when name (save-query! ws sess name query))   ; persist first: the text is on disk before the service sees it
         started-ms (System/currentTimeMillis)
@@ -229,7 +222,7 @@
                         :raw @refs :result-rows result-rows :text text}
                  qfile (assoc :query-file (str qfile)))]
     (if (and throw? (not= "Complete" status))
-      (fail (keyword "insights" (case status "BudgetExceeded" "budget-exceeded" (str/lower-case status)))
+      (fail (keyword "insights" (str/lower-case status))
             (str "Logs Insights query " id " ended " status " after " (quot took 1000) " s; "
                  (human-bytes (get stats "bytesScanned")) " scanned; what came back is in " path)
             :hint (case status
