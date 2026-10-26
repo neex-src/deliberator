@@ -79,7 +79,6 @@
   (let [op (:verb step)
         host (or (:host ctx) (throw (ex-info "op steps need the daemon (run the scenario through it)" {:type :op/no-daemon})))
         args (args-of ctx step op)
-        _ (refuse-remote-body! ctx op args)
         req (c/utf8 (pretty args))
         cancels (atom [])
         line! (or (:line! ctx) (fn [_]))
@@ -90,7 +89,8 @@
               :alive? (fn [] (not (cancelled?)))
               :cancelled? cancelled?}
         expect-error? (shell/names-fact? step ["ok" "error.type" "error.message"])
-        res (try {:ok true :result (ops/call! op octx (into {} (map (fn [[k v]] [(keyword k) v])) args))}
+        res (try (refuse-remote-body! ctx op args)   ; an op error like any other: assertable (ok == false), else a step error
+                 {:ok true :result (ops/call! op octx (into {} (map (fn [[k v]] [(keyword k) v])) args))}
                  (catch InterruptedException e (doseq [f @cancels] (try (f) (catch Exception _ nil))) (throw e))
                  (catch Exception e
                    (let [d (ex-data e)]

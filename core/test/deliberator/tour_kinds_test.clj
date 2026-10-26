@@ -114,7 +114,7 @@
   (with-daemon [h]
     (with-client [c h]
       (tc/request c "session.start" {:key "T-1"})
-      (let [{:keys [env]} (:result (tc/request c "env.describe" {:name "local"}))
+      (let [{:keys [env]} (get-in (tc/request c "env.describe" {:name "local"}) [:terminal :result])
             r (run! c "env.scn" (str "### shell aws-vars\n# @assert out contains AWS_ENDPOINT_URL=" (get-in env [:aws :endpoint]) "\n"
                                      "env | grep '^AWS_' | sort\n"
                                      "### shell no-real-files\n# @assert out == /dev/null /dev/null\n"
