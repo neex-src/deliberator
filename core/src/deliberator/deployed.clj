@@ -246,7 +246,7 @@
         inv (fn [svc op req] (aws/invoke! ctx e svc op req))
         sections {:ecs (ecs-section! inv) :lambda (lambda-section! inv) :codedeploy (codedeploy-section! inv)}
         errors (into (sorted-map) (for [[k v] sections :when (seq (:errors v))] [k (:errors v)]))
-        answered? (fn [[_ v]] (or (seq (:rows v)) (empty? (:errors v))))
+        answered? (fn [[_ v]] (or (seq (:rows v)) (and (empty? (:errors v)) (not (:absent v)))))   ; absent or failed is not an answer
         now (store/now)]
     (when-not (some answered? sections)
       (let [first-err (-> errors vals first first)]

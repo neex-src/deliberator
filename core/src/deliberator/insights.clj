@@ -222,7 +222,7 @@
                         :raw @refs :result-rows result-rows :text text}
                  qfile (assoc :query-file (str qfile)))]
     (if (and throw? (not= "Complete" status))
-      (fail (keyword "insights" (str/lower-case status))
+      (fail (keyword "insights" (case status "BudgetExceeded" "budget-exceeded" (str/lower-case status)))
             (str "Logs Insights query " id " ended " status " after " (quot took 1000) " s; "
                  (human-bytes (get stats "bytesScanned")) " scanned; what came back is in " path)
             :hint (case status

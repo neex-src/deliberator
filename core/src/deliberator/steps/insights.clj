@@ -32,11 +32,12 @@
         stats (:statistics r)
         doc {"status" (:status r) "query-id" (:query-id r) "statistics" stats
              "results" (:result-rows r) "raw" (mapv #(into {} (for [[k v] % :when v] [(name k) v])) (:raw r))}
-        resp (pretty doc)]
+        resp (pretty doc)
+        req (c/utf8 (str (str/trimr (or query "")) "\n"))]
     (if (not= "Complete" (:status r))
       (throw (ex-info (str "Logs Insights query " (:query-id r) " ended " (:status r) "; "
                            (ins/human-bytes (get stats "bytesScanned")) " scanned")
-                      {:type :insights/not-complete :response-bytes resp :response-ext "json"
+                      {:type :insights/not-complete :request-bytes req :request-ext "txt" :response-bytes resp :response-ext "json"
                        :hint (str "the partial text is in " (:path r) "; "
                                   (case (:status r)
                                     "Failed" "a malformed query fails at GetQueryResults; Floci's Insights is a stub that always answers Failed"
@@ -45,6 +46,7 @@
       {:facts {"bytes-scanned" (get stats "bytesScanned" 0) "records-matched" (get stats "recordsMatched" 0)
                "records-scanned" (get stats "recordsScanned" 0) "rows" (:rows r) "status" (:status r)}
        :body-json (json/read-str (c/text resp))
+       :request-bytes req :request-ext "txt"
        :response-bytes resp :response-ext "json" :display (:text r) :lines (:rows r)
        :source :aws :op "logs.insights" :content-type "application/json"})))
 
