@@ -608,6 +608,13 @@
     (when counter (swap! counter inc))
     (try
       (logfetch/fetch! ws (or env "local") target :session (session-key ws args) :since since :for for :filter filter
+  (let [ws (ws-of args) env-name (or env "local")
+        follow? (boolean (or follow (= "until-cancelled" (some-> for str str/trim str/lower-case))))
+        counter (when follow? (:follows (:daemon ctx)))]   ; an active follow is work in flight (hello :runs, R32)
+    (verify-remote! ctx ws env-name)
+    (when counter (swap! counter inc))
+    (try
+      (logfetch/fetch! ws env-name target :session (session-key ws args) :since since :for for :filter filter
                        :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))
       (finally (when counter (swap! counter dec))))))
 
