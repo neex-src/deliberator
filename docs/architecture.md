@@ -89,6 +89,7 @@ workspaces/<ws>/
 ```
 
 Built in M6.5: `providers/<name>.edn` and `logs/providers/<name>.log`. Cached views so far: `config/<env>.edn` and `cache/<env>/deployed.edn`; a named query is a
+Planned, not built: `providers/<name>.edn` (M6). Cached views so far: `config/<env>.edn` and `cache/<env>/deployed.edn`; a named query is a
 convention, not a concept: a one-step `.scn` under the session's `queries/` and `dlb runs list --scenario <name>` as its
 history.
 
