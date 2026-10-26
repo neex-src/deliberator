@@ -358,11 +358,11 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
 
     // inspection (tests) ---------------------------------------------------------------------------------
 
-    class InlayInfo(val step: Int?, val lines: List<String>, val collapsed: List<String>, val section: StepSection?, val live: LiveStep?)
+    class InlayInfo(val step: Int?, val lines: List<String>, val collapsed: List<String>, val section: StepSection?, val live: LiveStep?, val offset: Int = 0)
 
     fun inlayInfos(): List<InlayInfo> = inlays.map { i ->
         val r = i.renderer
-        InlayInfo(r.step, r.lines(), if (r.section != null) listOf(r.section.summary()) else r.lines(), r.section, r.live)
+        InlayInfo(r.step, r.lines(), if (r.section != null) listOf(r.section.summary()) else r.lines(), r.section, r.live, i.offset)
     }
 
     fun gutterIcons(): Map<Int, StepGutterIcon> = highlighters.mapNotNull { it.gutterIconRenderer as? StepGutterIcon }.associateBy { it.step }

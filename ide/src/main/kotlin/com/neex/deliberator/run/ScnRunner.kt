@@ -139,8 +139,10 @@ class ScnRunner(private val project: Project) : Disposable {
             try {
                 execute(path, steps.orEmpty(), null)
             } catch (e: DaemonException) {
+                LOG.warn("run of ${file.name} failed: ${e.type}: ${e.message}")
                 Ui.notify(project, "Run ${file.name}", e.message + (e.hint?.let { "\n$it" } ?: ""), NotificationType.ERROR)
             } catch (e: Throwable) {
+                LOG.warn("run of ${file.name} failed", e)
                 Ui.notify(project, "Run ${file.name}", e.toString(), NotificationType.ERROR)
             } finally {
                 st.running = false
@@ -336,6 +338,7 @@ class ScnRunner(private val project: Project) : Disposable {
     }
 
     companion object {
+        private val LOG = com.intellij.openapi.diagnostic.logger<ScnRunner>()
         fun getInstance(project: Project): ScnRunner = project.getService(ScnRunner::class.java)
 
         /** A run of [steps] continues the latest run of its file unless it runs everything or starts at step 1. */

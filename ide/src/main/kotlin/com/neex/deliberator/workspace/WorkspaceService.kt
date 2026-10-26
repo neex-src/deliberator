@@ -96,7 +96,15 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
         val a = JsonObject()
         args.entrySet().forEach { a.add(it.key, it.value) }
         a.addProperty("ws", w)
-        val t = client().call(op, a, onEvent)
+        val t = try {
+            client().call(op, a, onEvent)
+        } catch (e: DaemonException) {
+            if (e.type != "daemon/unreachable") throw e
+            // the connection `ensure` trusted (a hello less than 5 s ago) points at a daemon that went away since: the request never
+            // reached it, so asking again is safe; say hello again, which starts a daemon when there is none
+            DaemonService.getInstance().forget()
+            client().call(op, a, onEvent)
+        }
         if (!t.ok) throw DaemonException(t.errorMessage ?: "$op failed", t.errorType ?: "daemon/error", t.error?.get("hint")?.takeIf { it.isJsonPrimitive }?.asString)
         return t
     }
