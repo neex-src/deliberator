@@ -14,7 +14,7 @@ import com.intellij.psi.PsiFile
 
 
 /**
- * Parse errors of `scenario.parse {text}` as errors on their line. Runs on the platform's external-annotator
+ * Parse errors of `scenario.parse {text}` as errors on their line, its warnings (a script body that shed leading comment lines, R10) as warnings. Runs on the platform's external-annotator
  * pass: a background thread, after the editor has been quiet for the auto-reparse delay, results dropped when
  * the document changed meanwhile. It talks only over the connection the editor already knows ([ScnRegistry.knownClient],
  * made when the `.scn` editor opened) with a budget of [ScnDaemon.TIMEOUT_MS]: it never starts a daemon and never hangs the
@@ -22,7 +22,7 @@ import com.intellij.psi.PsiFile
  */
 class ScnExternalAnnotator : ExternalAnnotator<ScnExternalAnnotator.Info, ScnExternalAnnotator.Result>(), com.intellij.openapi.project.DumbAware {
     class Info(val file: PsiFile, val text: String, val path: String?)
-    class Error(val line: Int, val message: String)
+    class Error(val line: Int, val message: String, val warning: Boolean = false)
     class Result(val errors: List<Error>)
 
     override fun collectInformation(file: PsiFile): Info? {
@@ -58,17 +58,19 @@ class ScnExternalAnnotator : ExternalAnnotator<ScnExternalAnnotator.Info, ScnExt
             var from = doc.getLineStartOffset(line)
             var to = doc.getLineEndOffset(line)
             if (to == from) { to = minOf(from + 1, doc.textLength); if (to == from) from = maxOf(from - 1, 0) }
-            holder.newAnnotation(HighlightSeverity.ERROR, e.message).range(TextRange(from, to)).create()
+            holder.newAnnotation(if (e.warning) HighlightSeverity.WARNING else HighlightSeverity.ERROR, e.message).range(TextRange(from, to)).create()
         }
     }
 
     companion object {
         private val LOG = logger<ScnExternalAnnotator>()
 
-        fun errors(parse: JsonObject): List<Error> =
-            parse.get("errors")?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { e ->
+        fun errors(parse: JsonObject): List<Error> = items(parse, "errors", false) + items(parse, "warnings", true)
+
+        private fun items(parse: JsonObject, key: String, warning: Boolean): List<Error> =
+            parse.get(key)?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { e ->
                 val o = e.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
-                Error(o.get("line")?.asInt ?: 1, o.get("message")?.asString ?: "error")
+                Error(o.get("line")?.asInt ?: 1, o.get("message")?.asString ?: key.removeSuffix("s"), warning)
             } ?: emptyList()
     }
 }

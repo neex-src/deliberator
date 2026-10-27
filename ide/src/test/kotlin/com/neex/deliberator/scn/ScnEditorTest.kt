@@ -248,6 +248,18 @@ class ScnEditorTest : BasePlatformTestCase() {
         assertTrue(errors[0].description, errors[0].description.contains("unknown step kind"))
     }
 
+    fun testCommentLinesShedByAScriptBodyAreWarnedAbout() {
+        // R10: a shebang or a comment right under `### shell` is not part of the body; the parse says so, the editor shows it
+        online()
+        myFixture.configureByText("w.scn", "# @env local\n\n### shell x\n# first comment\n#!/bin/bash\necho hi\n")
+        val hl = myFixture.doHighlighting()
+        val warnings = hl.filter { it.severity == HighlightSeverity.WARNING }
+        assertEquals(hl.toString(), 1, warnings.size)
+        assertEquals(3, myFixture.editor.document.getLineNumber(warnings[0].startOffset))
+        assertTrue(warnings[0].description, warnings[0].description.contains("comment lines"))
+        assertTrue(hl.toString(), hl.none { it.severity == HighlightSeverity.ERROR })
+    }
+
     fun testAValidScenarioHasNoErrors() {
         online()
         myFixture.configureByText("ok.scn", ScnTestData.fixtures().getValue("plain"))
