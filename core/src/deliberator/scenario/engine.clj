@@ -137,6 +137,14 @@
            (invalid line (:message (ex-data e)))
            (throw e)))))
 
+(defn- window-placeholder
+  "B32: `within {{chain_wait}}` (a duration from a variable or a target) cannot be parsed before the substitution; the plan checks the
+  shape with a stand-in duration and the run parses the real one."
+  [v]
+  (if-let [[_ a w] (re-matches #"(?s)(.*\S)\s+within\s+(\S+)" (str/trim (str v)))]
+    (str a " within " (if (str/includes? w "{{") "1s" w))
+    v))
+
 (defn- validate-step! [kmap step]
   (reduce (fn [seen {:keys [name line]}]
             (let [spec (first (filter #(= name (:name %)) (kinds/directive-specs kmap)))]
@@ -151,11 +159,11 @@
     (case name
       "assert" (let [a (with-expr line #(expr/parse-assert value))]
                  (check-operand! kmap line (:operand a) (:path a)))
-      "until" (let [{:keys [assert]} (with-expr line #(expr/parse-until value))]
+      "until" (let [{:keys [assert]} (with-expr line #(expr/parse-until (window-placeholder value)))]
                 (check-operand! kmap line (:operand assert) (:path assert)))
       "capture" (let [c (with-expr line #(expr/parse-capture value))]
                   (check-operand! kmap line (:source c) (:path c)))
-      "timeout" (with-expr line #(expr/parse-duration value))
+      "timeout" (with-expr line #(expr/parse-duration (if (str/includes? value "{{") "1s" value)))
       nil)))
 
 (defn- step-texts [step]
@@ -204,7 +212,7 @@
         bs (Files/readAllBytes path)
         parsed (parse/parse bs :path path :kinds (kinds/registry))
         _ (when (empty? (:steps parsed)) (throw (ex-info "the scenario has no steps" {:type :scenario/parse :line 1 :message "no steps"})))
-        base (set (keys (vars/snapshot (:header parsed) :correlation "plan" :env env :vars vars :builtins builtins)))
+        base (set (keys (vars/snapshot (:header parsed) :correlation "plan" :env env :vars vars :builtins builtins :resolve resolve-target)))
         selected (when steps (set steps))
         _ (doseq [n selected]
             (when-not (<= 1 n (count (:steps parsed)))
@@ -586,7 +594,7 @@
       (let [pick (:selected plan')
             steps (filter #(or (nil? pick) (contains? pick (:n %))) (:steps plan'))
             snapshot (vars/snapshot (:header plan') :correlation (:run-id st) :env (:env st)
-                                    :vars (:vars (:opts st)) :builtins (:builtins (:opts st)))
+                                    :vars (:vars (:opts st)) :builtins (:builtins (:opts st)) :resolve (:resolve-target st))
             _ (reset! snap snapshot)
             _ (progress!)
             st (assoc st :snapshot snapshot :vars (atom snapshot))

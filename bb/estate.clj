@@ -160,13 +160,20 @@
 
 (defn- write-chain-targets!
   "The targets the chain adds to the workspace's `local` environment, from the Terraform outputs: the HTTP API
-  (`api/main`, Floci's execute-api path for the `$default` stage), the two Lambdas and their log groups, the schedule group.
+  (`api/main`, Floci's execute-api path for the `$default` stage), the two Lambdas and their log groups, the schedule group, and (B32) what
+  `order.scn` needs to run on any prefix: the chain's SSM parameter (`parameter/chain-desired`), the ECS cluster and service (`ecs/cluster`,
+  `ecs/service-a`) and the waits (`timing/chain`: the Scheduler plus the Lambda, `timing/logs`: a log line's ingestion; a real account gets longer ones).
   Through the daemon (`env.save`, whole record), like `local2`."
   [ws out]
   (let [local (:env (daemon-client/call! "env.describe" {:ws ws :name "local"}))
         fns {"scheduler-create" (get out "scheduler_create_function") "ecs-scale" (get out "ecs_scale_function")}
         targets (merge {"api/main" (str (get-in local [:aws :endpoint]) "/_aws/execute-api/" (get out "api_id") "/%24default")
-                        "scheduler/chain" (get out "schedule_group")}
+                        "scheduler/chain" (get out "schedule_group")
+                        "parameter/chain-desired" (get out "chain_parameter")
+                        "ecs/cluster" (get out "ecs_cluster")
+                        "ecs/service-a" (get out "ecs_service")
+                        "timing/chain" "40s"
+                        "timing/logs" "8s"}
                        (into {} (for [[k f] fns] [(str "function/" k) f]))
                        (into {} (for [[k f] fns] [(str "log/" k) {:cloudwatch (str "/aws/lambda/" f)}])))]
     (daemon-client/call! "env.save" {:ws ws :name "local"

@@ -18,5 +18,11 @@
       "logDriver": "awslogs",
       "options": { "awslogs-group": ${jsonencode(log_group)}, "awslogs-region": ${jsonencode(region)}, "awslogs-stream-prefix": "ecs" }
     }
+%{ if sidecar != "" ~}
+    ,"dependsOn": [{ "containerName": "postgres", "condition": "HEALTHY" }]
+%{ endif ~}
   }
+%{ if sidecar != "" ~}
+  ,${sidecar}
+%{ endif ~}
 ]

@@ -32,6 +32,9 @@
   estate:build {:doc "Build the hotswap service image when missing, then the estate services (Maven, JDK 21)"
                 :requires ([estate])
                 :task (estate/build)}
+  estate:real-images {:doc "Build the two service images with Podman and push them to the ECR repositories of the real estate (run_services); args: --prefix P --profile PROFILE [--tag T] [--only a|b]"
+                      :requires ([estate-real])
+                      :task (estate-real/images *command-line-args*)}
   estate:deploy {:doc "terraform apply on Floci + write the service roles into runtime.edn; args: --ws W [--auto-publish] [--no-daemon]"
                  :requires ([estate])
                  :task (estate/deploy *command-line-args*)}

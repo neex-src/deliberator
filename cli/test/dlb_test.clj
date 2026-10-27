@@ -106,6 +106,31 @@
            (approve "service.start" ["service" "start" "a" "--secrets-from" "local2"])))
     (is (= "to approve: dlb run x.scn --confirm T --steps 1" (approve "scenario.run" ["run" "x.scn"])))))
 
+(deftest the-describe-an-agent-gets-is-the-one-of-the-workspace-the-call-names
+  ;; B35: found on real AWS: the agent's table said the confirm argument did not exist, because the describe went to workspace `default`
+  (let [ws-of-words (requiring-resolve 'dlb.main/ws-of-words)]
+    (is (= "rt" (ws-of-words ["run" "x.scn" "--env" "rt-write" "--ws" "rt" "--confirm" "T"])))
+    (is (= "w" (ws-of-words ["--ws" "w"])))
+    (is (nil? (ws-of-words ["run" "x.scn" "--env" "e"])))
+    (is (nil? (ws-of-words ["run" "x.scn" "--ws"])) "a trailing --ws names nothing")))
+
+(deftest a-run-with-several-confirmations-lists-them-and-approves-them-in-one-line
+  ;; B33: order.scn on a writable remote environment has three mutating steps
+  (let [cs [{:step 1 :token "T1" :summary "SendMessage q"} {:step 8 :token "T8" :summary "PutParameter /p"} {:step 9 :token "T9" :summary "UpdateService"}]
+        err {:type "confirm-required" :summary "SendMessage q" :token "T1" :step 1 :confirmations cs}
+        out (with-out-str (render/print-error "scenario.run" err ["run" "x.scn" "--env" "w"]))
+        lines (str/split-lines out)]
+    (is (= "to approve: dlb run x.scn --env w --confirm T1 --steps 1" (first (filter #(str/starts-with? % "to approve:") lines))))
+    (is (some #(= "confirmation required (step 8): PutParameter /p" %) lines))
+    (is (some #(= "confirmation required (step 9): UpdateService" %) lines))
+    (is (= ["to approve all: dlb run x.scn --env w --continue --confirm T1,T8,T9"]
+           (filter #(str/starts-with? % "to approve all:") lines)))
+    (testing "a partial run's --steps is dropped from the approve-all line (it runs the whole scenario)"
+      (is (some #(= "to approve all: dlb run x.scn --env w --continue --confirm T1,T8,T9" %)
+                (str/split-lines (with-out-str (render/print-error "scenario.run" err ["run" "x.scn" "--steps" "1,8,9" "--env" "w"]))))))
+    (testing "a single confirmation prints no 'approve all'"
+      (is (not (str/includes? (with-out-str (render/print-error "scenario.run" (assoc err :confirmations (take 1 cs)) ["run" "x.scn"])) "approve all"))))))
+
 (deftest text-output-shows-nested-results
   (let [out (fn [result] (with-out-str (render/print-result "x" result)))
         discover (out {:environment "local"

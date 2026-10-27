@@ -186,6 +186,33 @@
           acc (into acc (:events r))]
       (if-let [t (:nextToken r)] (recur t acc) acc))))
 
+(def ^:dynamic *poll-backoff-ms*
+  "B34: how long a CloudWatch tail waits after a poll that failed in a way that passes (throttling, a dropped connection), one entry
+  per consecutive failure; the last one repeats. A tail ends only by its window, never by a throttle."
+  [2000 4000 8000 10000])
+
+(defn- passing-failure?
+  "True for the error of a poll that is worth waiting out: AWS throttled the call (`:busy`, ThrottlingException) or the connection dropped
+  (`:fault`/`:unavailable` after the client's own retries)."
+  [^Throwable e]
+  (let [aws (:aws (ex-data e))]
+    (and (= :logs/cloudwatch (:type (ex-data e)))
+         (or (contains? #{:busy :fault :interrupted} (:category aws))
+             (contains? #{"ThrottlingException" "Throttling" "TooManyRequestsException"} (:code aws))))))
+
+(defn- patient-events
+  "`cw-events`, waiting out passing failures (see `passing-failure?`) instead of letting them end the tail."
+  [ctx group start pattern stop]
+  (loop [n 0]
+    (let [r (try {:events (cw-events ctx group start pattern)}
+                 (catch Exception e
+                   (if (and (passing-failure? e) (not @stop))
+                     {:retry (nth *poll-backoff-ms* (min n (dec (count *poll-backoff-ms*))))}
+                     (throw e))))]
+      (if-let [ms (:retry r)]
+        (do (Thread/sleep (long ms)) (recur (inc n)))
+        (:events r)))))
+
 (defn cw-source [ctx group since pattern ^LinkedBlockingQueue q]
   (let [stop (atom false)]
     (doto (Thread.
@@ -194,7 +221,7 @@
              (try
                (loop [start (.toEpochMilli ^Instant since) seen #{}]
                  (when-not @stop
-                   (let [events (cw-events ctx group start pattern)
+                   (let [events (patient-events ctx group start pattern stop)
                          fresh (remove #(contains? seen (:eventId %)) (sort-by :timestamp events))]
                      (doseq [e fresh]
                        (put-lines! q (str/split (str/replace (:message e) #"\n$" "") #"\n")))

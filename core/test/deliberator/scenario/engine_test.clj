@@ -151,6 +151,18 @@
         (is (Files/isSameFile (.toPath (io/file (get-in res [:paths :run]) "steps" "001-fake-poll" "request.http"))
                               (store/raw-path "w" (:request-sha (last (:attempts st))))))))))
 
+(deftest the-window-of-an-until-can-come-from-a-variable-or-a-target
+  ;; B32: order.scn waits `within {{chain_wait}}` with chain_wait = {{timing/chain}}: 40 s on Floci, 150 s on a real account
+  (with-run [p "# @var w = {{timing/chain}}\n\n### fake poll\n# @until n >= 2 within {{w}}\n# @assert n == 2\n"]
+    (let [res (run! p :resolve-target (fn [k] (if (= k "timing/chain") "10s" (resolve-target k))))]
+      (is (= :ok (:status res)))
+      (is (= 2 (count (:attempts (step-edn res 1))))))
+    (testing "a window that is not a duration fails the step that uses it, with the value"
+      (let [res (run! p :resolve-target (fn [k] (if (= k "timing/chain") "soon" (resolve-target k))))]
+        (is (not= :ok (:status res)))))
+    (testing "an environment without the target fails before any step runs"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"timing/chain" (run! p))))))
+
 (deftest until-gives-up-at-the-end-of-the-window
   (with-run [p "### fake poll\n# @until n >= 100 within 1s\n"]
     (let [res (run! p)

@@ -4,7 +4,7 @@
   `now` (ISO-8601 instant at snapshot), `now.epoch` (epoch SECONDS), `correlation` (the run id),
   `env.name`, `env.kind` and `env.<key>` for the scalar entries of the environment record and of
   its `:aws` map (credentials, secrets, tokens and keys are never exposed), then the header's
-  `@var`s top-down (each may use the ones before it), then `:vars` (seeds, e.g. captures from an
+  `@var`s top-down (each may use the ones before it and, with `:resolve`, the environment's targets: `# @var wait = {{timing/chain}}`), then `:vars` (seeds, e.g. captures from an
   earlier run) which win. `:builtins` overrides builtin values (determinism in tests). An unknown
   name in a `@var` throws as below, with the var's `:line`.
 
@@ -73,7 +73,7 @@
     (into {} (concat (entries (dissoc env :aws) "env.") (entries (:aws env) "env.")))))
 
 (defn snapshot
-  [header & {:keys [correlation env vars builtins]}]
+  [header & {:keys [correlation env vars builtins resolve]}]
   (let [now (store/now)
         base (merge {"uuid" (str (UUID/randomUUID))
                      "now" (str now)
@@ -82,6 +82,6 @@
                     (env-vars env)
                     builtins)
         vs (reduce (fn [acc {:keys [name value line]}]
-                     (assoc acc name (substitute value acc :line line)))
+                     (assoc acc name (substitute value acc :line line :resolve resolve)))
                    base (:vars header))]
     (merge vs vars)))

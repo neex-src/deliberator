@@ -40,7 +40,8 @@
       (is (re-matches (re-pattern (str "deliberatord " stamped)) (str (next-line v 60000))) "a jar build stamps its version")
       (is (zero? (.waitFor ^Process (:proc v)))))
     (let [home (tu/short-home)
-          d (spawn "--home" (str home) "--idle-minutes" "0.1")
+          d (spawn "--home" (str home) "--idle-minutes" "0.3")   ; 18 s: the second JVM below needs seconds to start on a busy box, and a first daemon
+                                                                ; that idled out by then let the second one start (the test then waited for its exit, for ever)
           banner (next-line d 60000)
           ep (second (re-find #"listening on (\S+)" (str banner)))]
       (try
@@ -63,14 +64,14 @@
                   (is (= "run.started" (:event (first events)))))
                 (finally (tc/close! c)))))
           (testing "a second instance on the same home refuses with exit code 3"
-            (let [d2 (spawn "--home" (str home))
+            (let [d2 (spawn "--home" (str home) "--idle-minutes" "0.1")
                   out (next-line d2 60000)]
               (is (str/includes? (str out) "already running"))
               (is (= 3 (.waitFor ^Process (:proc d2))))))
           (testing "the first is still serving after the refusal"
             (let [c (tc/connect ep)]
               (try (is (true? (:ok (:terminal (tc/request c "hello" {}))))) (finally (tc/close! c)))))
-          (testing "idle shutdown with --idle-minutes 0.1"
+          (testing "idle shutdown with --idle-minutes 0.3"
             (is (zero? (if (.waitFor ^Process (:proc d) 40 TimeUnit/SECONDS) (.exitValue ^Process (:proc d)) -1)))
             (is (not (.exists (io/file home "daemon" "endpoint"))))
             (is (not (.exists (io/file home "daemon" "deliberatord.sock"))))))

@@ -23,6 +23,24 @@ variable "ecs_desired_count" {
   type    = number
   default = 1
 }
+variable "ecs_assign_public_ip" {
+  type        = bool
+  default     = false
+  description = "Real tasks in the default VPC's public subnets pull their images and reach AWS through a public IP (no NAT gateway)."
+}
+variable "ecs_security_groups" {
+  type    = list(string)
+  default = []
+}
+variable "ecs_service_registry_arn" {
+  type        = string
+  default     = ""
+  description = "A Cloud Map service of service A (B reaches A as service-a.<namespace>)."
+}
+variable "ecs_b_desired_count" {
+  type    = number
+  default = 0
+}
 variable "ecs_target_group_arn" {
   type        = string
   default     = ""
@@ -57,7 +75,15 @@ resource "aws_ecs_service" "chain" {
     type = var.ecs_deployment_controller
   }
   network_configuration {
-    subnets = var.ecs_subnets
+    subnets          = var.ecs_subnets
+    security_groups  = var.ecs_security_groups
+    assign_public_ip = var.ecs_assign_public_ip
+  }
+  dynamic "service_registries" {
+    for_each = var.ecs_service_registry_arn == "" ? [] : [1]
+    content {
+      registry_arn = var.ecs_service_registry_arn
+    }
   }
   dynamic "load_balancer" {
     for_each = var.ecs_target_group_arn == "" ? [] : [1]
@@ -70,6 +96,25 @@ resource "aws_ecs_service" "chain" {
   # CodeDeploy owns the task definition and the load balancer after the first deployment; the chain owns the desired count
   lifecycle {
     ignore_changes = [task_definition, desired_count, load_balancer]
+  }
+}
+
+# --- service B as a real ECS service (real_tasks only): plain ECS controller, public IP, the Postgres sidecar in its task ---
+resource "aws_ecs_service" "b" {
+  count           = var.ecs_cluster != "" && var.real_tasks ? 1 : 0
+  name            = "${var.prefix}-service-b"
+  cluster         = var.ecs_cluster
+  task_definition = aws_ecs_task_definition.service["b"].arn
+  desired_count   = var.ecs_b_desired_count
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = var.ecs_subnets
+    security_groups  = var.ecs_security_groups
+    assign_public_ip = var.ecs_assign_public_ip
+  }
+  # deploys and the desired count are driven from outside Terraform (Deliberator's deployed checks register revisions and call UpdateService)
+  lifecycle {
+    ignore_changes = [task_definition, desired_count]
   }
 }
 
@@ -269,3 +314,4 @@ output "schedule_group" { value = aws_scheduler_schedule_group.chain.name }
 output "scheduler_create_function" { value = aws_lambda_function.scheduler_create.function_name }
 output "ecs_scale_function" { value = aws_lambda_function.ecs_scale.function_name }
 output "ecs_service" { value = var.ecs_cluster == "" ? "" : local.chain_service }
+output "ecs_service_b" { value = var.ecs_cluster != "" && var.real_tasks ? "${var.prefix}-service-b" : "" }

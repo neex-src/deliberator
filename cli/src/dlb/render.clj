@@ -214,12 +214,18 @@
 
 (defn print-error
   "Prints a terminal error. confirm-required also shows the finished run and how to confirm."
-  [op {:keys [type message hint token summary step result] :as err} argv]
+  [op {:keys [type message hint token summary step result confirmations] :as err} argv]
   (if (= type "confirm-required")
     (do (when result (print-result op result))
         (println (str "confirmation required" (when step (str " (step " step ")")) ": " summary))
         (println (str "to approve: dlb " (str/join " " argv) " --confirm " token
-                      (when (and step (= op "scenario.run")) (str " --steps " step)))))
+                      (when (and step (= op "scenario.run")) (str " --steps " step))))
+        ;; B33: a run with several mutating steps lists every confirmation and offers one line that approves them all in one run
+        (when (and (= op "scenario.run") (> (count confirmations) 1))
+          (doseq [c (rest confirmations)]
+            (println (str "confirmation required (step " (:step c) "): " (:summary c))))
+          (println (str "to approve all: dlb " (str/join " " (let [[a b] (split-with #(not= "--steps" %) argv)] (concat a (drop 2 b)))) " --continue --confirm "
+                        (str/join "," (map :token confirmations))))))
     (binding [*out* *err*]
       (println (str "error: " type ": " message))
       (when hint (println (str "hint: " hint))))))

@@ -325,6 +325,10 @@
       (and (not local?) (contains? policy-codes code))
       (str "the IAM policy of " where " (account " account ") denies " (name service) ":" (name op)
            " (" code "): a permission, not an expired login")
+      (and (not local?) (contains? #{"QueueDoesNotExist" "AWS.SimpleQueueService.NonExistentQueue"} code))
+      (str "queue not found via " where ", account " account ": the name is wrong for this account and region, or the IAM policy "
+           "denies sqs:" (name op) " (SQS answers a missing permission as a missing queue); check the target of environment "
+           (:name env) " and its policy")
       :else
       (case category
         (:unavailable :interrupted)
@@ -337,6 +341,10 @@
           (str (name service) ":" (name op) " was refused by " where " (account " account
                (when code (str ", " code)) "); an IAM policy or expired credentials: aws sso login --profile " profile
                " if the latter"))
+        :busy
+        (str (name service) ":" (name op) " was throttled by " where " (account " account
+             (when code (str ", " code)) ") after the client's own retries; wait a moment or run fewer things at once "
+             "(every log tail polls once a second)")
         :not-found
         (str "not found via " where ", account " account "; check the targets of environment "
              (:name env))
@@ -357,6 +365,20 @@
                       (instance? java.net.http.HttpConnectTimeoutException %)
                       (instance? java.nio.channels.UnresolvedAddressException %))
                  (take-while some? (iterate #(.getCause ^Throwable %) t)))))
+
+(defn- transient-io?
+  "B34: the JDK client's `HTTP/1.1 header parser received no bytes` (a pooled keep-alive connection the server closed between two
+  requests; seen on real CloudWatch in the middle of a log tail) and `Connection reset`: an IOException that is not a refused,
+  unresolvable or timed-out connect. Nothing was received, so a READ may simply be sent again."
+  [r]
+  (when-let [t (throwable r)]
+    (let [chain (take-while some? (iterate #(.getCause ^Throwable %) t))]
+      (and (some #(instance? java.io.IOException %) chain)
+           (not-any? #(or (instance? java.net.ConnectException %)
+                          (instance? java.net.UnknownHostException %)
+                          (instance? java.net.http.HttpConnectTimeoutException %)
+                          (instance? java.nio.channels.UnresolvedAddressException %))
+                     chain)))))
 
 (defn- credential-bridge-error
   "When the call failed because the credentials could not be fetched (`Unable to fetch credentials`) and the CLI bridge
@@ -388,7 +410,7 @@
        :message (or (:message (credential-bridge-error env r))
                     (:message r) (:Message r) (get-in r [:ErrorResponse :Error :Message]) (get-in r [:Error :Message])
                     (:cognitect.anomalies/message r)
-                    (some-> t ex-message) (str cat))
+                    (some-> t ex-message) (str "no message from AWS (" (name cat) ")"))
        :hint (or (:hint (credential-bridge-error env r)) (hint env cat code service op-name))
        :service service :op op-name :env (:name env) :raw raw}
       {::error true})))
@@ -448,7 +470,9 @@
       (do (line {:outcome :refused :confirmation nil :reason :pass})
           [:refused (token-refusal env api op-name request)]))
     (:confirm ctx)
-    (if (consume-token! (:confirm ctx) fp (store/now))
+    ;; B33: `confirm` may carry several tokens, comma separated (a scenario with three mutating steps is approved in one run); the
+    ;; one issued for this request is consumed, the others stay live for their own requests
+    (if (some #(consume-token! % fp (store/now)) (str/split (str (:confirm ctx)) #"\s*,\s*"))
       [:run :used]
       (do (line {:outcome :refused :confirmation nil})
           [:refused (token-refusal env api op-name request)]))
@@ -483,7 +507,11 @@
                                           m))))
         run (fn [confirmation]
               (let [t0 (System/nanoTime)
-                    r (env/with-client ws env api #(aws/invoke % {:op (keyword op-name) :request request}))
+                    r (loop [n 0]
+                        (let [r (env/with-client ws env api #(aws/invoke % {:op (keyword op-name) :request request}))]
+                          (if (and (= class :read) (< n 2) (some? (:cognitect.anomalies/category r)) (transient-io? r))
+                            (do (Thread/sleep 300) (recur (inc n)))
+                            r)))
                     elapsed (quot (- (System/nanoTime) t0) 1000000)
                     anomaly? (some? (:cognitect.anomalies/category r))
                     http (some-> r meta :http-response)

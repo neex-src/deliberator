@@ -44,6 +44,21 @@
     (is (= "http://h/x" (vars/substitute "{{service/a}}/x" v :resolve (fn [n] (when (= n "service/a") "http://h")))))
     (is (= {"a" "2" "b.c" "x$y\\z" "n" "3"} (vars/overlay v {"a" "2" "n" "3"})))))
 
+(deftest a-var-can-take-its-value-from-the-environments-targets
+  ;; B32: order.scn names the chain through targets (`# @var wait = {{timing/chain}}`), so one file runs on any prefix
+  (let [res {"timing/chain" "150s" "scheduler/chain" "rt-chain"}
+        h {:vars [{:name "wait" :value "{{timing/chain}}" :line 3}
+                  {:name "grp" :value "{{scheduler/chain}}-x" :line 4}]}
+        v (vars/snapshot h :resolve (fn [n] (or (res n) (throw (ex-info "no target" {:type :env/unknown-target})))))]
+    (is (= "150s" (v "wait")))
+    (is (= "rt-chain-x" (v "grp")))
+    (is (= :scenario/unknown-var
+           (:type (ex-data (try (vars/snapshot h) (catch clojure.lang.ExceptionInfo e e)))))
+        "without a resolver a target in a @var is an unknown variable, as before")
+    (is (= :env/unknown-target
+           (:type (ex-data (try (vars/snapshot h :resolve (fn [_] (throw (ex-info "no target" {:type :env/unknown-target})))) (catch clojure.lang.ExceptionInfo e e)))))
+        "an environment without the target fails the run before any step (plan resolves the @vars too)")))
+
 (deftest unknown-var-lists-the-known-ones
   (let [e (try (vars/substitute "{{nope}}" {"b" "1" "a" "2"}) (catch clojure.lang.ExceptionInfo e e))]
     (is (= :scenario/unknown-var (:type (ex-data e))))
