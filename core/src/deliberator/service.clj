@@ -111,7 +111,7 @@
 
 (defn- topo-mode
   "The mode of service `name` in the `local` environment (the one the runtime serves)."
-  [ws name] (env/service-mode (topology/local-env ws) name))
+  [ws name] (topology/container-mode ws name))
 
 (defn- reload-state
   "The reload state of the service when it belongs to the container in `row` (a recreated container starts at 0)."
@@ -179,7 +179,8 @@
                                      :status (:status (status-row ws d rows))
                                      :container (or (:name (when (map? rows) (get rows (role-label (:name d)))))
                                                     (store/container-name ws (role-label (:name d))))})
-                       (= :external (:mode ent)) (assoc :url (:url ent))
+                       (#{:external :fake} (:mode ent)) (assoc :url (:url ent))
+                       (= :fake (:mode ent)) (assoc :fake (:fake ent))
                        ;; the `log/` target of the environment for this service (a container or a CloudWatch group), M6.4
                        (get targets (keyword "log" (role-label (:name d))))
                        (assoc :log-target (str "log/" (role-label (:name d)))

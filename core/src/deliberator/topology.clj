@@ -12,16 +12,18 @@
   container runtime serves the workspace's `local` environment, so `render-spec` follows the topology of that
   one: external -> the variable leaves `:secrets` and becomes a plain `:env` entry (its `:container-url`, else the url with a loopback host turned into
   `host.containers.internal`, the host as a container sees it), off -> `http://<service>.off.invalid`, local ->
-  untouched. A service whose mode there is not local is not desired as a container (`not-local`)."
+  untouched; fake -> the variable becomes a plain `:env` entry, the fake's container URL. A service whose mode there is not local is not
+  desired as a container (`not-local`), except one served by a fake that is recording: the real service is the upstream of the fake."
   (:require [clojure.string :as str]
             [deliberator.env :as env]
+            [deliberator.fakes :as fakes]
             [deliberator.service.description :as description]
             [deliberator.store :as store])
   (:import (java.net URI)))
 
 (defn- fail [type msg & {:as data}] (throw (ex-info msg (assoc data :type type))))
 
-(def modes #{"local" "external" "off"})
+(def modes #{"local" "external" "off" "fake"})
 
 (defn- host-url
   "`url` with its port taken through the `runtime.edn :services <n> :ports` override (container port -> host port)."
@@ -41,6 +43,7 @@
           [n (case mode
                :external (cond-> {:mode :external :url (:url ent)} (:container-url ent) (assoc :container-url (:container-url ent)))
                :off {:mode :off}
+               :fake {:mode :fake :fake (:fake ent) :url (:url ent) :serving (fakes/serving ws (:fake ent))}
                (cond-> {:mode :local}
                  (get-in e [:targets (keyword "service" n)]) (assoc :url (cond->> (get-in e [:targets (keyword "service" n)])
                                   (= "local" (:name e)) (host-url ws n)))))])))
@@ -71,25 +74,36 @@
          {:name (:name d) :var v})))
 
 (defn set!
-  "Sets the mode of service `svc` in environment `env-name`. `mode` is \"local\" (removes the entry), \"external\"
+  "Sets the mode of service `svc` in environment `env-name`. `mode` is \"local\" (removes the entry), \"fake\" (served by the HTTP fake
+  `fake`, default the service's name, which must be declared: `fake.record` or `fake.replay` first; the entry keeps the fake's urls), \"external\"
   (needs `url`, as the host reaches it; `container-url` is how containers reach it when that differs, default
   the url with a loopback host turned into `host.containers.internal`; `log-container` names the container whose
   log stands for the service's `log/service-<n>`) or
   \"off\". -> `show` plus `:dependents` (their container specs change at the next reconcile)."
-  [ws env-name svc mode url {:keys [log-container container-url]}]
+  [ws env-name svc mode url {:keys [log-container container-url fake]}]
   (when-not (modes mode)
-    (fail :bad-args (str "mode must be local, external or off, not " (pr-str mode)) :problems ["mode"]))
+    (fail :bad-args (str "mode must be local, external, off or fake, not " (pr-str mode)) :problems ["mode"]))
   (when-not (description/read ws svc)
     (fail :service/not-found (str "no service " (pr-str svc) " in workspace " (store/ws-name ws))
           :known (description/names ws) :hint "dlb service list"))
   (when (and url (not= mode "external"))
     (fail :bad-args "url is only for mode external" :problems ["url"]))
+  (when (and fake (not= mode "fake"))
+    (fail :bad-args "fake is only for mode fake" :problems ["fake"]))
+  (when (and url (= mode "fake"))
+    (fail :bad-args "mode fake takes no url: it is the fake's" :problems ["url"]))
   (when (and (or log-container container-url) (not= mode "external"))
     (fail :bad-args "log-container and container-url are only for mode external" :problems ["log-container" "container-url"]))
   (when (and (= mode "external") (str/blank? url))
     (fail :bad-args "mode external needs a url" :problems ["url"] :hint "dlb topology set ENV SERVICE external http://host:port"))
   (let [e (env/load ws env-name)
+        fname (or fake svc)
+        decl (when (= mode "fake") (fakes/read ws fname))
+        _ (when (and (= mode "fake") (not decl))
+            (fail :fake/not-found (str "no fake " (pr-str fname) " in workspace " (store/ws-name ws))
+                  :known (fakes/names ws) :hint (str "dlb fake record " fname " service/" svc "   (or dlb fake replay " fname " --from DIR)")))
         ent (case mode
+              "fake" {:mode :fake :fake fname :url (fakes/host-url decl) :container-url (fakes/container-url ws decl)}
               "external" (cond-> {:mode :external :url (str/replace url #"/+$" "")}
                            container-url (assoc :container-url (str/replace container-url #"/+$" ""))
                            log-container (assoc :log {:container log-container}))
@@ -110,10 +124,20 @@
   {:topology (env/read-topology ws "local")})
 
 (defn not-local
-  "Names of the services the `local` environment serves from elsewhere or not at all: their containers are not desired."
+  "Names of the services the `local` environment serves from elsewhere or not at all: their containers are not desired. A service
+  served by a fake is not desired only while the fake replays; while it records, the service is its upstream."
   [ws]
   (let [e (local-env ws)]
-    (into #{} (remove #(= :local (env/service-mode e %))) (keys (:topology e)))))
+    (into #{} (remove #(let [m (env/service-mode e %)]
+                         (or (= :local m)
+                             (and (= :fake m) (not= :replay (fakes/serving ws (:fake (env/service-entry e %))))))))
+          (keys (:topology e)))))
+
+(defn container-mode
+  "The mode of service `n` as far as its own container goes: `:local` when the container is desired (a service whose fake records
+  included), else the topology mode (`:external`, `:off`, `:fake` while replaying)."
+  [ws n]
+  (if (contains? (not-local ws) n) (env/service-mode (local-env ws) n) :local))
 
 (defn container-url
   "`url` as a container on the runtime's network reaches it: a loopback host is the host's name for containers."
@@ -133,5 +157,6 @@
                 (case (:mode ent)
                   :external (-> spec (update :secrets #(dissoc (or % {}) var)) (assoc-in [:env var] (or (:container-url ent) (container-url (:url ent)))))
                   :off (-> spec (update :secrets #(dissoc (or % {}) var)) (assoc-in [:env var] (str "http://" svc ".off.invalid")))
+                  :fake (-> spec (update :secrets #(dissoc (or % {}) var)) (assoc-in [:env var] (:container-url ent)))
                   spec)))
             spec depends)))

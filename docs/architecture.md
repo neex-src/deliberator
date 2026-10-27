@@ -63,6 +63,7 @@ workspaces/<ws>/
   audit.log                     remote calls made while no session was current
   environments/<env>.edn        services/<name>.edn        config/<env>.edn   (the config snapshot, with its age)
   cache/<env>/deployed.edn      cache/<env>/deployed.txt   (what is deployed, fetched-at; `deployed.refresh` writes, `deployed.show` reads)
+  fakes/<name>.edn              an HTTP fake: mode record|replay|stopped, host port, upstream, the recording in use   fakes/.runtime/   the staged proxy script
   project/                      the IDE project directory of the workspace
   services/<name>/classes/      staged classes for hot reload
   raw/sha256/<2>/<62>           raw/sha256/<2>/<62>.meta.edn
@@ -81,6 +82,7 @@ workspaces/<ws>/
                                 GitHub Actions as text (ci.runs, ci.log|tail, ci.diff); every API response is a blob in raw/ first
     queries/<name>.insights     the text of a named Insights query     queries/<name>.scn   a named query: a one-step scenario
     config/                     config snapshots taken while the session was current
+    fakes/<name>/<stamp>/NNNNN.json   one recorded exchange per file, raw, written by the fake before it answers
     runs/<yyyymmdd-hhmmss>-<scenario>/
       run.edn        scenario path + sha, env, vars, topology, status, step summaries, timings
       scenario.scn   the file as it was run
@@ -241,7 +243,7 @@ more `event` lines and exactly one terminal line:
 
 Operations are `area.verb`: `workspace.*`, `session.*`, `env.*`, `runtime.*`, `service.*`,
 `topology.*`, `config.*`, `scenario.*`, `runs.*`, `raw.*`, `repo.*`, `logs.*`, `marker.*`, `aws.*`,
-`terraform.*`, `daemon.*`, plus `op.describe`, which returns every operation with its argument
+`terraform.*`, `fake.*`, `provider.*`, `daemon.*`, plus `op.describe`, which returns every operation with its argument
 schema and class. The CLI's help and the IDE's operations form are generated from `op.describe`,
 so an operation exists in both the moment the core has it; an agent's tool list generated the same
 way (§4.H of the brief) is planned, not built. Planned families, not built: `worktree.*`, `pr.*`,

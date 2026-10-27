@@ -125,7 +125,8 @@
     {:image (or image default-image)
      :ports (sorted-map container-port port)
      :command ["bb" "/app/http_fake.bb"]
-     :env (into (sorted-map)
+     ;; FAKE_SCRIPT is the script's sha: a new proxy script changes the spec hash, so the next reconcile recreates the container
+     :env (into (sorted-map "FAKE_SCRIPT" (subs (store/sha256 (.getBytes (script-text) "UTF-8")) 0 12))
                 (case mode
                   :record {"FAKE_MODE" "record" "FAKE_UPSTREAM" upstream "FAKE_RECORD_DIR" "/data/rec"}
                   :replay {"FAKE_MODE" "replay" "FAKE_REPLAY_DIR" "/data/rec"}))

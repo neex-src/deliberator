@@ -73,7 +73,7 @@
   (local-for "default"))
 
 (def ^:private top-keys #{:name :kind :description :read-only :aws :targets :topology})
-(def ^:private topology-keys #{:mode :url :container-url :log})
+(def ^:private topology-keys #{:mode :url :container-url :log :fake})
 (def ^:private local-aws-keys #{:endpoint :region :account :credentials})
 (def ^:private remote-aws-keys #{:profile :region :account :endpoint})
 
@@ -85,7 +85,7 @@
 
 (defn- topology-problems [t]
   (if-not (map? t)
-    [":topology must be a map of service name -> {:mode :external|:off [:url] [:log {:container}]}"]
+    [":topology must be a map of service name -> {:mode :external|:off|:fake [:url] [:log {:container}]}"]
     (vec
      (for [[n e] t
            p (cond
@@ -102,7 +102,13 @@
                                         (not (and (string? (:container-url e)) (re-matches #"https?://[^/\s]+(:\d+)?(/\S*)?" (:container-url e)))))
                                [(str ":topology " n " :container-url must look like http://host:port")]))
                   :off (when (or (contains? e :url) (contains? e :container-url)) [(str ":topology " n " :off takes no :url")])
-                  [(str ":topology " n " :mode must be :external or :off (absent means local)")])
+                  :fake (concat
+                         (when-not (nonblank? (:fake e)) [(str ":topology " n " :fake needs :fake \"<name of the fake>\"")])
+                         (when-not (and (string? (:url e)) (re-matches #"https?://[^/\s]+(:\d+)?(/\S*)?" (:url e)))
+                           [(str ":topology " n " :fake needs :url like http://localhost:port")])
+                         (when-not (and (string? (:container-url e)) (re-matches #"https?://[^/\s]+(:\d+)?(/\S*)?" (:container-url e)))
+                           [(str ":topology " n " :fake needs :container-url like http://container:port")]))
+                  [(str ":topology " n " :mode must be :external, :off or :fake (absent means local)")])
                 (when (and (contains? e :log) (not (and (map? (:log e)) (nonblank? (get-in e [:log :container])))))
                   [(str ":topology " n " :log must be {:container \"name\"}")])))]
        p))))
@@ -279,11 +285,11 @@
 ;; targets ------------------------------------------------------------------------------------
 
 (defn service-entry
-  "The topology entry `{:mode :external|:off …}` of service `n` in `env`, nil when it is local."
+  "The topology entry `{:mode :external|:off|:fake …}` of service `n` in `env`, nil when it is local."
   [env n] (get-in env [:topology (str n)]))
 
 (defn service-mode
-  "`:local` (no entry), `:external` or `:off`."
+  "`:local` (no entry), `:external`, `:off` or `:fake`."
   [env n] (or (:mode (service-entry env n)) :local))
 
 (defn read-topology
@@ -306,6 +312,7 @@
       "service" (let [e (service-entry env n)]
                   (case (:mode e)
                     :external (:url e)
+                    :fake (:url e)
                     :off (throw (ex-info (str "service " n " is off in environment " (:name env))
                                          {:type :topology/service-off :service n :env (:name env)
                                           :hint (str "dlb topology set " (:name env) " " n " local   (or external URL)")}))
