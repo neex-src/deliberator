@@ -443,7 +443,7 @@
                      :read-only (if (nil? read-only) true read-only)
                      :aws (cond-> {:profile profile :region region :account account}
                             endpoint (assoc :endpoint endpoint))
-                     :targets (or targets {})}
+                     :targets (keywordize (or targets {}))}
               description (assoc :description description))]
     (store/safe-name name)
     (env/validate (assoc rec :name name))

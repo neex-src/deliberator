@@ -542,6 +542,13 @@
                 (is (= {:profile "dlbtest-sso" :region "eu-central-1" :account "123456789012"} (:aws rec)))
                 (is (= "dev account" (:description rec)))
                 (is (true? (:read-only rec)))))
+            (testing "B23: targets of create may be objects (a CloudWatch log target), as env.save takes them"
+              (ok! c "env.create" {:ws "w1" :name "logs" :profile "dlbtest-sso" :account "123456789012" :region "eu-central-1" :check false
+                                   :targets {"log/logger" {"cloudwatch" "/aws/lambda/estate-logger"} "service/a" "https://a.example"}})
+              (let [rec (:env (:result (ok! c "env.describe" {:ws "w1" :name "logs"})))]
+                (is (= {:cloudwatch "/aws/lambda/estate-logger"} (get-in rec [:targets :log/logger])) (pr-str (:targets rec)))
+                (is (= "https://a.example" (get-in rec [:targets :service/a]))))
+              (ok! c "env.remove" {:ws "w1" :name "logs"}))
             (testing "an existing name is not overwritten by create; save replaces the whole record"
               (is (= "env/exists" (:type (err c "env.create" {:ws "w1" :name "dev" :profile "p" :account "123456789012" :region "r" :check false}))))
               (ok! c "env.save" {:ws "w1" :name "dev" :check false
