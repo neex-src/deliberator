@@ -338,15 +338,18 @@ class ConfigChainTest : BasePlatformTestCase() {
         bg { svc.call("service.adopt", args("path" to estate.resolve("estate/services/service-a").toString())) }
         val c = bg { chains.load("a") }
         val e = c.entries.first { it.placeholder == "TABLE_NAME" }
+        // the line of `TABLE_NAME = ...` in the module's main.tf, found in the file (a line number written here broke whenever a resource above it grew)
+        val tableLine = Files.readAllLines(estate.resolve("estate/terraform/modules/stack/main.tf")).indexOfFirst { it.trim().startsWith("TABLE_NAME") } + 1
+        assertTrue(tableLine > 0)
         assertEquals(estate.resolve("estate/terraform/modules/stack/taskdef.json.tftpl").toString(), e.taskdef!!.file)
         assertEquals(14, e.taskdef.line)
         assertEquals("loop", e.taskdef.via)
-        assertEquals(285, e.taskdef.source!!.line)
+        assertEquals(tableLine, e.taskdef.source!!.line)
         bg { chains.loadIndex() }
         val f = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(estate.resolve("estate/services/service-a/src/main/resources/application.properties"))!!
         myFixture.openFileInEditor(f)
         val ts = targets(refsAt("TABLE_NAME").filterIsInstance<TemplateEntryReference>().single())
-        assertEquals(listOf(14, 285), ts.map { (it as FileLine).line })
+        assertEquals(listOf(14, tableLine), ts.map { (it as FileLine).line })
     }
 
     // --- M4.6: a remote environment ------------------------------------------------------------------------
