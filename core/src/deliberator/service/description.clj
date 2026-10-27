@@ -94,6 +94,9 @@
   ^File [ws {:keys [repo module]}]
   (if repo
     (let [r (first (filter #(= repo (:name %)) (repo/list ws)))]
+      (when (:bare r)
+        (fail :service/repo-bare (str "repository " repo " is a bare clone: there is no work tree to find the module " module " in")
+              :hint "worktree.start makes a work tree of it; repo.attach records that checkout under its own name"))
       (when-not r
         (fail :service/repo-not-attached (str "repository " repo " is not attached to workspace " (store/ws-name ws))
               :hint "repo.attach the checkout (dlb repo attach PATH), or service.adopt the module again"))

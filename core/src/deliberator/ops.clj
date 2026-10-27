@@ -77,16 +77,18 @@
     runs.list ws session scenario limit            -> {session runs}
     repo.attach path* kind ws                      -> {name path kind attached-at}
     repo.detach name* ws                           -> {removed}
-    repo.list ws                                   -> [{name path kind attached-at}]
+    repo.list bare ws                              -> [{name path kind bare attached-at}]   (bare: true = only the bare clones, false = only the checkouts with a work tree; every row says bare)
     repo.clone url* name ws                        -> {name path kind bare url default-branch attached-at [existed]}   (M5.1: bare clone under repos/<name>.git)
     worktree.start repo* branch base fetch ws      -> {repo name branch path base base-sha fetched created-branch}   (M5.1: worktrees/<repo>/<name>/ from the latest main)
     worktree.list repo ws                          -> [{repo name branch head path dirty missing}]
     worktree.remove repo* name* force ws           -> {repo name path branch branch-kept}   (the branch stays)
     logs.fetch target* env since for follow filter session ws -> {path lines bytes sha target source [follow]}   [logs.line]
-    ci.runs repo* workflow branch status limit session ws -> {path count total rows repo workflow auth rate-remaining raw}   (M5.2: GitHub Actions runs as sessions/<k>/ci/runs-*.txt; read-only)
+    ci.runs repo* workflow branch status limit head-sha session ws -> {path count total rows repo workflow auth rate-remaining raw}   (M5.2: GitHub Actions runs as sessions/<k>/ci/runs-*.txt; read-only)
     ci.log run* job repo session ws                -> {path lines bytes sha repo run job conclusion other-failed raw auth}   (a job's log via the API as text under sessions/<k>/ci/)
     ci.tail run* job repo interval-ms session ws   -> {path lines bytes sha target source follow repo run job}   [logs.line]   (a running job: step transitions, then its log)
     ci.diff run* job repo against normalise session ws -> {path diff equal red green added removed normalised}   (M5.3: the failed job's log against the last green run's, normalised)
+    ci.local repo* workflow* job* worktree event env image session ws -> {path lines bytes sha target source follow exit conclusion dir workflow job event image docker-host endpoint}   [logs.line]   (M5.4: one job of a workflow with act on the runtime's Podman, Floci injected; a red job is a result)
+    pr.open repo* n* github session ws             -> {repo n ref head-sha worktree{name path branch head created moved} github pr comments{path inline reviews conversation} checks{path count by-result rows}}   (M5.5: refs/pull/<n>/head into worktrees/<repo>/pr-<n>; reviews and comments as sessions/<k>/pr/*.txt)
     logs.insights groups* query* env since until name budget-ms limit session ws -> {query-id status bytes-scanned statistics rows path sha query-file raw}   [line]   (M4.3)
     logs.match path* markers ws                    -> {lines [{n marker-id}] path scanned}
     marker.add file* line* logger ws               -> [{id file line logger}]   (the marker list after the change)
@@ -114,6 +116,7 @@
             [deliberator.logfetch :as logfetch]
             [deliberator.awsdiscover :as awsdiscover]
             [deliberator.ci :as ci]
+            [deliberator.cilocal :as cilocal]
             [deliberator.hcl :as hcl]
             [deliberator.tfdrift :as tfdrift]
             [deliberator.tflocal :as tflocal]
@@ -796,7 +799,11 @@
 
 (defn- repo-attach [_ {:keys [path kind] :as args}] (repo/attach! (ws-of args) path :kind kind))
 (defn- repo-detach [_ {:keys [name] :as args}] {:removed (repo/detach! (ws-of args) name)})
-(defn- repo-list [_ args] (repo/list (ws-of args)))
+(defn- repo-list [_ {:keys [bare] :as args}]
+  (->> (repo/list (ws-of args))
+       (map #(assoc % :bare (boolean (:bare %))))
+       (filter #(or (nil? bare) (= (boolean bare) (:bare %))))
+       vec))
 (defn- repo-clone [ctx {:keys [url name] :as args}] (repo/clone! (ws-of args) url :name name :on-cancel! (:on-cancel! ctx)))
 (defn- worktree-start [ctx {:keys [repo branch base fetch] :as args}]
   (worktree/start! (ws-of args) repo :branch branch :base base :fetch fetch :on-cancel! (:on-cancel! ctx)))
@@ -814,8 +821,9 @@
                        :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))
       (finally (when counter (swap! counter dec))))))
 
-(defn- ci-runs [_ {:keys [repo workflow branch status limit] :as args}]
-  (ci/runs! (ws-of args) {:repo repo :workflow workflow :branch branch :status status :limit limit :session (session-key (ws-of args) args)}))
+(defn- ci-runs [_ {:keys [repo workflow branch status limit head-sha] :as args}]
+  (ci/runs! (ws-of args) {:repo repo :workflow workflow :branch branch :status status :limit limit :head-sha head-sha
+                          :session (session-key (ws-of args) args)}))
 (defn- ci-log [_ {:keys [run job repo] :as args}]
   (ci/log! (ws-of args) {:repo repo :run run :job job :session (session-key (ws-of args) args)}))
 (defn- ci-tail [ctx {:keys [run job repo interval-ms] :as args}]
@@ -826,6 +834,16 @@
          (finally (when counter (swap! counter dec))))))
 (defn- ci-diff [_ {:keys [run job repo against normalise] :as args}]
   (ci/diff! (ws-of args) {:repo repo :run run :job job :against against :normalise normalise :session (session-key (ws-of args) args)}))
+(defn- ci-local [ctx {:keys [repo workflow job worktree event env image] :as args}]
+  (let [ws (ws-of args) counter (:follows (:daemon ctx))]
+    (when counter (swap! counter inc))      ; a running pipeline is work in flight, like a follow
+    (try (cilocal/run! ws {:repo repo :workflow workflow :job job :worktree worktree :event event :env env :image image
+                           :session (session-key ws args) :emit! (:emit! ctx) :cancelled? (:cancelled? ctx)})
+         (finally (when counter (swap! counter dec))))))
+(defn- pr-open [ctx {:keys [repo n github] :as args}]
+  (let [ws (ws-of args)]
+    (pr/open! ws {:repo repo :n n :github (if (contains? #{"false" "none" "no"} github) false (not-empty github))
+                    :session (or (:session args) (workspace/current-session ws)) :on-cancel! (:on-cancel! ctx)})))
 
 (defn- logs-insights [ctx {:keys [groups query env since until name budget-ms limit] :as args}]
   (let [ws (ws-of args) env-name (or env "local")
@@ -1205,8 +1223,9 @@
    "repo.detach" {:fn repo-detach :class :mutate
                   :doc "Removes an attached repository's entry from the workspace; files untouched."
                   :args (ws-schema :name {:type :string :required true :doc "repository name from repo.list"})}
-   "repo.list" {:fn repo-list :class :read :args (ws-schema)
-                :doc "The repositories attached to the workspace, in attach order."}
+   "repo.list" {:fn repo-list :class :read
+                :doc "The repositories of the workspace, in attach order: attached checkouts and the bare clones of repo.clone. Every row says bare: a bare clone (path repos/<name>.git) has no work tree and cannot be opened as a project, worktree.start makes one; bare false lists only the checkouts, bare true only the clones."
+                :args (ws-schema :bare {:type :bool :doc "true: only the bare clones; false: only the checkouts with a work tree; default both"})}
    "repo.clone" {:fn repo-clone :class :mutate
                  :doc "Makes a bare clone of a git url or path under the workspace (repos/<name>.git), gives it the origin fetch refspec, fetches it and records it with the attached repositories. The name is the url's last segment without .git. The same url again returns the entry; git never prompts (a private repository needs the daemon user's credential helper)."
                  :args (ws-schema :url {:type :string :required true :doc "git url or local path to clone from"}
@@ -1232,6 +1251,7 @@
                                :branch {:type :string :doc "only runs of this branch"}
                                :status {:type :string :doc "completed, in_progress, queued, or a conclusion such as failure or success"}
                                :limit {:type :int :default 20 :doc "at most this many runs (max 100)"}
+                               :head-sha {:type :string :doc "only runs of this commit"}
                                :session {:type :string :doc "session key; default the current session"})}
    "ci.log" {:fn ci-log :class :mutate
              :doc "The log of one job of a GitHub Actions run as text (sessions/<k>/ci/<repo>-<run>-<job>-<id>.log), fetched through the API (the job's log endpoint, no zip); the raw response and the log blob are persisted first. Without job: the run's first failed job. A job that has not completed has no log yet (ci.tail follows it)."
@@ -1254,6 +1274,23 @@
                                :repo {:type :string :doc "owner/name; needed when run is a bare id"}
                                :against {:type :string :doc "compare with this run id instead of searching for the last green one"}
                                :normalise {:type :bool :default true :doc "remove what changes from run to run (false: compare the lines as they are)"}
+                               :session {:type :string :doc "session key; default the current session"})}
+   "ci.local" {:fn ci-local :class :mutate
+               :doc "Runs one job of a GitHub Actions workflow locally with act on the runtime's Podman (the job's needs first): the local environment's Floci endpoint, fake keys and region are injected, nothing else of AWS. Output is streamed as logs.line events and kept as one text file under sessions/<k>/ci/ (raw blob adopted at the end). A job that fails is a result (conclusion failure, exit), not an error. The estate's pipeline: dlb ci local <repo> estate/.github/workflows/deploy.yml deploy."
+               :events ["logs.line"]
+               :args (ws-schema :repo {:type :string :required true :doc "an absolute directory, or the name of a repository from repo.list (a bare clone needs worktree)"}
+                                :workflow {:type :string :required true :doc "workflow file: a path relative to the directory, or a name under .github/workflows/"}
+                                :job {:type :string :required true :doc "the job to run"}
+                                :worktree {:type :string :doc "a worktree of the repository (worktree.list) to run in"}
+                                :event {:type :string :default "workflow_dispatch" :doc "the event act simulates"}
+                                :env {:type :string :default "local" :doc "a local environment; any other kind is refused"}
+                                :image {:type :string :doc "runner image of ubuntu-latest; default catthehacker/ubuntu:act-22.04"}
+                                :session {:type :string :doc "session key; default the current session"})}
+   "pr.open" {:fn pr-open :class :mutate
+              :doc "A pull request as a worktree: fetches refs/pull/<n>/head of origin and attaches worktrees/<repo>/pr-<n> (a clean one is fast-forwarded to a new head). With a GitHub repository (github owner/name, else the clone's url) it also writes the PR's description, reviews, inline review comments and conversation as text under sessions/<k>/pr/ and the runs of the head sha as ci.runs does under ci/. GitHub is read-only (GET)."
+              :args (ws-schema :repo {:type :string :required true :doc "repository name from repo.list"}
+                               :n {:type :int :required true :doc "the pull request number"}
+                               :github {:type :string :doc "owner/name of the GitHub repository when the clone's url does not say; none skips GitHub"}
                                :session {:type :string :doc "session key; default the current session"})}
    "logs.fetch" {:fn logs-fetch :class :mutate
                  :doc "Fetches a log target (container, file or CloudWatch group of the environment) into the session as logs/<target>-<ts>.log, hard-linked from the raw blobs. Without for: one shot; with for: also listens that long, streaming every line as a logs.line event while it arrives. follow (or for until-cancelled) listens until the request is cancelled or the client leaves, with ONE file for the whole follow, written as lines arrive; a container's follow starts at the current end of its log unless since says otherwise (only the lines written from now on). filter keeps whole matching entries."

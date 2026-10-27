@@ -49,7 +49,7 @@
   "The attached repository containing `module` (a File): `{:name :path}` with the longest path."
   [ws ^File module]
   (let [real (str (.toRealPath (.toPath module) (make-array LinkOption 0)))]
-    (->> (repo/list ws)
+    (->> (repo/checkouts ws)
          (filter #(or (= real (:path %)) (str/starts-with? real (str (:path %) "/"))))
          (sort-by (comp count :path)) last)))
 

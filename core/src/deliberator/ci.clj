@@ -2,7 +2,7 @@
   "GitHub Actions as text (M5.2, M5.3). Everything goes through `deliberator.github` (read-only GETs, every response raw in
   `raw/` first, the token never persisted); what lands under `sessions/<k>/ci/` is derived from those blobs:
 
-    `(runs! ws {:repo :workflow :branch :status :limit :session})`  -> the runs of a workflow (or of the repository) as
+    `(runs! ws {:repo :workflow :branch :status :limit :head-sha :session})`  -> the runs of a workflow (or of the repository) as
         `runs-<owner>-<repo>-<workflow>-<ts>.txt`, one line per run; `{:path :count :total :rows :repo :workflow :auth}`.
     `(log! ws {:repo :run :job :session})`  -> the log of one job via the API (`GET .../jobs/<id>/logs`, a 302 to a signed
         text blob; no zip): `<owner>-<repo>-<run>-<job>-<jobid>.log`, a hard link to the raw blob when the bytes are already
@@ -38,13 +38,13 @@
 
 (defn- fail [type msg & {:as data}] (throw (ex-info msg (assoc data :type type))))
 
-(def ^:private stamp (-> (DateTimeFormatter/ofPattern "yyyyMMdd-HHmmss") (.withZone ZoneOffset/UTC)))
+(def stamp (-> (DateTimeFormatter/ofPattern "yyyyMMdd-HHmmss") (.withZone ZoneOffset/UTC)))
 
 ;; arguments -----------------------------------------------------------------------------------------
 
-(def ^:private slug-re #"([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9._-]+)")
+(def slug-re #"([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9._-]+)")
 
-(defn- slug-of-url [s]
+(defn slug-of-url [s]
   (when-let [[_ o r] (re-find #"github\.com[:/]+([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9._-]+?)(?:\.git)?(?:/|$)" (str s))]
     (str o "/" r)))
 
@@ -76,17 +76,17 @@
         _ (when-not slug (fail :ci/bad-repo "which repository? the run is a bare id" :hint "pass repo (owner/name), or a run url"))]
     (assoc (parse-repo ws slug) :run (:run u) :job (or job (:job u)))))
 
-(defn- ctx [ws session]
+(defn ctx [ws session]
   (let [{:keys [token source]} (gh/resolve-token ws)]
     {:ws ws :session session :token token :auth source}))
 
-(defn- api! [c path & [query]]
+(defn api! [c path & [query]]
   (let [r (gh/get! c (gh/api-url (:ws c) path query))]
     (if (<= 200 (:status r) 299)
       r
       (gh/error-for r (str "GET " path) (:auth c)))))
 
-(defn- json-of [{:keys [body]}] (json/read-str (String. ^bytes body StandardCharsets/UTF_8)))
+(defn json-of [{:keys [body]}] (json/read-str (String. ^bytes body StandardCharsets/UTF_8)))
 
 ;; files under sessions/<k>/ci/ -------------------------------------------------------------------------
 
@@ -95,9 +95,9 @@
     (Files/createDirectories d (make-array FileAttribute 0))
     d))
 
-(defn- safe [s] (str/replace (str s) #"[^A-Za-z0-9._-]+" "-"))
+(defn safe [s] (str/replace (str s) #"[^A-Za-z0-9._-]+" "-"))
 
-(defn- write-view!
+(defn write-view!
   "Writes `bytes` as `<dir>/<base><ext>` (`-2`, `-3` when another content holds the name); -> the Path."
   [^Path dir base ext ^bytes bytes]
   (loop [n 1]
@@ -132,21 +132,23 @@
           (or created-at "") (or title "")))
 
 (defn runs!
-  [ws {:keys [repo workflow branch status limit session]}]
+  [ws {:keys [repo workflow branch status limit session head-sha]}]
   (let [t (parse-repo ws repo)
         c (ctx ws session)
         wf (when (seq workflow) (workflow-id c t workflow))
         path (str "/repos/" (:owner t) "/" (:name t) "/actions" (when wf (str "/workflows/" wf)) "/runs")
-        resp (api! c path {:per_page (min 100 (max 1 (or limit 20))) :branch (not-empty branch) :status (not-empty status)})
+        resp (api! c path {:per_page (min 100 (max 1 (or limit 20))) :branch (not-empty branch) :status (not-empty status) :head_sha (not-empty head-sha)})
         doc (json-of resp)
         rows (mapv run-row (get doc "workflow_runs"))
         total (get doc "total_count")
         text (str "# runs of " (:slug t) (when wf (str ", workflow " workflow)) (when branch (str ", branch " branch))
-                  (when status (str ", status " status)) ": " (count rows) " of " total
+                  (when status (str ", status " status))
+                  (when (seq head-sha) (str ", head " (subs head-sha 0 (min 12 (count head-sha))))) ": " (count rows) " of " total
                   ", fetched " (store/now) ", auth " (:auth c) "\n"
                   "# id #number result branch sha created title\n"
                   (str/join "\n" (map row-line rows)) (when (seq rows) "\n"))
-        p (write-view! (ci-dir ws session) (str "runs-" (safe (:slug t)) (when workflow (str "-" (safe workflow))) "-" (.format stamp (store/now)))
+        p (write-view! (ci-dir ws session) (str "runs-" (safe (:slug t)) (when workflow (str "-" (safe workflow)))
+                                                     (when (seq head-sha) (str "-" (subs head-sha 0 (min 12 (count head-sha))))) "-" (.format stamp (store/now)))
                        ".txt" (.getBytes ^String text StandardCharsets/UTF_8))]
     {:path (str p) :count (count rows) :total total :rows rows :repo (:slug t) :workflow workflow :auth (:auth c)
      :rate-remaining (:rate-remaining resp) :raw (:sha resp)}))

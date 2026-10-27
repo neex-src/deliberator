@@ -1,0 +1,50 @@
+# The estate's deploy pipeline: build service A's image, register a task definition revision that uses it, deploy it through CodeDeploy.
+# On GitHub it is started by hand (workflow_dispatch) against real AWS; locally `dlb ci local` runs it with `act` on the runtime's Podman
+# and points the aws CLI at its Floci (AWS_ENDPOINT_URL, fake keys, region), where the CodeDeploy application and group come from
+# estate/terraform/floci. The image stays in the Podman store (a real pipeline would push it to a registry between the two jobs).
+name: estate-deploy
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: image tag (default the commit's first 12 characters)
+        required: false
+        default: ""
+
+env:
+  CLUSTER: estate
+  SERVICE: estate-service-a
+  CONTAINER: service-a
+  CONTAINER_PORT: "8081"
+  IMAGE: estate/service-a
+  CODEDEPLOY_APP: estate
+  CODEDEPLOY_GROUP: service-a
+  DOCKER_BUILDKIT: "0"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: image
+        run: |
+          tag="${{ inputs.tag }}"
+          echo "image=${IMAGE}:${tag:-${GITHUB_SHA::12}}" >> "$GITHUB_OUTPUT"
+      - name: Build service A's image
+        run: docker build -f estate/services/service-a/Dockerfile -t "${{ steps.image.outputs.image }}" estate/services
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: aws CLI (the act image has none; GitHub's runners do)
+        if: ${{ env.ACT }}
+        run: pip3 install -q awscli
+      - name: Register a task definition revision with the new image
+        id: taskdef
+        run: echo "arn=$(estate/ci/register-taskdef.sh "$CLUSTER" "$SERVICE" "$CONTAINER" "${{ needs.build.outputs.image }}")" >> "$GITHUB_OUTPUT"
+      - name: Deploy it through CodeDeploy
+        run: estate/ci/deploy.sh "$CODEDEPLOY_APP" "$CODEDEPLOY_GROUP" "${{ steps.taskdef.outputs.arn }}" "$CONTAINER" "$CONTAINER_PORT"
