@@ -39,7 +39,7 @@
                               ["scenario.parse" ["path" "text" "ws"] "read"]
                               ["repo.attach" ["path" "kind" "ws"] "mutate"]
                               ["repo.detach" ["name" "ws"] "mutate"]
-                              ["repo.list" ["ws"] "read"]
+                              ["repo.list" ["bare" "ws"] "read"]
                               ["logs.fetch" ["target" "env" "since" "for" "follow" "filter" "session" "ws"] "mutate"]
                               ["logs.match" ["path" "markers" "session" "ws"] "read"]
                               ["marker.add" ["file" "line" "logger" "ws"] "mutate"]

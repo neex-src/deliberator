@@ -30,8 +30,9 @@ pwd | tr -d '\n'
 ### shell what-the-log-says
 # The deployment ended Succeeded, and the image tag is the commit the workflow ran at.
 # @assert out contains Succeeded
-# @assert out contains estate/service-a:
-grep -E 'deployment d-[a-z0-9]+: Succeeded|Registered|estate/service-a:' "{{log}}" | tail -n 4
+# @assert out contains image=estate/service-a:
+grep -E 'deployment d-[A-Za-z0-9]+: Succeeded' "{{log}}" | tail -n 1
+grep 'set-output:: image=' "{{log}}" | tail -n 1
 
 ### op deployed.refresh after
 {"env": "local"}
