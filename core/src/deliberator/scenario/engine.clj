@@ -30,7 +30,7 @@
 
   Execution. Step correlation is `<run id>-NNN`; `{{correlation}}` is the run id,
   `{{step.correlation}}` the step's. Concurrent kinds are armed (`:arm`, synchronously, in order)
-  before the first sequential step; their `:run` starts at once on its own thread, they are joined
+  before the first sequential step (or, with `# @from <step number|name>`, right before that step); their `:run` starts at once on its own thread, they are joined
   after the last sequential step. Sequential steps run in order, each on its own thread of the
   run's executor (virtual threads when `Thread.ofVirtual` exists - JDK 21+ - platform daemon
   threads otherwise; see `thread-model`). A step status is :ok, :failed (a check failed), :error
@@ -183,6 +183,19 @@
 (defn- scenario-name [^Path p]
   (let [n (str (.getFileName p))] (str/replace n #"\.scn$" "")))
 
+(defn- from-n
+  "The number of the sequential step that the `# @from <number|name>` of the concurrent step `s` names (B25: the tail is
+  armed right before that step instead of before step 1, its window counts from there), nil without the directive;
+  throws `:scenario/parse` when it names no sequential step of `steps`."
+  [steps s]
+  (when-let [v (some-> (first (dir-values s "from")) str/trim)]
+    (let [hit (or (when (re-matches #"\d+" v) (first (filter #(= (parse-long v) (:n %)) steps)))
+                  (first (filter #(= v (:name %)) steps)))]
+      (when-not (and hit (not (:concurrent? (:kind-map hit))))
+        (throw (ex-info (str "step " (:n s) ": `@from " v "` names no sequential step of the scenario")
+                        {:type :scenario/parse :line (:line s) :message (str "@from " v " names no sequential step")})))
+      (:n hit))))
+
 (defn plan
   "Static half of a run, see the ns docstring. Returns `{:path :sha :bytes :header :steps}` where
   each step carries `:kind-map`; throws, creating nothing."
@@ -207,6 +220,7 @@
                      (if (:concurrent? kmap) defined (into defined caps))
                      (conj out (assoc s :kind-map kmap))))
             out))]
+    (doseq [s planned :when (:concurrent? (:kind-map s))] (from-n planned s))   ; a `@from` names a sequential step
     {:path path :sha (store/sha256 bs) :bytes bs :header (:header parsed) :selected selected
      :steps planned}))
 
@@ -573,15 +587,20 @@
         (link! st (:sha sha) (.resolve ^Path (:run-dir st) "scenario.scn"))
         (let [conc (filter #(:concurrent? (:kind-map %)) steps)
               sequ (remove #(:concurrent? (:kind-map %)) steps)
-              futs (mapv (fn [s] [s (start-concurrent st s)]) conc)]
+              ;; B25: a concurrent step with `@from` is armed right before that step runs (when it is part of this run)
+              seq-ns (set (map :n sequ))
+              from (fn [s] (let [n (from-n (:steps plan') s)] (when (seq-ns n) n)))
+              later (group-by from (filter from conc))
+              futs (atom (mapv (fn [s] [s (start-concurrent st s)]) (remove from conc)))]
           (doseq [s sequ]
+            (doseq [c (get later (:n s))] (swap! futs conj [c (start-concurrent st c)]))
             (let [rec (if @(:cancelled st)
                         (exec-step st s nil)
                         (let [fut (try (spawn (:scope st) #(exec-step st s nil))
                                        (catch RejectedExecutionException _ nil))]
                           (if fut (await-step st fut s) (exec-step st s nil))))]
               (when (seq (:captures rec)) (swap! (:vars st) vars/overlay (:captures rec)))))
-          (doseq [[s fut] futs]
+          (doseq [[s fut] @futs]
             (await-step st fut s)))
         (let [status (run-status st @recs)]
           (write! status (store/now) nil)

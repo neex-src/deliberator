@@ -349,6 +349,27 @@
                                 :targets (assoc (:targets env/default-local) :log/f {:file (str log)})))
     (write-file "tail.scn" (str "### logs log/f tail\n# @filter needle\n# @for " secs "s\n\n### wait after\n# @for 100ms\n"))))
 
+(deftest logs-step-with-from-counts-its-window-from-that-step
+  ;; B25: a tail is armed before step 1 and its window counts from there, so a slow early step used it up; `@from` arms it later
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [c h]
+      (ok! c "session.start" {:key "T-1"})
+      (logs-fixture! 1)
+      (let [log (str (io/file (str (store/home)) "app.log"))
+            path (write-file "from.scn"
+                             (str "### logs log/f from-run-start\n# @filter needle\n# @for 2s\n# @assert lines == 0\n\n"
+                                  "### logs log/f from-append\n# @from append\n# @filter needle\n# @for 2s\n# @assert lines >= 1\n\n"
+                                  "### wait slow\n# @for 3s\n\n"
+                                  "### shell append\necho needle >> " log "\n"))
+            r (:result (ok! c "scenario.run" {:path path :env "files"}))]
+        (is (= "ok" (:status r)) (pr-str (select-keys r [:status :steps :failed])))
+        (is (= 0 (:failed r))))
+      (testing "a @from that names no sequential step is refused before anything runs"
+        (let [bad (write-file "from-bad.scn" "### logs log/f x\n# @from nosuch\n# @for 1s\n\n### wait y\n# @for 100ms\n")
+              e (:error (:terminal (tc/request c "scenario.run" {:path bad :env "files"})))]
+          (is (= "scenario/parse" (:type e)) (pr-str e))
+          (is (re-find #"@from nosuch" (str (:message e)))))))))
+
 (deftest scenario-cancel-ends-a-running-logs-step
   (with-daemon [h {:idle-minutes 0}]
     (with-client [a h]
