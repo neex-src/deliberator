@@ -131,5 +131,20 @@ class AwsExplorerTest : BasePlatformTestCase() {
         panel.runDrift(tf.resolve("ok").toString())
         wait("the comparison ends") { panel.statusText().contains("declared present") || panel.lastError != null }
         assertNull("no refresh was asked of a local environment: ${panel.lastError}", panel.lastError)
+        val fem = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+        wait("the report opens") { fem.openFiles.any { it.name == "drift-local.txt" } }
+        fem.openFiles.forEach { fem.closeFile(it) }
+    }
+
+    fun testAnEnvironmentThatCannotBeReadSaysWhyAndNotThatTheRuntimeIsDown() {
+        // found with the denied profile on the real account: the tab said "nothing found (is the runtime up?)" for a remote environment
+        val record = com.google.gson.JsonParser.parseString("""{"kind":"remote","read-only":true,"aws":{"profile":"m5-no-such-profile","region":"eu-central-1","account":"123456789012"},"targets":{}}""").asJsonObject
+        val svc = WorkspaceService.getInstance(project)
+        bg { svc.call("env.save", com.google.gson.JsonObject().apply { addProperty("name", "dev"); add("record", record); addProperty("check", false) }); svc.refreshNow() }
+        svc.selectEnv("dev")
+        panel.refresh()
+        wait("the reason") { panel.statusText().contains("nothing could be read") }
+        assertFalse(panel.statusText(), panel.statusText().contains("runtime"))
+        assertTrue(panel.statusText(), panel.statusText().contains("aws.discover"))
     }
 }

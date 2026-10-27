@@ -15,7 +15,7 @@
 
 (def services
   "aws-api names of the services the `aws` kind can call (their artifacts are in deps.edn)."
-  [:s3 :sns :sqs :ssm :secretsmanager :states :kms :kinesis :monitoring :logs :cloudformation :iam :sts :ecs
+  [:s3 :sns :sqs :ssm :secretsmanager :states :kms :kinesis :monitoring :logs :cloudformation :iam :sts :ecs :ec2
    :lambda :dynamodb :eventbridge :scheduler :codedeploy])
 
 (defn- operations [api]

@@ -70,7 +70,7 @@
 (def generic-read-services
   "Services only the generic `aws` step kind reaches (not in `table`): there `Get*`/`List*`/`Describe*`/`Head*` count as reads.
   Everywhere else an operation that is not in the table is a mutation (a remote one needs confirmation)."
-  #{:s3 :sns :states :kms :kinesis :monitoring :cloudformation :iam})
+  #{:s3 :sns :states :kms :kinesis :monitoring :cloudformation :iam :ec2})
 
 (defn op-class
   "`:read` or `:mutate` for `service`/`op`; `:mutate` when the pair is unknown."

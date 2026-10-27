@@ -292,7 +292,14 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
         }
         model.reload()
         for (i in 0 until tree.rowCount) tree.expandRow(i)
-        if (dr == null) status.text = if (total == 0) "${env()}: nothing found (is the runtime up?)" else "${env()}: $total resources  ·  double-click opens one as a step"
+        // found with a profile that may read nothing: "is the runtime up?" is the answer for a local environment only
+        val errs = if (remote()) AwsResources.getInstance().errors(project) else emptyMap()
+        status.toolTipText = errs.entries.joinToString("\n") { "${it.key}: ${it.value}" }.ifEmpty { null }
+        if (dr == null) status.text = when {
+            total == 0 && errs.isNotEmpty() -> "${env()}: nothing could be read, ${errs.size} sections failed. ${errs.entries.first().let { "${it.key}: ${it.value}" }.take(150)}"
+            total == 0 -> "${env()}: nothing found (is the runtime up?)"
+            else -> "${env()}: $total resources  ·  double-click opens one as a step" + (if (errs.isNotEmpty()) "  ·  not readable: ${errs.keys.sorted().joinToString(", ")}" else "")
+        }
     }
 
     /** Text of the tree as lines `kind: name` (for tests); drift marks as ` [undeclared]` / ` [missing]`. */
