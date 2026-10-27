@@ -142,6 +142,7 @@
   [:hint :known :problems :line :token :summary :step :confirmations :result :expires :target :env
    :role :key :sha :schema :account :expected :found :log :exit :service :lines :errors
    :of :names :sources :output :endpoint :command :ref :cycle :edges :file :path :repo :branch])
+   :of :names :sources :output :endpoint :command :ref :cycle :edges :file :path :repo :branch :provider :stderr])
 
 (defn error-map
   "The wire error of a throwable: `{:type :message [:hint ...]}`."

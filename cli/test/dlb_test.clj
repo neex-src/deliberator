@@ -684,6 +684,57 @@
         (spit (str (fs/path *home* "workspaces" "m5" "worktrees" "proj" "feat-x" "dirty.txt")) "x")
         (let [r (dlb *home* "worktree" "remove" "proj" "feat-x" "--ws" "m5")]
           (is (= 2 (:exit r)))
+          (is (str/includes? (:err r) "sample/sample-failure"))))
+      (testing "events are printed as they stream"
+        (let [r (dlb *home* "sample" "count" "--n" "2")]
+          (is (= 0 (:exit r)))))
+      (testing "provider.list"
+        (is (str/includes? (:out (dlb *home* "provider" "list")) "sample")))
+      (finally (dlb *home* "provider" "stop" "sample") (fs/delete-tree d)))))
+
+;; --- M5: repo.clone, worktrees and CI as text -------------------------------------------------------------------------
+
+(defn- git! [dir & args]
+  (let [r (apply p/shell {:out :string :err :string :continue true :dir (str dir)}
+                 "git" "-c" "user.name=t" "-c" "user.email=t@t" "-c" "commit.gpgsign=false" "-c" "protocol.file.allow=always" args)]
+    (when-not (zero? (:exit r)) (throw (ex-info (str "git " (str/join " " args) ": " (:err r)) {})))
+    (str/trim (:out r))))
+
+(deftest repo-clone-and-worktrees-from-the-shell
+  (let [t (fs/create-temp-dir {:prefix "m5-" :path (str (fs/path root "cli" "target"))})
+        origin (str (fs/path t "origin.git")) work (str (fs/path t "work"))]
+    (try
+      (git! t "init" "--bare" "-b" "main" origin)
+      (git! t "clone" "--quiet" origin work)
+      (spit (str (fs/path work "a.txt")) "one\n")
+      (git! work "add" ".") (git! work "commit" "-m" "one") (git! work "branch" "-M" "main") (git! work "push" "-u" "origin" "main")
+      (is (zero? (:exit (dlb *home* "workspace" "open" "m5"))))
+      (testing "help comes from the op schema"
+        (is (str/includes? (:out (dlb *home* "help" "repo" "clone")) "dlb repo clone <url>"))
+        (is (str/includes? (:out (dlb *home* "help" "worktree")) "dlb worktree start <repo>")))
+      (testing "dlb repo clone <url> <name>"
+        (let [r (dlb *home* "repo" "clone" origin "proj" "--ws" "m5" "--json")
+              m (json-line (:out r))]
+          (is (zero? (:exit r)) (:err r))
+          (is (= "proj" (get-in m [:result :name])))
+          (is (true? (get-in m [:result :bare])))
+          (is (fs/exists? (fs/path *home* "workspaces" "m5" "repos" "proj.git" "HEAD")))))
+      (testing "dlb worktree start <repo> <branch>: from the latest main, no questions"
+        (spit (str (fs/path work "b.txt")) "two\n")
+        (git! work "add" ".") (git! work "commit" "-m" "two") (git! work "push" "origin" "main")
+        (let [r (dlb *home* "worktree" "start" "proj" "feat/x" "--ws" "m5" "--json")
+              m (json-line (:out r))]
+          (is (zero? (:exit r)) (:err r))
+          (is (= "feat/x" (get-in m [:result :branch])))
+          (is (= (git! work "rev-parse" "HEAD") (get-in m [:result :base-sha])) "the commit pushed after the clone is there")
+          (is (fs/exists? (fs/path *home* "workspaces" "m5" "worktrees" "proj" "feat-x" "b.txt")))))
+      (testing "dlb worktree list, and remove refuses changes"
+        (let [out (:out (dlb *home* "worktree" "list" "--ws" "m5"))]
+          (is (str/includes? out "1 row") out)
+          (is (str/includes? out "feat/x")))
+        (spit (str (fs/path *home* "workspaces" "m5" "worktrees" "proj" "feat-x" "dirty.txt")) "x")
+        (let [r (dlb *home* "worktree" "remove" "proj" "feat-x" "--ws" "m5")]
+          (is (= 2 (:exit r)))
           (is (str/includes? (:err r) "worktree/dirty") (:err r))
           (is (str/includes? (:err r) "force")))
         (let [r (dlb *home* "worktree" "remove" "proj" "feat-x" "--force" "--ws" "m5")]

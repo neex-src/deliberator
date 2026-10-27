@@ -48,6 +48,7 @@ in 0.6 s)*. One repository, one plugin id, one distribution.
 | **Cached view** | The latest fetched state of something remote with its age. Two exist today: the config snapshot (parameters and secret metadata, `config.refresh`) and what is deployed (ECS services with their task definition revision and image tags, Lambda versions, CodeDeploy deployments; `deployed.refresh`, `deployed.show` answers from it with its age). | `config/<env>.edn`, `cache/<env>/deployed.edn` |
 | **Marker** | A source position (file, line) whose log lines are highlighted after a run. | `markers.edn` |
 | **Provider** | An external process contributing operations through the protocol (§6). M6: planned, not built. | `providers/<name>.edn` (planned) |
+| **Provider** | An external process contributing operations through the protocol (§6). Built in M6.5. | `<home>/providers/<name>.edn` |
 
 ## 3. On-disk layout
 
@@ -89,6 +90,7 @@ workspaces/<ws>/
 ```
 
 Planned, not built: `providers/<name>.edn` (M6). Cached views so far: `config/<env>.edn` and `cache/<env>/deployed.edn`; a named query is a
+Built in M6.5: `providers/<name>.edn` and `logs/providers/<name>.log`. Cached views so far: `config/<env>.edn` and `cache/<env>/deployed.edn`; a named query is a
 convention, not a concept: a one-step `.scn` under the session's `queries/` and `dlb runs list --scenario <name>` as its
 history.
 
@@ -250,6 +252,11 @@ small by rule: a summary plus paths; full data is on disk.
 names the command; the daemon starts it on demand, asks `op.describe`, and exposes its operations
 as `<name>.<op>`, streaming its events through. the user's REPL-based infrastructure catalog plugs in
 here; the core knows nothing about it beyond this file.
+**Providers** (M6.5, built) speak the same framing on stdio. `<home>/providers/<name>.edn`
+names the command; the daemon starts it on demand, asks `op.describe`, exposes its operations
+as `<name>.<op>` (in `op.describe`, `dlb`, the IDE), streams its events through, restarts it on the next call after a crash and stops it
+with the daemon (`provider.list`, `provider.stop`). the user's REPL-based infrastructure catalog plugs in
+here; the core knows nothing about it beyond this file. The sample is `providers/sample/sample.bb`.
 
 ## 7. Runtime control
 
