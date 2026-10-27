@@ -13,7 +13,8 @@
 # @env local
 # @var corr = {{correlation}}
 # @var msg = ord-{{uuid}}
-# @var fresh = ord-{{uuid}}
+# `{{uuid}}` is one value for the whole run: an id made of it again would be the order the fake recorded, not one it never saw
+# @var fresh = ord-{{now.epoch}}
 
 ### shell paths
 # @cwd ..
