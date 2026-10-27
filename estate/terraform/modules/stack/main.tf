@@ -122,6 +122,10 @@ resource "aws_cloudwatch_event_target" "to_lambda" {
   event_bus_name = aws_cloudwatch_event_bus.bus.name
   target_id      = "logger-lambda"
   arn            = aws_lambda_function.logger.arn
+  # One target at a time per rule (B29): Floci 2.3.0 keeps a rule's targets as one read-modify-write value, so two PutTargets (apply) or two
+  # RemoveTargets (destroy) in flight on the same rule lose one of the updates, and the destroy then fails with "Rule still has targets".
+  # Terraform runs independent resources in parallel; the dependency serialises these two. Harmless on AWS.
+  depends_on = [aws_cloudwatch_event_target.to_b]
 }
 
 # EventBridge may only write to B's queue on behalf of this rule

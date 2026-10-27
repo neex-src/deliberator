@@ -3,7 +3,7 @@
   (`estate/terraform/aws`, AWS provider 6.x, no endpoints of its own) and of the IAM root it looks a role up in are applied onto
   Floci through `terraform.apply-all` (the override file, the order from the .tf files, prefix `m6a` so nothing of the estate is
   touched), read back (the ARN carries the workspace's account, drift of the copy is clean, `terraform.locate` finds a declaration)
-  and destroyed again."
+  and destroyed again (the destroy used to fail now and then on the rule's two targets: B29, `modules/stack/main.tf`)."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
@@ -55,6 +55,9 @@
                   p (aws/invoke! {:ws ws} (env/load ws "local") :ssm :GetParameter {:Name "/m6a/chain/desired-count"})]
               (is (str/includes? (get-in role [:Role :Arn]) (str ":" account ":role/estate-shared")) (pr-str role))
               (is (some? (get-in p [:Parameter :Value])) (pr-str p))))
+          (testing "the rule has both of its targets (B29: two PutTargets at once lost one on Floci; the module chains them)"
+            (let [ts (aws/invoke! {:ws ws} (env/load ws "local") :eventbridge :ListTargetsByRule {:Rule "m6a-published" :EventBusName "m6a-bus"})]
+              (is (= #{"service-b-queue" "logger-lambda"} (set (map :Id (:Targets ts)))) (pr-str ts))))
           (testing "drift of the copy: everything declared exists (terraform show runs with the root's data dir)"
             (let [d (call "terraform.drift" {:ws ws :env "local" :dir aws-root})]
               (is (= [] (:missing d)) (pr-str (:missing d)))

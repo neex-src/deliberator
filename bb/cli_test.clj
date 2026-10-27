@@ -1,5 +1,5 @@
 (ns cli-test
-  "`bb cli:test [--known-bugs]`: layer-4 tests of `dlb` (cli/test/dlb_test.clj) and the audit's odd inputs
+  "`bb cli:test [--known-bugs] [--only NAME]` (NAME: part of a test's name): layer-4 tests of `dlb` (cli/test/dlb_test.clj) and the audit's odd inputs
   (cli/test/audit_dlb_test.clj) against a real daemon started from a fresh jar (`core-build/ensure-jar!`: rebuilt when
   core/src is newer, not only when missing). Tests whose var carries `:known-bug` metadata are left out; with `--known-bugs`
   ONLY those run and the exit code is `known-bugs/verdict` (decision 24: they must fail until fixed, and BUGS.md lists them).
@@ -26,10 +26,11 @@
       (when-let [v (first t/*testing-vars*)] (swap! failed-vars conj v))
       (orig m))))
 
-(defn- selected-vars [known-bugs?]
+(defn- selected-vars [known-bugs? only]
   (for [ns namespaces
         v (sort-by (comp :line meta) (filter #(:test (meta %)) (vals (ns-interns ns))))
-        :when (= (boolean known-bugs?) (boolean (:known-bug (meta v))))]
+        :when (and (= (boolean known-bugs?) (boolean (:known-bug (meta v))))
+                   (or (nil? only) (str/includes? (str (:name (meta v))) only)))]
     v))
 
 (defn- var-name [v] (str (ns-name (:ns (meta v))) "/" (:name (meta v))))
@@ -40,7 +41,8 @@
   (core-build/ensure-jar!)
   (apply require namespaces)
   (let [known? (some #{"--known-bugs"} args)
-        vars (selected-vars known?)
+        only (second (drop-while #(not= "--only" %) args))
+        vars (selected-vars known? only)
         counters (binding [t/*report-counters* (ref t/*initial-report-counters*)]
                    (doseq [[_ vs] (group-by (comp :ns meta) vars)]
                      (t/test-vars vs))

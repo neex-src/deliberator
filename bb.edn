@@ -63,7 +63,7 @@
            :task (apply ide-run/-main *command-line-args*)}
   ide:verify {:doc "Run the plugin verifier against the recommended IDEs"
               :task (shell {:dir "ide"} "./gradlew" "verifyPlugin")}
-  cli:test {:doc "Layer-4 tests of dlb against a real daemon (the jar rebuilt when stale); SKIPs are printed and counted (with ESTATE_WS and DELIBERATOR_HOME set the estate-gated test runs); --known-bugs runs only the :known-bug tests and exits by their contract (decision 24, see core:test:known-bugs)"
+  cli:test {:doc "Layer-4 tests of dlb against a real daemon (the jar rebuilt when stale); --only NAME runs the tests whose name contains NAME; SKIPs are printed and counted (with ESTATE_WS and DELIBERATOR_HOME set the estate-gated test runs); --known-bugs runs only the :known-bug tests and exits by their contract (decision 24, see core:test:known-bugs)"
             :requires ([cli-test])
             :task (apply cli-test/-main *command-line-args*)}
   cli:install {:doc "Symlink cli/dlb into ~/.local/bin"

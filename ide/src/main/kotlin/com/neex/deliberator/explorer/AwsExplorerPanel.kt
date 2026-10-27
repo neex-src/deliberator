@@ -271,7 +271,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
             total += items.size
             DefaultMutableTreeNode(KindNode(k.kind, k.title, items.size)).also { n ->
                 val services = WorkspaceService.getInstance(project).model.services
-                items.forEach { n.add(DefaultMutableTreeNode(ResNode(k.kind, it, dr?.isUndeclared(k.kind, it.name) == true, ServiceLinks.forResource(k.kind, it.name, services)))) }
+                items.forEach { n.add(DefaultMutableTreeNode(ResNode(k.kind, it, dr?.isUndeclared(k.kind, it.name) == true, ServiceLinks.forResource(k.kind, it.name, services, it.containers)))) }
                 dr?.missing?.filter { it.kind == k.kind }?.forEach { n.add(DefaultMutableTreeNode(MissingNode(it.name, it.address))) }
                 root.add(n)
             }

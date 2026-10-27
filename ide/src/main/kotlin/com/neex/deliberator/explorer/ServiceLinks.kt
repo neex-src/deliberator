@@ -23,17 +23,22 @@ data class ServiceLink(val service: ServiceRow, val kind: String, val resource: 
 /**
  * M6.4: which workspace service an ECS or log-group row of the explorer stands for, from `service.list` (its `container`, its `log-target` and the `log` that
  * target has in the environment). A log group is a service's when it is the CloudWatch group of the service's `log/` target, or is named after the service
- * (`/prefix/service-a`); an ECS row when its name is the service's (`a`, `service-a`). Nothing is guessed beyond the names.
+ * (`/prefix/service-a`); an ECS cluster row when its name is the service's (`a`, `service-a`). An ECS *service* or *task definition* row (B31) is a service's
+ * when its task definition runs a container named like the service (`service-a`), else when its name is or ends in `service-a` (`m6a-service-a`,
+ * `m6a-service-a:3`). Nothing is guessed beyond the names.
  */
 object ServiceLinks {
     private fun last(name: String) = name.trimEnd('/').substringAfterLast('/')
 
-    fun forResource(kind: String, name: String, services: List<ServiceRow>): ServiceLink? {
-        if (kind != "logs" && kind != "ecs") return null
+    fun forResource(kind: String, name: String, services: List<ServiceRow>, containers: List<String> = emptyList()): ServiceLink? {
+        if (kind != "logs" && kind != "ecs" && kind != "ecs-services" && kind != "ecs-taskdefs") return null
         val tail = last(name)
+        val deep = kind == "ecs-services" || kind == "ecs-taskdefs"
+        val base = if (kind == "ecs-taskdefs") tail.substringBefore(':') else tail
         for (s in services) {
             if (kind == "logs" && s.logGroup != null && s.logGroup == name) return ServiceLink(s, kind, name, "the CloudWatch group of ${s.logTarget ?: "its log target"}")
-            if (tail == "service-${s.name}" || tail == s.name) return ServiceLink(s, kind, name, "named after the service")
+            if (deep && containers.any { it == "service-${s.name}" || it == s.name }) return ServiceLink(s, kind, name, "its task definition runs the container of the service")
+            if (base == "service-${s.name}" || base == s.name || (deep && base.endsWith("-service-${s.name}"))) return ServiceLink(s, kind, name, "named after the service")
         }
         return null
     }
