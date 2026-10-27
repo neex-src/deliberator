@@ -2,7 +2,8 @@
   "Layer 3: the daemon in this JVM on a temporary home (unix socket and --tcp), driven by the tiny
   test client. Scenarios use the `wait` and `logs` (file) kinds, so no runtime is needed except for the
   tests that say so (they skip when the test Floci (floci-util/url) is down)."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [deliberator.aws :as aws]
@@ -369,6 +370,22 @@
               e (:error (:terminal (tc/request c "scenario.run" {:path bad :env "files"})))]
           (is (= "scenario/parse" (:type e)) (pr-str e))
           (is (re-find #"@from nosuch" (str (:message e)))))))))
+
+(deftest an-op-step-that-changes-the-environment-is-seen-by-the-steps-after-it
+  ;; B28: a run read its environment once, at its start
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [c h]
+      (ok! c "session.start" {:key "T-1"})
+      (let [rec (fn [url] (assoc env/default-local :name "moving" :targets (assoc (:targets env/default-local) :service/a url)))
+            _ (env/save! "default" (rec "http://old.example:1"))
+            new-rec (json/write-str (dissoc (rec "http://new.example:2") :name) :key-fn #(subs (str %) 1))
+            path (write-file "moving.scn"
+                             (str "### shell before\n# @assert out contains http://old.example:1\necho {{service/a}}\n\n"
+                                  "### op env.save change\n{\"name\": \"moving\", \"record\": " new-rec "}\n\n"
+                                  "### shell after\n# @assert out contains http://new.example:2\necho {{service/a}}\n"))
+            r (:result (ok! c "scenario.run" {:path path :env "moving"}))]
+        (is (= "ok" (:status r)) (pr-str (select-keys r [:status :steps :failed])))
+        (is (= 0 (:failed r)))))))
 
 (deftest scenario-cancel-ends-a-running-logs-step
   (with-daemon [h {:idle-minutes 0}]

@@ -2,7 +2,7 @@
   "Runs a scenario: one function from (workspace, environment, scenario file, session) to a run
   directory. `(start! ws env scenario-path & opts) -> Run` (non-blocking), `(run! ...)` = start and
   wait; options `{:session key (default: the current one) :sink :steps #{n..} :resolve-target f :vars {}
-  :builtins {} :on-created (fn [run])}` (`:on-created` gets the Run before the first event can be
+  :builtins {} :reload-env f :on-created (fn [run])}` (`:reload-env` returns the environment again after an `op` step, B28; `:on-created` gets the Run before the first event can be
   emitted, so a registry can hold it by the time a client learns its id). `ws` is as in `store`; `env` is the environment record, only threaded to kinds
   (`:name` goes into run.edn); `:resolve-target` is the seam to `env/target` (`(f \"service/a\")`
   -> value, throws `{:type :env/unknown-target}`; the daemon passes an adapter that makes the key
@@ -297,6 +297,15 @@
       (:type d) (assoc :type (:type d))
       (:hint d) (assoc :hint (:hint d)))))
 
+(defn- reload-env!
+  "B28: after an `op` step the environment may have changed (`topology.set`, `env.save`, `runtime.set`): the steps after it see
+  the record as it is on disk now, through the option `:reload-env` (a function returning the environment, nil or a throw keeps
+  the one in use). `{{service/x}}` resolves through the caller's `:resolve-target`, which reads the same reloaded record."
+  [st]
+  (when-let [f (:reload-env (:opts st))]
+    (try (when-let [e (f)] (reset! (:env-ref st) e))
+         (catch Throwable _ nil))))
+
 (defn- vars-for [st step corr]
   (assoc @(:vars st) "step.correlation" corr))
 
@@ -347,7 +356,7 @@
         timeout-ms (if-let [t (dir-value rstep "timeout")]
                      (expr/parse-duration t)
                      (or (:default-timeout-ms kmap) default-timeout-ms))
-        ctx {:ws (:ws st) :env (:env st) :vars vs :session (:session st) :run-dir (:run-dir st)
+        ctx {:ws (:ws st) :env @(:env-ref st) :vars vs :session (:session st) :run-dir (:run-dir st)
              :step-dir step-dir :step rstep :sink (:sink st)
              :line! (fn [text] (emit! st {:event :line :step (:n step) :text (str text)}))
              :correlation (:run-id st) :step-correlation corr
@@ -599,6 +608,7 @@
                         (let [fut (try (spawn (:scope st) #(exec-step st s nil))
                                        (catch RejectedExecutionException _ nil))]
                           (if fut (await-step st fut s) (exec-step st s nil))))]
+              (when (= "op" (:kind s)) (reload-env! st))
               (when (seq (:captures rec)) (swap! (:vars st) vars/overlay (:captures rec)))))
           (doseq [[s fut] @futs]
             (await-step st fut s)))
@@ -691,7 +701,7 @@
         scope (Executors/newCachedThreadPool factory)
         cancelled (atom false)
         done (promise)
-        st {:ws ws :env env :session sess :sink sink :run-dir run-dir :run-id run-id
+        st {:ws ws :env env :env-ref (atom env) :session sess :sink sink :run-dir run-dir :run-id run-id
             :steps-dir (.resolve run-dir "steps") :scope scope :cancelled cancelled
             :lock (Object.) :resolve-target resolve-target :opts opts}
         rel (str "sessions/" sess "/runs/" run-id)

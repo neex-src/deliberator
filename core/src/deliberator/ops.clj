@@ -634,6 +634,7 @@
         file (resolve-scenario ws sess path)
         env-name (or env (header-env file) "local")
         e (env/load ws env-name)
+        env* (atom e)                      ; B28: the record the run resolves against; an `op` step that changes it reloads it
         _ (verify-account! d ws sess e)
         confirmations (atom [])
         sink (fn [ev]
@@ -648,7 +649,8 @@
                                     :on-created (fn [run]
                                                   (swap! (:runs d) assoc (:run-id run) run)
                                                   ((:on-cancel! ctx) (fn [] (engine/cancel! run))))
-                                    :resolve-target (fn [k] (env/target e (keyword k)))
+                                    :resolve-target (fn [k] (env/target @env* (keyword k)))
+                                    :reload-env (fn [] (reset! env* (env/load ws env-name)))
                                     :topology (topology/snapshot ws e)
                                     :host ctx}
                              (seq steps) (assoc :steps (set steps))
