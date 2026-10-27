@@ -11,7 +11,7 @@
   core:test:known-bugs {:doc "Only the tests of known product bugs (^:known-bug, excluded from core:test); exit 0 when there are none and BUGS.md pins none, or when all of them fail as they must; exit 1 when one passes (fixed: drop the tag) or BUGS.md's pinned list disagrees"
                         :requires ([known-bugs])
                         :task (known-bugs/-main)}
-  check:arch {:doc "Layering rules: core, cli, ide separation, no employer names"
+  check:arch {:doc "Layering rules: core, cli, ide separation, no employer names (the list is ~/.config/deliberator/forbidden-names.txt; fails when it is missing on a machine marked by ~/.config/deliberator/owner-machine, skips with a message elsewhere)"
               :requires ([check-arch])
               :task (check-arch/-main)}
   check:all {:doc "The whole integration test: check:arch, core:test:all (A, then B on the estate of --ws W, default \"check\"), cli:test with the estate up, tour, acceptance; a summary table; the estate down afterwards. Home $DELIBERATOR_HOME, else .scratch/check-home. Run under .scratch/runtime.lock"

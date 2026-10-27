@@ -2,7 +2,8 @@
   "Layer 3: the daemon in this JVM on a temporary home (unix socket and --tcp), driven by the tiny
   test client. Scenarios use the `wait` and `logs` (file) kinds, so no runtime is needed except for the
   tests that say so (they skip when the test Floci (floci-util/url) is down)."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [deliberator.aws :as aws]
@@ -46,7 +47,7 @@
   "The one deliberate change-detector of the op table (review 2026-10-25, R29): adding or renaming an op fails
   `op-describe-lists-every-operation-with-its-schema` until the name is added here, on purpose, in the same commit as its
   `dlb` help and docs. Every other test derives its expectations from `ops/table`."
-  ["hello" "op.describe" "daemon.stop" "provider.list" "provider.stop" "fake.record" "fake.replay" "fake.stop" "fake.list" "fake.commit" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "explore.write" "session.note" "session.start" "session.end" "session.list" "session.current"
+  ["hello" "op.describe" "op.tools" "workspace.agent" "daemon.stop" "provider.list" "provider.stop" "fake.record" "fake.replay" "fake.stop" "fake.list" "fake.commit" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "explore.write" "session.note" "session.start" "session.end" "session.list" "session.current"
    "audit.show" "config.chain" "config.refresh" "deployed.refresh" "deployed.show" "logs.insights"
    "env.list" "env.describe" "env.check" "env.save" "env.create" "env.remove" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
    "aws.describe" "aws.discover" "terraform.drift" "terraform.local" "terraform.graph" "terraform.apply-all" "terraform.locate"
@@ -141,6 +142,103 @@
         (is (nil? (:id m))))
       (is (= (daemon/version) (:version (:result (ok! c "hello" {}))))))))
 
+;; --- agent interface ----------------------------------------------------------------
+
+(defn- err [c op args]
+  (:error (:terminal (tc/request c op args))))
+
+(deftest tools-are-the-op-table-as-tool-definitions
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [c h]
+      (ok! c "hello" {:client "dlb"})
+      (let [{:keys [tools client]} (:result (ok! c "op.tools" {}))
+            by (into {} (map (juxt :name identity)) tools)]
+        (is (= "dlb" client))
+        (is (= (sort (map ops/tool-name (keys ops/table))) (sort (keys by))) "one tool per operation of the table")
+        (doseq [{:keys [name description input_schema]} tools]
+          (is (re-matches #"[a-zA-Z0-9_-]{1,64}" name) name)
+          (is (not (str/blank? description)) name)
+          (is (= "object" (:type input_schema)) name)
+          (is (map? (:properties input_schema)) name)
+          (is (every? (set (map clojure.core/name (keys (:properties input_schema)))) (:required input_schema)) name)
+          (is (false? (:additionalProperties input_schema)) name))
+        (let [sr (get-in by ["scenario_run" :input_schema])]
+          (is (= ["path"] (:required sr)))
+          (is (= "string" (get-in sr [:properties :path :type])))
+          (is (= "array" (get-in sr [:properties :steps :type])))
+          (is (= "integer" (get-in sr [:properties :steps :items :type])))
+          (is (contains? (:properties sr) :confirm) "the confirmation token is there for a human client"))
+        (is (contains? by "workspace_agent") "a human client sees the switch"))
+      (testing "the JSON Schema types follow op.describe's"
+        (let [rows (into {} (map (juxt :op identity)) (:result (ok! c "op.describe" {})))
+              tool (into {} (map (juxt :name identity)) (:tools (:result (ok! c "op.tools" {}))))]
+          (is (= "object" (get-in tool ["env_save" :input_schema :properties :record :type])))
+          (is (= "object" (get-in rows ["env.save" :args :record :type]))))))))
+
+(deftest an-agent-sees-and-may-do-no-remote-mutation-unless-the-workspace-says-so
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [human h]
+      (with-client [agent h]
+        (ok! human "hello" {:client "dlb"})
+        (ok! agent "hello" {:client "agent"})
+        (ok! human "workspace.open" {:ws "w1"})
+        (testing "the table an agent sees"
+          (let [rows (:result (ok! agent "op.describe" {:ws "w1"}))
+                ops* (into {} (map (juxt :op identity)) rows)
+                tools (:tools (:result (ok! agent "op.tools" {:ws "w1"})))
+                tool (into {} (map (juxt :name identity)) tools)]
+            (is (not (contains? ops* "workspace.agent")) "the switch is not offered")
+            (is (contains? ops* "scenario.run") "scenarios are")
+            (is (not (contains? (get-in ops* ["scenario.run" :args]) :confirm)) "but not the confirmation token")
+            (is (not (some #{"confirm"} (get-in ops* ["scenario.run" :order]))))
+            (is (not (contains? tool "workspace_agent")))
+            (is (not (contains? (get-in tool ["service_start" :input_schema :properties]) :confirm)))
+            (is (contains? tool "service_start"))))
+        (testing "refused, not only hidden"
+          (is (= "agent/human-only" (:type (err agent "workspace.agent" {:ws "w1" :remote-mutations true}))))
+          (is (= "agent/human-only" (:type (err agent "workspace.agent" {:ws "w1"}))))
+          (let [e (err agent "scenario.run" {:ws "w1" :path "x.scn" :confirm "tok"})]
+            (is (= "agent/remote-mutations-disabled" (:type e)) (pr-str e))
+            (is (re-find #"workspace agent --remote-mutations true" (str (:hint e)))))
+          (is (= "agent/remote-mutations-disabled" (:type (err agent "service.start" {:ws "w1" :name "a" :confirm "tok"})))))
+        (testing "everything else works for an agent"
+          (ok! agent "session.start" {:ws "w1" :key "AG-1"})
+          (is (= "AG-1" (:current-session (:workspace (:result (ok! agent "workspace.show" {:ws "w1"})))))))
+        (testing "a human turns the switch on, and only for that workspace"
+          (is (false? (:agent-remote-mutations (:result (ok! human "workspace.agent" {:ws "w1"})))))
+          (is (true? (:agent-remote-mutations (:result (ok! human "workspace.agent" {:ws "w1" :remote-mutations true})))))
+          (is (true? (:agent-remote-mutations (:workspace (:result (ok! human "workspace.show" {:ws "w1"}))))) "workspace.show says so")
+          (let [tool (into {} (map (juxt :name identity)) (:tools (:result (ok! agent "op.tools" {:ws "w1"}))))]
+            (is (contains? (get-in tool ["scenario_run" :input_schema :properties]) :confirm))
+            (is (not (contains? tool "workspace_agent")) "still a human's"))
+          (is (not (contains? (get-in (into {} (map (juxt :name identity)) (:tools (:result (ok! agent "op.tools" {:ws "w2"})))) ["scenario_run" :input_schema :properties]) :confirm))
+              "another workspace is still off")
+          (let [e (err agent "scenario.run" {:ws "w1" :path "x.scn" :confirm "tok"})]
+            (is (not (str/starts-with? (str (:type e)) "agent/")) "the agent check lets it through to the ordinary run (which then refuses the missing scenario or token)"))
+          (is (= "agent/human-only" (:type (err agent "workspace.agent" {:ws "w1" :remote-mutations false}))))
+          (ok! human "workspace.agent" {:ws "w1" :remote-mutations false}))
+        (testing "an operation flagged remote-write (what pr.open will be) is invisible and refused the same way"
+          (with-redefs [ops/table (assoc ops/table "pr.fake" {:fn (fn [_ _] {:made true}) :class :mutate :remote :write :doc "Opens a pull request." :args {}})]
+            (is (not (some #(= "pr.fake" (:op %)) (:result (ok! agent "op.describe" {:ws "w1"})))))
+            (is (not (some #(= "pr_fake" (:name %)) (:tools (:result (ok! agent "op.tools" {:ws "w1"}))))))
+            (is (= "agent/remote-mutations-disabled" (:type (err agent "pr.fake" {:ws "w1"}))))
+            (is (true? (:made (:result (ok! human "pr.fake" {:ws "w1"})))) "a human client is not bound by it")
+            (ok! human "workspace.agent" {:ws "w1" :remote-mutations true})
+            (is (some #(= "pr.fake" (:op %)) (:result (ok! agent "op.describe" {:ws "w1"}))))
+            (is (true? (:made (:result (ok! agent "pr.fake" {:ws "w1"})))))))
+        (testing "a scenario run by an agent does not get around it: its op steps are the agent's calls"
+          (ok! human "workspace.agent" {:ws "w1" :remote-mutations false})
+          (let [path (write-file "agent-op.scn" "### op workspace.agent flip\n# @assert ok == false\n# @assert error.type == agent/human-only\n{\"ws\": \"w1\", \"remote-mutations\": true}\n")
+                r (:result (ok! agent "scenario.run" {:ws "w1" :path path}))]
+            (is (= "ok" (:status r)) (pr-str (select-keys r [:status :failed])))
+            (is (false? (:agent-remote-mutations (:result (ok! human "workspace.agent" {:ws "w1"})))) "the switch is still off")))
+        (testing "for agent shows an agent's view to a human"
+          (ok! human "workspace.agent" {:ws "w1" :remote-mutations false})
+          (let [r (:result (ok! human "op.tools" {:ws "w1" :for "agent"}))]
+            (is (= "agent" (:client r)))
+            (is (false? (:remote-mutations r)))
+            (is (not (some #(= "workspace_agent" (:name %)) (:tools r))))))))))
+
 (deftest op-describe-lists-every-operation-with-its-schema
   (with-daemon [h {:idle-minutes 0}]
     (with-client [c h]
@@ -202,7 +300,8 @@
       (let [{:keys [result]} (ok! c "runtime.sync-env" {:ws "w-sync"})]
         (is (.exists (io/file (:path result))))
         (let [e (env/load "w-sync" "local")]
-          (is (= "http://localhost:4566" (get-in e [:aws :endpoint])))
+          ;; the first free host port of the default 4566 (m3 05b): 4566 itself unless something on the sandbox holds it, as the estate does in pass B
+          (is (= (str "http://localhost:" (get-in (store/read-edn (:path result)) [:containers :floci :ports 4566])) (get-in e [:aws :endpoint])))
           (is (= {:container "deliberator-w-sync-service-a"} (get-in e [:targets :log/service-a]))))))))
 
 (deftest arguments-are-validated-against-the-schema
@@ -348,6 +447,43 @@
     (env/save! "default" (assoc env/default-local :name "files"
                                 :targets (assoc (:targets env/default-local) :log/f {:file (str log)})))
     (write-file "tail.scn" (str "### logs log/f tail\n# @filter needle\n# @for " secs "s\n\n### wait after\n# @for 100ms\n"))))
+
+(deftest logs-step-with-from-counts-its-window-from-that-step
+  ;; B25: a tail is armed before step 1 and its window counts from there, so a slow early step used it up; `@from` arms it later
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [c h]
+      (ok! c "session.start" {:key "T-1"})
+      (logs-fixture! 1)
+      (let [log (str (io/file (str (store/home)) "app.log"))
+            path (write-file "from.scn"
+                             (str "### logs log/f from-run-start\n# @filter needle\n# @for 2s\n# @assert lines == 0\n\n"
+                                  "### logs log/f from-append\n# @from append\n# @filter needle\n# @for 2s\n# @assert lines >= 1\n\n"
+                                  "### wait slow\n# @for 3s\n\n"
+                                  "### shell append\necho needle >> " log "\n"))
+            r (:result (ok! c "scenario.run" {:path path :env "files"}))]
+        (is (= "ok" (:status r)) (pr-str (select-keys r [:status :steps :failed])))
+        (is (= 0 (:failed r))))
+      (testing "a @from that names no sequential step is refused before anything runs"
+        (let [bad (write-file "from-bad.scn" "### logs log/f x\n# @from nosuch\n# @for 1s\n\n### wait y\n# @for 100ms\n")
+              e (:error (:terminal (tc/request c "scenario.run" {:path bad :env "files"})))]
+          (is (= "scenario/parse" (:type e)) (pr-str e))
+          (is (re-find #"@from nosuch" (str (:message e)))))))))
+
+(deftest an-op-step-that-changes-the-environment-is-seen-by-the-steps-after-it
+  ;; B28: a run read its environment once, at its start
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [c h]
+      (ok! c "session.start" {:key "T-1"})
+      (let [rec (fn [url] (assoc env/default-local :name "moving" :targets (assoc (:targets env/default-local) :service/a url)))
+            _ (env/save! "default" (rec "http://old.example:1"))
+            new-rec (json/write-str (dissoc (rec "http://new.example:2") :name) :key-fn #(subs (str %) 1))
+            path (write-file "moving.scn"
+                             (str "### shell before\n# @assert out contains http://old.example:1\necho {{service/a}}\n\n"
+                                  "### op env.save change\n{\"name\": \"moving\", \"record\": " new-rec "}\n\n"
+                                  "### shell after\n# @assert out contains http://new.example:2\necho {{service/a}}\n"))
+            r (:result (ok! c "scenario.run" {:path path :env "moving"}))]
+        (is (= "ok" (:status r)) (pr-str (select-keys r [:status :steps :failed])))
+        (is (= 0 (:failed r)))))))
 
 (deftest scenario-cancel-ends-a-running-logs-step
   (with-daemon [h {:idle-minutes 0}]
@@ -542,6 +678,13 @@
                 (is (= {:profile "dlbtest-sso" :region "eu-central-1" :account "123456789012"} (:aws rec)))
                 (is (= "dev account" (:description rec)))
                 (is (true? (:read-only rec)))))
+            (testing "B23: targets of create may be objects (a CloudWatch log target), as env.save takes them"
+              (ok! c "env.create" {:ws "w1" :name "logs" :profile "dlbtest-sso" :account "123456789012" :region "eu-central-1" :check false
+                                   :targets {"log/logger" {"cloudwatch" "/aws/lambda/estate-logger"} "service/a" "https://a.example"}})
+              (let [rec (:env (:result (ok! c "env.describe" {:ws "w1" :name "logs"})))]
+                (is (= {:cloudwatch "/aws/lambda/estate-logger"} (get-in rec [:targets :log/logger])) (pr-str (:targets rec)))
+                (is (= "https://a.example" (get-in rec [:targets :service/a]))))
+              (ok! c "env.remove" {:ws "w1" :name "logs"}))
             (testing "an existing name is not overwritten by create; save replaces the whole record"
               (is (= "env/exists" (:type (err c "env.create" {:ws "w1" :name "dev" :profile "p" :account "123456789012" :region "r" :check false}))))
               (ok! c "env.save" {:ws "w1" :name "dev" :check false

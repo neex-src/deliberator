@@ -94,9 +94,11 @@
   [ws]
   (store/read-edn (config-path ws)))
 
+(declare allocate-default-ports sync-local-env!)
+
 (defn- load-config! [ws sink]
   (or (read-config ws)
-      (let [cfg (default-config)]
+      (let [cfg (allocate-default-ports ws (default-config))]
         (store/write-edn! (config-path ws) cfg)
         (emit sink {:event "runtime.config-created" :path (str (config-path ws))})
         cfg)))
@@ -469,6 +471,73 @@
                         {:type :runtime/port-conflict :role (:role d) :port hp :container-port cp
                          :held-by holder :config "runtime.edn"}))))))
 
+;; host port allocation (m3 05b) ---------------------------------------------------------------------------
+;; Two workspaces of one home can run side by side: a host port that is not pinned in the workspace's runtime.edn is
+;; allocated on first use (a new workspace's Floci and Postgres when runtime.edn is created, a service's port and JDWP port at
+;; the next `ensure!`) and written there, so it stays. The candidates are the default port, then +100, +200, ...; one is taken
+;; when no other workspace of this home has it in its runtime.edn and nothing on the host listens on it (or this workspace's own
+;; container does: a running estate keeps its ports). A port the user wrote into runtime.edn is never touched.
+
+(def ^:private port-step 100)
+
+(defn- workspace-names []
+  (let [d (.toFile (.resolve (store/home) "workspaces"))]
+    (if (.isDirectory d) (vec (sort (map #(.getName ^java.io.File %) (filter #(.isDirectory ^java.io.File %) (.listFiles d))))) [])))
+
+(defn- cfg-host-ports
+  "Every host port of a runtime.edn: its containers' and its services' halves."
+  [cfg]
+  (set (concat (for [[_ spec] (:containers cfg) [_ hp] (:ports spec)] hp)
+               (for [[_ spec] (:services cfg) [_ hp] (:ports spec)] hp))))
+
+(defn claimed-ports
+  "The host ports the other workspaces of this home have in their runtime.edn (running or not)."
+  [ws]
+  (let [me (store/ws-name ws)]
+    (into #{} (comp (remove #{me}) (mapcat #(cfg-host-ports (store/read-edn (config-path %))))) (workspace-names))))
+
+(defn- own-holder? [c ws port]
+  (boolean (some-> (port-holder c port) (str/starts-with? (str "deliberator-" (store/ws-name ws) "-")))))
+
+(defn- pick-port
+  "The first of `preferred`, +100, +200 ... that is not in `taken` and is free on the host or held by this workspace's own container."
+  [c ws preferred taken]
+  (let [host (probe-host c)
+        ok? (fn [p] (and (<= p 65535) (not (taken p)) (or (not (port-open? host p)) (own-holder? c ws p))))]
+    (or (some #(when (ok? %) %) (map #(+ preferred (* port-step %)) (range 50)))
+        (throw (ex-info (str "no free host port for " preferred ", " (+ preferred port-step) " ... in " (store/ws-name ws))
+                        {:type :runtime/no-port :port preferred :hint "stop what holds them or pin a port in runtime.edn"})))))
+
+(defn allocate-default-ports
+  "`cfg` (the default config of a workspace that has no runtime.edn yet) with its infrastructure containers on free host ports of
+  this home: 4566/5432 for the first workspace, +100 for the next."
+  [ws cfg]
+  (let [c (connect-client ws cfg)]
+    (first (reduce (fn [[cfg taken] [role cp hp]]
+                     (let [p (pick-port c ws hp taken)]
+                       [(assoc-in cfg [:containers role :ports cp] p) (conj taken p)]))
+                   [cfg (claimed-ports ws)]
+                   (for [[role spec] (:containers cfg) [cp hp] (:ports spec)] [role cp hp])))))
+
+(defn- allocate-service-ports!
+  "Pins the host ports of every runnable service description that runtime.edn has none for (`:services <name> :ports {cp hp}`),
+  writes runtime.edn and points the `local` environment at them when it changed. -> the config in effect."
+  [c ws cfg]
+  (let [missing (for [d (description/list ws) :when (description/runnable? d)
+                      cp (remove nil? [(:port d) (:jdwp d)])
+                      :when (nil? (get-in cfg [:services (:name d) :ports cp]))]
+                  [(:name d) cp])]
+    (if (empty? missing)
+      cfg
+      (let [[cfg' _] (reduce (fn [[cfg taken] [n cp]]
+                               (let [p (pick-port c ws cp taken)]
+                                 [(assoc-in cfg [:services n :ports cp] p) (conj taken p)]))
+                             [cfg (into (claimed-ports ws) (cfg-host-ports cfg))]
+                             missing)]
+        (store/write-edn! (config-path ws) cfg')
+        (sync-local-env! ws cfg')
+        cfg'))))
+
 (defn- start-container! [c d id]
   (try (podman/start! c id)
        (catch clojure.lang.ExceptionInfo e
@@ -550,6 +619,7 @@
   ([ws] (ensure! ws {}))
   ([ws {:keys [sink timeout-ms infra-only only secrets-from] :or {timeout-ms default-timeout-ms}}]
    (let [cfg (load-config! ws sink)
+         cfg (if infra-only cfg (allocate-service-ports! (connect-client ws cfg) ws cfg))
          ds (cond->> (desired-all ws cfg) infra-only (remove :service?) only (filter (comp (set only) :role)))
          ;; `secrets-from {role {:env :values}}`: real secret values for that role, held in memory only. The hash
          ;; carries a marker (env + fresh start id), never a value, so such a start always recreates the container.

@@ -40,11 +40,13 @@
              [k v])))
 
 (defn- files-containing
-  "Every file under `dir` whose bytes contain `needle`."
+  "Every file under `dir` whose bytes contain `needle`, but the workspace's `terraform/` directory: the Terraform state of the
+  estate's root holds the emulator's secrets there, as Terraform state does (m3 05b); the daemon's own persistence must not."
   [dir needle]
   (let [n (.getBytes ^String needle "UTF-8")
         hit? (fn [^bytes bs] (let [s (String. bs "ISO-8859-1")] (str/includes? s (String. n "ISO-8859-1"))))]
     (vec (for [^java.io.File f (file-seq (io/file dir)) :when (.isFile f)
+               :when (not (str/includes? (str f) "/terraform/"))
                :when (try (hit? (java.nio.file.Files/readAllBytes (.toPath f))) (catch Exception _ false))]
            (str f)))))
 

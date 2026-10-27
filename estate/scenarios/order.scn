@@ -120,13 +120,16 @@ Content-Type: application/json
 # @assert lines >= 1
 
 ### logs log/scheduler-create scheduler-create-log
-# The window starts when the step is armed (before step 1); the Lambda runs at step 10, later on a slow run (a service just restarted).
+# Armed right before the chain starts (`@from`), so a slow early step (B stopped: the acks wait 30 s and 20 s) cannot use the window up (B25);
+# the Lambda runs when chain-schedule does.
+# @from chain-reset-param
 # @filter {{corr}}
 # @for 20s
 # @assert lines >= 1
 
 ### logs log/ecs-scale ecs-scale-log
-# Armed before step 1 like the others; the schedule fires about 8 s into the run, so the window is longer.
+# Armed right before the chain starts like the one above; the schedule fires about 8 s into the chain, so the window is longer.
+# @from chain-reset-param
 # @filter {{corr}}
 # @for 25s
 # @assert lines >= 1

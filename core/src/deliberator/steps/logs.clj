@@ -1,7 +1,9 @@
 (ns deliberator.steps.logs
   "Kind `logs`: tails a log for a window, armed before step 1 so the line an event produces is never
   missed. `### logs log/service-a [name]`, directives `# @filter <text|/regex/>` (repeatable: ALL must
-  match) and `# @for 10s` (default 10s, the only clock: the kind's default timeout is an hour).
+  match) and `# @for 10s` (default 10s, the only clock: the kind's default timeout is an hour). The window
+  counts from the arm instant; `# @from <step number|name>` arms the tail right before that step (B25: the
+  log of something that only happens late in the run needs a window that starts late, not at the run's start).
 
   The target resolves with `:resolve-target` to
     `{:container \"name\"}`   Podman container logs (`podman/logs`, follow, `since` = the arm instant;
@@ -332,7 +334,8 @@
    :verb-kinds {"insights" insights/verb-kind}
    :directives [{:name "filter" :hint "<text|/regex/>" :values ["{{correlation}}"] :repeatable? true
                  :doc "an entry must match every filter; default: the run's correlation id"}
-                {:name "for" :hint "<duration>" :values ["5s" "10s" "30s" "1m"] :doc "tail window (default 10s)"}]
+                {:name "for" :hint "<duration>" :values ["5s" "10s" "30s" "1m"] :doc "tail window (default 10s)"}
+                {:name "from" :hint "<step>" :doc "arm the tail right before this sequential step (a number or its name) instead of before step 1: the window counts from there, so a slow early step cannot use it up"}]
    :facts [{:name "lines" :type :number} {:name "gaps" :type :number}]
    :capture-roots #{} :concurrent? true
    :default-timeout-ms 3600000

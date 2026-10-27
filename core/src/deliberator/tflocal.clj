@@ -81,7 +81,10 @@
   (let [a (tfroot/analyse d)
         f (io/file d tfroot/override-name)]
     (if (:emulator? a)
-      {:exempt? true :services (vec (sort (:services a))) :warnings [] :pre-lines []}
+      ;; a root that points itself at the emulator needs no override, but its state is the workspace's, not the checkout's:
+      ;; two workspaces on one host apply the same root onto two emulators (m3 05b)
+      (do (.mkdirs (.toFile (tfroot/state-dir ws d)))
+          {:exempt? true :services (vec (sort (:services a))) :warnings [] :pre-lines [] :state (tfroot/state-path ws d)})
       (let [aws (:aws e)
             creds (:credentials aws)
             doc (tfroot/override-doc a {:endpoint (:endpoint aws) :region (:region aws)
@@ -129,7 +132,9 @@
           (let [init (run-streaming! ws d data-dir ["init" "-input=false" "-no-color"] sink on-cancel! budget-ms)
                 _ (vreset! init-lines (:lines init))]
             [init (if (zero? (:exit init))
-                    (run-streaming! ws d data-dir (concat [action "-input=false" "-no-color"] (when (#{"apply" "destroy"} action) ["-auto-approve"]) var-args)
+                    (run-streaming! ws d data-dir (concat [action "-input=false" "-no-color"]
+                                                          (when (and (:exempt? prep) (:state prep)) [(str "-state=" (:state prep))])
+                                                          (when (#{"apply" "destroy"} action) ["-auto-approve"]) var-args)
                                     sink on-cancel! budget-ms)
                     init)])
           (catch clojure.lang.ExceptionInfo ex

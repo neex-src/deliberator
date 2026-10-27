@@ -126,10 +126,17 @@
                                        (fs/path home "daemon" "daemon.out"))
                                   {:type "daemon/unreachable"})))))))))
 
+(defn client-kind
+  "Who this `dlb` says it is in `hello`: `$DELIBERATOR_CLIENT` (an agent's harness sets `agent`: the daemon then shows and allows
+  it what the workspace lets agents do), else `dlb`."
+  []
+  (let [v (System/getenv "DELIBERATOR_CLIENT")]
+    (if (and v (not (str/blank? v))) v "dlb")))
+
 (defn hello!
   "`hello` on `channel`; -> the result map (`:compatible` only when `want` is given)."
   [channel want]
-  (get-in (client/request! channel "hello" (cond-> {:client "dlb"} want (assoc :version want)) (fn [_]))
+  (get-in (client/request! channel "hello" (cond-> {:client (client-kind)} want (assoc :version want)) (fn [_]))
           [:terminal :result]))
 
 (defn- pid-alive? [pid]

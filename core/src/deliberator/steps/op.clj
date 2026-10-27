@@ -84,6 +84,7 @@
         line! (or (:line! ctx) (fn [_]))
         cancelled? (fn [] (or ((:cancelled? ctx)) (some-> (:attempt-cancelled? ctx) (apply []))))
         octx {:daemon (:daemon host)
+              :conn (:conn host)      ; who asked: an agent's scenario does not get around what an agent may not call
               :emit! (fn [ev] (try (line! (event-text ev)) (catch Exception _ nil)) nil)
               :on-cancel! (fn [f] (swap! cancels conj f))
               :alive? (fn [] (not (cancelled?)))

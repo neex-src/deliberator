@@ -2,7 +2,7 @@
   "Runs a scenario: one function from (workspace, environment, scenario file, session) to a run
   directory. `(start! ws env scenario-path & opts) -> Run` (non-blocking), `(run! ...)` = start and
   wait; options `{:session key (default: the current one) :sink :steps #{n..} :resolve-target f :vars {}
-  :builtins {} :on-created (fn [run])}` (`:on-created` gets the Run before the first event can be
+  :builtins {} :reload-env f :on-created (fn [run])}` (`:reload-env` returns the environment again after an `op` step, B28; `:on-created` gets the Run before the first event can be
   emitted, so a registry can hold it by the time a client learns its id). `ws` is as in `store`; `env` is the environment record, only threaded to kinds
   (`:name` goes into run.edn); `:resolve-target` is the seam to `env/target` (`(f \"service/a\")`
   -> value, throws `{:type :env/unknown-target}`; the daemon passes an adapter that makes the key
@@ -30,7 +30,7 @@
 
   Execution. Step correlation is `<run id>-NNN`; `{{correlation}}` is the run id,
   `{{step.correlation}}` the step's. Concurrent kinds are armed (`:arm`, synchronously, in order)
-  before the first sequential step; their `:run` starts at once on its own thread, they are joined
+  before the first sequential step (or, with `# @from <step number|name>`, right before that step); their `:run` starts at once on its own thread, they are joined
   after the last sequential step. Sequential steps run in order, each on its own thread of the
   run's executor (virtual threads when `Thread.ofVirtual` exists - JDK 21+ - platform daemon
   threads otherwise; see `thread-model`). A step status is :ok, :failed (a check failed), :error
@@ -183,6 +183,19 @@
 (defn- scenario-name [^Path p]
   (let [n (str (.getFileName p))] (str/replace n #"\.scn$" "")))
 
+(defn- from-n
+  "The number of the sequential step that the `# @from <number|name>` of the concurrent step `s` names (B25: the tail is
+  armed right before that step instead of before step 1, its window counts from there), nil without the directive;
+  throws `:scenario/parse` when it names no sequential step of `steps`."
+  [steps s]
+  (when-let [v (some-> (first (dir-values s "from")) str/trim)]
+    (let [hit (or (when (re-matches #"\d+" v) (first (filter #(= (parse-long v) (:n %)) steps)))
+                  (first (filter #(= v (:name %)) steps)))]
+      (when-not (and hit (not (:concurrent? (:kind-map hit))))
+        (throw (ex-info (str "step " (:n s) ": `@from " v "` names no sequential step of the scenario")
+                        {:type :scenario/parse :line (:line s) :message (str "@from " v " names no sequential step")})))
+      (:n hit))))
+
 (defn plan
   "Static half of a run, see the ns docstring. Returns `{:path :sha :bytes :header :steps}` where
   each step carries `:kind-map`; throws, creating nothing."
@@ -207,6 +220,7 @@
                      (if (:concurrent? kmap) defined (into defined caps))
                      (conj out (assoc s :kind-map kmap))))
             out))]
+    (doseq [s planned :when (:concurrent? (:kind-map s))] (from-n planned s))   ; a `@from` names a sequential step
     {:path path :sha (store/sha256 bs) :bytes bs :header (:header parsed) :selected selected
      :steps planned}))
 
@@ -283,6 +297,15 @@
       (:type d) (assoc :type (:type d))
       (:hint d) (assoc :hint (:hint d)))))
 
+(defn- reload-env!
+  "B28: after an `op` step the environment may have changed (`topology.set`, `env.save`, `runtime.set`): the steps after it see
+  the record as it is on disk now, through the option `:reload-env` (a function returning the environment, nil or a throw keeps
+  the one in use). `{{service/x}}` resolves through the caller's `:resolve-target`, which reads the same reloaded record."
+  [st]
+  (when-let [f (:reload-env (:opts st))]
+    (try (when-let [e (f)] (reset! (:env-ref st) e))
+         (catch Throwable _ nil))))
+
 (defn- vars-for [st step corr]
   (assoc @(:vars st) "step.correlation" corr))
 
@@ -333,7 +356,7 @@
         timeout-ms (if-let [t (dir-value rstep "timeout")]
                      (expr/parse-duration t)
                      (or (:default-timeout-ms kmap) default-timeout-ms))
-        ctx {:ws (:ws st) :env (:env st) :vars vs :session (:session st) :run-dir (:run-dir st)
+        ctx {:ws (:ws st) :env @(:env-ref st) :vars vs :session (:session st) :run-dir (:run-dir st)
              :step-dir step-dir :step rstep :sink (:sink st)
              :line! (fn [text] (emit! st {:event :line :step (:n step) :text (str text)}))
              :correlation (:run-id st) :step-correlation corr
@@ -573,15 +596,21 @@
         (link! st (:sha sha) (.resolve ^Path (:run-dir st) "scenario.scn"))
         (let [conc (filter #(:concurrent? (:kind-map %)) steps)
               sequ (remove #(:concurrent? (:kind-map %)) steps)
-              futs (mapv (fn [s] [s (start-concurrent st s)]) conc)]
+              ;; B25: a concurrent step with `@from` is armed right before that step runs (when it is part of this run)
+              seq-ns (set (map :n sequ))
+              from (fn [s] (let [n (from-n (:steps plan') s)] (when (seq-ns n) n)))
+              later (group-by from (filter from conc))
+              futs (atom (mapv (fn [s] [s (start-concurrent st s)]) (remove from conc)))]
           (doseq [s sequ]
+            (doseq [c (get later (:n s))] (swap! futs conj [c (start-concurrent st c)]))
             (let [rec (if @(:cancelled st)
                         (exec-step st s nil)
                         (let [fut (try (spawn (:scope st) #(exec-step st s nil))
                                        (catch RejectedExecutionException _ nil))]
                           (if fut (await-step st fut s) (exec-step st s nil))))]
+              (when (= "op" (:kind s)) (reload-env! st))
               (when (seq (:captures rec)) (swap! (:vars st) vars/overlay (:captures rec)))))
-          (doseq [[s fut] futs]
+          (doseq [[s fut] @futs]
             (await-step st fut s)))
         (let [status (run-status st @recs)]
           (write! status (store/now) nil)
@@ -672,7 +701,7 @@
         scope (Executors/newCachedThreadPool factory)
         cancelled (atom false)
         done (promise)
-        st {:ws ws :env env :session sess :sink sink :run-dir run-dir :run-id run-id
+        st {:ws ws :env env :env-ref (atom env) :session sess :sink sink :run-dir run-dir :run-id run-id
             :steps-dir (.resolve run-dir "steps") :scope scope :cancelled cancelled
             :lock (Object.) :resolve-target resolve-target :opts opts}
         rel (str "sessions/" sess "/runs/" run-id)

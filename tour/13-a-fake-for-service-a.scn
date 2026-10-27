@@ -13,7 +13,8 @@
 # @env local
 # @var corr = {{correlation}}
 # @var msg = ord-{{uuid}}
-# @var fresh = ord-{{uuid}}
+# `{{uuid}}` is one value for the whole run: an id made of it again would be the order the fake recorded, not one it never saw
+# @var fresh = ord-{{now.epoch}}
 
 ### shell paths
 # @cwd ..
@@ -62,11 +63,11 @@ grep '^TOPOLOGY' "$(echo "$out" | sed -n 's/^result: //p')"
 {"Key": {"id": {"S": "{{msg}}"}}}
 
 ### http publish
-# Scenario -> fake -> A. (`{{fake}}` is the url `fake.record` answered: a run loads its environment when it starts, so
-# `{{service/a}}` still means what it meant then. A scenario started AFTER the topology.set above addresses the fake with {{service/a}}.)
+# Scenario -> fake -> A. The topology.set above is an `op` step: the run reads its environment again after it, so `{{service/a}}` is the
+# fake's URL from here on (the same url `fake.record` answered, captured as `{{fake}}`), like for a scenario started afterwards.
 # @assert status == 200
 # @assert $.id == {{msg}}
-POST {{fake}}/publish/{{msg}}
+POST {{service/a}}/publish/{{msg}}
 X-Correlation-Id: {{corr}}
 
 ### dynamodb get table/messages acked
@@ -141,7 +142,7 @@ select message_id, correlation, a_status from acks where message_id = '{{fresh}}
 # @assert status == 404
 # @assert $.error contains no recording matches
 # @assert header.x-fake-match == none
-GET {{fake}}/never-recorded
+GET {{service/a}}/never-recorded
 
 ### shell committing-a-copy
 # A scrubbed copy into a repository: here a fresh git repository in /tmp. The report counts, it never lists values.
