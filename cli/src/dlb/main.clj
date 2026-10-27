@@ -106,9 +106,22 @@
     (case (vec (take 2 words))
       ["daemon" "stop"] (daemon-stop json? home)
       ["daemon" "status"] (daemon-status json? home jar)
-      (run-op* script-dir argv json? home jar want words))))
+      (if (= "tools" (first words))
+        (run-op* script-dir argv json? home jar want (into ["op" "tools"] (rest words)) true)   ; `dlb tools` = op.tools, printed as tools
+        (run-op* script-dir argv json? home jar want words false)))))
 
-(defn- run-op* [script-dir argv json? home jar want words]
+(defn- print-tools
+  "`dlb tools`: with --json the array of tool definitions (name, description, input_schema) and nothing else; otherwise one line
+  per tool."
+  [json? result]
+  (if json?
+    (println (json/generate-string (:tools result)))
+    (do (println (str (:client result) " view of workspace " (:ws result) ", remote mutations "
+                      (if (:remote-mutations result) "on" "off") ": " (count (:tools result)) " tools"))
+        (doseq [{:keys [name description]} (:tools result)]
+          (println (str name "  " (first (str/split-lines (str description)))))))))
+
+(defn- run-op* [script-dir argv json? home jar want words tools?]
   (let [{:keys [channel hello]} (endpoint/connect-compatible! home jar)]
     (try
       (do
@@ -135,11 +148,13 @@
                                        (when-let [l (render/event-line steps ev)]
                                          (println l) (flush))))
                           {:keys [line terminal]} (client/request! channel (:op op) (:args call) on-event)]
-                      (if json?
+                      (if (and tools? (:ok terminal))
+                        (print-tools json? (:result terminal))
+                       (if json?
                         (println line)
                         (if (:ok terminal)
                           (render/print-result (:op op) (:result terminal))
-                          (render/print-error (:op op) (:error terminal) argv)))
+                          (render/print-error (:op op) (:error terminal) argv))))
                       (exit-code terminal)))))))))
       (finally (client/close! channel)))))
 

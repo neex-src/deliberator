@@ -47,7 +47,7 @@
   "The one deliberate change-detector of the op table (review 2026-10-25, R29): adding or renaming an op fails
   `op-describe-lists-every-operation-with-its-schema` until the name is added here, on purpose, in the same commit as its
   `dlb` help and docs. Every other test derives its expectations from `ops/table`."
-  ["hello" "op.describe" "daemon.stop" "provider.list" "provider.stop" "fake.record" "fake.replay" "fake.stop" "fake.list" "fake.commit" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "explore.write" "session.note" "session.start" "session.end" "session.list" "session.current"
+  ["hello" "op.describe" "op.tools" "workspace.agent" "daemon.stop" "provider.list" "provider.stop" "fake.record" "fake.replay" "fake.stop" "fake.list" "fake.commit" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "explore.write" "session.note" "session.start" "session.end" "session.list" "session.current"
    "audit.show" "config.chain" "config.refresh" "deployed.refresh" "deployed.show" "logs.insights"
    "env.list" "env.describe" "env.check" "env.save" "env.create" "env.remove" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
    "aws.describe" "aws.discover" "terraform.drift" "terraform.local" "terraform.graph" "terraform.apply-all" "terraform.locate"
@@ -141,6 +141,97 @@
         (is (= "bad-request" (get-in m [:error :type])))
         (is (nil? (:id m))))
       (is (= (daemon/version) (:version (:result (ok! c "hello" {}))))))))
+
+;; --- agent interface ----------------------------------------------------------------
+
+(defn- err [c op args]
+  (:error (:terminal (tc/request c op args))))
+
+(deftest tools-are-the-op-table-as-tool-definitions
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [c h]
+      (ok! c "hello" {:client "dlb"})
+      (let [{:keys [tools client]} (:result (ok! c "op.tools" {}))
+            by (into {} (map (juxt :name identity)) tools)]
+        (is (= "dlb" client))
+        (is (= (sort (map ops/tool-name (keys ops/table))) (sort (keys by))) "one tool per operation of the table")
+        (doseq [{:keys [name description input_schema]} tools]
+          (is (re-matches #"[a-zA-Z0-9_-]{1,64}" name) name)
+          (is (not (str/blank? description)) name)
+          (is (= "object" (:type input_schema)) name)
+          (is (map? (:properties input_schema)) name)
+          (is (every? (set (map clojure.core/name (keys (:properties input_schema)))) (:required input_schema)) name)
+          (is (false? (:additionalProperties input_schema)) name))
+        (let [sr (get-in by ["scenario_run" :input_schema])]
+          (is (= ["path"] (:required sr)))
+          (is (= "string" (get-in sr [:properties :path :type])))
+          (is (= "array" (get-in sr [:properties :steps :type])))
+          (is (= "integer" (get-in sr [:properties :steps :items :type])))
+          (is (contains? (:properties sr) :confirm) "the confirmation token is there for a human client"))
+        (is (contains? by "workspace_agent") "a human client sees the switch"))
+      (testing "the JSON Schema types follow op.describe's"
+        (let [rows (into {} (map (juxt :op identity)) (:result (ok! c "op.describe" {})))
+              tool (into {} (map (juxt :name identity)) (:tools (:result (ok! c "op.tools" {}))))]
+          (is (= "object" (get-in tool ["env_save" :input_schema :properties :record :type])))
+          (is (= "object" (get-in rows ["env.save" :args :record :type]))))))))
+
+(deftest an-agent-sees-and-may-do-no-remote-mutation-unless-the-workspace-says-so
+  (with-daemon [h {:idle-minutes 0}]
+    (with-client [human h]
+      (with-client [agent h]
+        (ok! human "hello" {:client "dlb"})
+        (ok! agent "hello" {:client "agent"})
+        (ok! human "workspace.open" {:ws "w1"})
+        (testing "the table an agent sees"
+          (let [rows (:result (ok! agent "op.describe" {:ws "w1"}))
+                ops* (into {} (map (juxt :op identity)) rows)
+                tools (:tools (:result (ok! agent "op.tools" {:ws "w1"})))
+                tool (into {} (map (juxt :name identity)) tools)]
+            (is (not (contains? ops* "workspace.agent")) "the switch is not offered")
+            (is (contains? ops* "scenario.run") "scenarios are")
+            (is (not (contains? (get-in ops* ["scenario.run" :args]) :confirm)) "but not the confirmation token")
+            (is (not (some #{"confirm"} (get-in ops* ["scenario.run" :order]))))
+            (is (not (contains? tool "workspace_agent")))
+            (is (not (contains? (get-in tool ["service_start" :input_schema :properties]) :confirm)))
+            (is (contains? tool "service_start"))))
+        (testing "refused, not only hidden"
+          (is (= "agent/human-only" (:type (err agent "workspace.agent" {:ws "w1" :remote-mutations true}))))
+          (is (= "agent/human-only" (:type (err agent "workspace.agent" {:ws "w1"}))))
+          (let [e (err agent "scenario.run" {:ws "w1" :path "x.scn" :confirm "tok"})]
+            (is (= "agent/remote-mutations-disabled" (:type e)) (pr-str e))
+            (is (re-find #"workspace agent --remote-mutations true" (str (:hint e)))))
+          (is (= "agent/remote-mutations-disabled" (:type (err agent "service.start" {:ws "w1" :name "a" :confirm "tok"})))))
+        (testing "everything else works for an agent"
+          (ok! agent "session.start" {:ws "w1" :key "AG-1"})
+          (is (= "AG-1" (:current-session (:workspace (:result (ok! agent "workspace.show" {:ws "w1"})))))))
+        (testing "a human turns the switch on, and only for that workspace"
+          (is (false? (:agent-remote-mutations (:result (ok! human "workspace.agent" {:ws "w1"})))))
+          (is (true? (:agent-remote-mutations (:result (ok! human "workspace.agent" {:ws "w1" :remote-mutations true})))))
+          (is (true? (:agent-remote-mutations (:workspace (:result (ok! human "workspace.show" {:ws "w1"}))))) "workspace.show says so")
+          (let [tool (into {} (map (juxt :name identity)) (:tools (:result (ok! agent "op.tools" {:ws "w1"}))))]
+            (is (contains? (get-in tool ["scenario_run" :input_schema :properties]) :confirm))
+            (is (not (contains? tool "workspace_agent")) "still a human's"))
+          (is (not (contains? (get-in (into {} (map (juxt :name identity)) (:tools (:result (ok! agent "op.tools" {:ws "w2"})))) ["scenario_run" :input_schema :properties]) :confirm))
+              "another workspace is still off")
+          (let [e (err agent "scenario.run" {:ws "w1" :path "x.scn" :confirm "tok"})]
+            (is (not (str/starts-with? (str (:type e)) "agent/")) "the agent check lets it through to the ordinary run (which then refuses the missing scenario or token)"))
+          (is (= "agent/human-only" (:type (err agent "workspace.agent" {:ws "w1" :remote-mutations false}))))
+          (ok! human "workspace.agent" {:ws "w1" :remote-mutations false}))
+        (testing "an operation flagged remote-write (what pr.open will be) is invisible and refused the same way"
+          (with-redefs [ops/table (assoc ops/table "pr.fake" {:fn (fn [_ _] {:made true}) :class :mutate :remote :write :doc "Opens a pull request." :args {}})]
+            (is (not (some #(= "pr.fake" (:op %)) (:result (ok! agent "op.describe" {:ws "w1"})))))
+            (is (not (some #(= "pr_fake" (:name %)) (:tools (:result (ok! agent "op.tools" {:ws "w1"}))))))
+            (is (= "agent/remote-mutations-disabled" (:type (err agent "pr.fake" {:ws "w1"}))))
+            (is (true? (:made (:result (ok! human "pr.fake" {:ws "w1"})))) "a human client is not bound by it")
+            (ok! human "workspace.agent" {:ws "w1" :remote-mutations true})
+            (is (some #(= "pr.fake" (:op %)) (:result (ok! agent "op.describe" {:ws "w1"}))))
+            (is (true? (:made (:result (ok! agent "pr.fake" {:ws "w1"})))))))
+        (testing "for agent shows an agent's view to a human"
+          (ok! human "workspace.agent" {:ws "w1" :remote-mutations false})
+          (let [r (:result (ok! human "op.tools" {:ws "w1" :for "agent"}))]
+            (is (= "agent" (:client r)))
+            (is (false? (:remote-mutations r)))
+            (is (not (some #(= "workspace_agent" (:name %)) (:tools r))))))))))
 
 (deftest op-describe-lists-every-operation-with-its-schema
   (with-daemon [h {:idle-minutes 0}]

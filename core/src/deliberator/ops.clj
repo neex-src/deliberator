@@ -241,7 +241,8 @@
   (or (= want have)
       (and (not (str/includes? (str have) "+")) (= (first (str/split (str want) #"\+")) have))))
 
-(defn- hello [ctx {:keys [version]}]
+(defn- hello [ctx {:keys [version client]}]
+  (when (and client (:conn ctx)) (swap! (:conn ctx) assoc :client (str client)))   ; who asks, for the rest of the connection (agent interface)
   (let [d (:daemon ctx)
         runs (count @(:runs d))
         follows (if-let [f (:follows d)] @f 0)]
@@ -277,6 +278,93 @@
      (vec (sort-by :op
                    (concat (for [[op e] table] (describe-row op e))
                            (for [{:keys [op] :as e} pops] (describe-row op (assoc e :order (:order e))))))))))
+
+;; agent interface (brief 4.H, architecture 4) --------------------------------------
+
+(def human-only
+  "Operations an agent never calls, whatever the workspace says: the switch itself."
+  #{"workspace.agent"})
+
+(defn- connection-client [ctx] (some-> ctx :conn deref :client))
+
+(defn agent? "True when the connection of `ctx` said `hello` with client \"agent\"." [ctx] (= "agent" (connection-client ctx)))
+
+(defn agent-remote-mutations?
+  "True when workspace `ws` lets agents use remote mutations (`workspace.agent`, default off)."
+  [ws]
+  (boolean (:agent-remote-mutations (workspace/load (or ws "default")))))
+
+(defn remote-write-op?
+  "A table entry flagged `:remote :write`: an operation whose purpose is to change a system outside this machine (a pull
+  request, an AWS account). The `confirm` argument of any operation is the other half: a confirmation token exists only for
+  a remote mutation or a remote secret, and it is a human's act."
+  [entry]
+  (= :write (:remote entry)))
+
+(defn agent-refusal
+  "Why a client `agent` may not call `op` with `args` in `ws` (nil when it may): `{:type :message :hint}`."
+  [op entry args ws]
+  (cond
+    (human-only op)
+    {:type :agent/human-only :message (str op " is for a human: an agent does not change what agents may do")
+     :hint "ask the person who runs the workspace"}
+    (agent-remote-mutations? ws) nil
+    (or (remote-write-op? entry) (some? (:confirm args)))
+    {:type :agent/remote-mutations-disabled
+     :message (str op (if (some? (:confirm args)) " with a confirmation token" "") " is a remote mutation, and workspace " (store/ws-name (or ws "default"))
+                   " does not let agents make them")
+     :hint "a person enables it with: dlb workspace agent --remote-mutations true"}))
+
+(defn- agent-row
+  "The row of `describe` as an agent sees it: the `confirm` argument is not there when remote mutations are off."
+  [row remote?]
+  (if remote?
+    row
+    (-> row (update :args dissoc "confirm") (update :order #(vec (remove #{"confirm"} %))))))
+
+(defn agent-view
+  "`rows` (from `describe`) for an agent of workspace `ws`: the human-only operations and, unless the workspace enables remote
+  mutations, the `:remote :write` operations and every `confirm` argument are gone."
+  [rows ws]
+  (let [remote? (agent-remote-mutations? ws)
+        writes (into #{} (comp (filter (fn [[_ e]] (remote-write-op? e))) (map key)) table)]
+    (->> rows
+         (remove #(or (human-only (:op %)) (and (not remote?) (writes (:op %)))))
+         (mapv #(agent-row % remote?)))))
+
+(def ^:private json-types
+  {"string" {"type" "string"} "int" {"type" "integer"} "number" {"type" "number"} "bool" {"type" "boolean"}
+   "string[]" {"type" "array" "items" {"type" "string"}} "int[]" {"type" "array" "items" {"type" "integer"}}
+   "object" {"type" "object"} "any" {}})
+
+(defn tool-name "The tool name of an operation: letters, digits, `_` and `-` only (`scenario.run` -> `scenario_run`)." [op]
+  (str/replace op "." "_"))
+
+(defn tool-definition
+  "One `describe` row as a tool definition `{:name :description :input_schema}` (JSON Schema, draft-07 subset: an object with
+  properties by argument name, the required ones listed, no other property accepted)."
+  [{:keys [op class doc args]}]
+  (let [props (into (sorted-map)
+                    (for [[k {:keys [type doc default ignored]}] args :when (not ignored)]
+                      [k (cond-> (get json-types type {})
+                           doc (assoc "description" doc)
+                           (some? default) (assoc "default" default))]))]
+    {:name (tool-name op)
+     :description (str op " (" class "): " doc)
+     :input_schema {"type" "object"
+                    "properties" props
+                    "required" (vec (for [[k {:keys [required ignored]}] (sort-by key args) :when (and required (not ignored))] k))
+                    "additionalProperties" false}}))
+
+(defn- op-tools [ctx {:keys [for] :as args}]
+  (let [rows (describe ctx)
+        agent? (or (agent? ctx) (= "agent" for))
+        ws (:ws args)
+        rows (if agent? (agent-view rows ws) rows)]
+    {:client (if agent? "agent" (or (connection-client ctx) "unknown"))
+     :ws (store/ws-name (or ws "default"))
+     :remote-mutations (or (not agent?) (agent-remote-mutations? ws))
+     :tools (mapv tool-definition rows)}))
 
 (defn workspace-exists? [ws] (exists? (store/path ws "workspace.edn")))
 
@@ -317,6 +405,15 @@
   (let [ws (ws-of args)]
     {:ws (store/ws-name ws) :path (str (store/path ws)) :workspace (workspace/load ws)
      :environments (env/names ws)}))
+
+(defn- workspace-agent
+  "The switch of the agent interface: `remote-mutations` true lets agents see and use remote mutations in the workspace."
+  [_ {:keys [remote-mutations] :as args}]
+  (let [ws (ws-of args)]
+    (require-workspace! ws)
+    (when-not (nil? remote-mutations)
+      (workspace/save! (assoc (workspace/load ws) :agent-remote-mutations (boolean remote-mutations))))
+    {:ws (store/ws-name ws) :agent-remote-mutations (agent-remote-mutations? ws)}))
 
 (defn- explore-write
   "Writes `text` as `<workspace project>/explore/<name>` (the daemon names the place, the IDE opens the path it gets);
@@ -982,8 +1079,12 @@
             :doc "Handshake: the client names itself and the core version it expects; the daemon answers its version, pid, home, endpoint and the work in flight (runs = scenario runs + active log follows, also given apart)."
             :args {:client {:type :string :doc "client kind: dlb, ide, agent, ..."}
                    :version {:type :string :doc "core version the client expects; the answer says whether it matches"}}}
-   "op.describe" {:fn (fn [ctx _] (describe ctx)) :class :read :args {}
-                  :doc "Every operation with its class, documentation and argument schema, those of the providers (<home>/providers/*.edn, started when needed) included."}
+   "op.describe" {:fn (fn [ctx args] (let [rows (describe ctx)] (if (agent? ctx) (agent-view rows (:ws args)) rows))) :class :read :args {}
+                  :doc "Every operation with its class, documentation and argument schema, those of the providers (<home>/providers/*.edn, started when needed) included. For a client that said hello as agent: only what the workspace (ws) lets agents use."}
+   "op.tools" {:fn op-tools :class :read
+               :doc "The operations as tool definitions for an LLM agent: name (the operation with . as _), description and a JSON Schema of the arguments, from the same table as op.describe. For a client that said hello as agent, or with for agent: only what the workspace lets agents use (no remote mutations unless workspace.agent enabled them)."
+               :args {:for {:type :string :doc "agent: show the agent's view whatever client asks"}
+                      :ws {:type :string :doc "the workspace whose switch decides (default: default)"}}}
    "provider.list" {:fn provider-list :class :read :args {}
                     :doc "The providers configured under <home>/providers/*.edn: status (running, stopped, crashed, failed, bad-config), command, pid, operations, restarts, last error and the raw stderr log. Starts nothing."}
    "provider.stop" {:fn provider-stop :class :mutate
@@ -1004,6 +1105,9 @@
                                     :session {:type :string :doc "session key; default the current session"})}
    "workspace.show" {:fn workspace-show :class :read :args (ws-schema)
                      :doc "The workspace record, its path and its environments."}
+   "workspace.agent" {:fn workspace-agent :class :mutate
+                      :doc "The agent interface's switch: whether a client that said hello as `agent` may see and use remote mutations (an operation flagged remote-write, any confirm argument) in this workspace. Default off. Without remote-mutations it only reports. Agents cannot call it."
+                      :args (ws-schema :remote-mutations {:type :bool :doc "true: agents may make remote mutations here; false: they may not"})}
    "explore.write" {:fn explore-write :class :mutate
                     :doc "Writes a text file of the explorer (a Terraform transcript, a drift report, the explore-<env>.scn the AWS tab appends to) as <workspace project>/explore/<name>; the daemon names the place, the answer is the path. if-missing: leave an existing file as it is."
                     :args (ws-schema :name {:type :string :required true :doc "file name under explore/ (letters, digits, . _ - kept)"}
@@ -1368,6 +1472,9 @@
       (let [args (validate-args op (:args entry) args)]
         (when (and (contains? (:args entry) :ws)
                    (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (str/starts-with? op "fake.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
-                       (and (= :read (:class entry)) (not= "scenario.parse" op))))
+                       (and (= :read (:class entry)) (not (#{"scenario.parse" "op.tools"} op)))))
           (require-workspace! (:ws args)))
+        (when (agent? ctx)
+          (when-let [r (agent-refusal op entry args (:ws args))]
+            (throw (ex-info (:message r) (select-keys r [:type :hint])))))
         ((:fn entry) ctx args)))))

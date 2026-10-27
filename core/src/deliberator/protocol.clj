@@ -27,7 +27,8 @@
   Server side: `(listen! server-socket-channel opts)` accepts connections and serves each with
   `(serve-connection! channel opts)`; `opts` is `{:dispatch (fn [request ctx]) :error-fn (fn [throwable])
   :log (fn [& parts])}`. `dispatch` returns the result (any JSON-able value) or throws; `ctx` is
-  `{:emit! (fn [event-map]) :alive? :cancelled? :on-cancel! (fn [f])}`: `emit!` writes an event line
+  `{:conn (atom {:client ..}) :emit! (fn [event-map]) :alive? :cancelled? :on-cancel! (fn [f])}` (`:conn` is the connection's state, the
+  same atom for every request of one connection): `emit!` writes an event line
   (the map needs `:event`; it never throws), `:on-cancel!` registers a function called once when the
   request is cancelled, `alive?` is false once the connection has failed. `error-fn` turns a throwable into the wire
   error map. `(spawn! f)` starts `f` on a virtual thread when the JVM has them, a daemon thread
@@ -192,6 +193,7 @@
   "Serves one client until it disconnects (see the namespace docstring). Blocks."
   [^SocketChannel ch {:keys [dispatch error-fn log register!]}]
   (let [in (BufferedInputStream. (channel-in ch) 8192)
+        conn (atom {})                  ; per connection: what `hello` told (`:client`), for the ops that depend on who asks
         alive (atom true)
         pending (atom 0)                ; lines queued and not yet written (or dropped)
         inflight (atom #{})
@@ -221,7 +223,8 @@
         run-request!
         (fn [{:keys [id op] :as request}]
           (let [st {:cancelled (atom false) :fns (atom []) :cancel-on-close (:cancel-on-close request)}
-                ctx {:emit! (fn [ev] (write! (assoc (into {} ev) :id id)) nil)
+                ctx {:conn conn
+                     :emit! (fn [ev] (write! (assoc (into {} ev) :id id)) nil)
                      :alive? (fn [] @alive)
                      :cancelled? (fn [] @(:cancelled st))
                      :on-cancel! (fn [f] (swap! (:fns st) conj f) (when @(:cancelled st) (f)))}]

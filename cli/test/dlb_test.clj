@@ -148,6 +148,56 @@
     (is (str/includes? (:out (dlb *home* "help" "runs")) "runs diff <a> <b>"))
     (is (str/includes? (:out (dlb *home* "run" "--help")) "<path>"))))
 
+;; agent interface ----------------------------------------------------------------
+
+(defn- dlb-as
+  "Like `dlb`, with DELIBERATOR_CLIENT=`client` (what an agent's harness sets)."
+  [client home & args]
+  (let [r (apply p/shell {:out :string :err :string :continue true
+                          :extra-env {"DELIBERATOR_LOCAL_ENDPOINT" (or (System/getenv "DLB_TEST_FLOCI_URL") "http://localhost:19") "DELIBERATOR_HOME" home
+                                      "DELIBERATOR_CLIENT" client "DLB_DAEMON_ARGS" "--idle-minutes 0.2"}}
+                 dlb-bin args)]
+    (select-keys r [:exit :out :err])))
+
+(deftest tools-emits-the-op-table-as-tool-definitions
+  (let [r (dlb *home* "tools" "--json")
+        tools (json/parse-string (:out r) true)
+        table (json/parse-string (:out (dlb *home* "help" "--json")) true)
+        by (into {} (map (juxt :name identity)) tools)]
+    (is (zero? (:exit r)) (:err r))
+    (is (sequential? tools) "--json prints the array of tool definitions, nothing around it")
+    (is (= (count table) (count tools)) "one tool per operation of the daemon's table")
+    (is (every? #(and (re-matches #"[a-zA-Z0-9_-]+" (:name %)) (seq (:description %)) (= "object" (get-in % [:input_schema :type]))) tools))
+    (is (= ["path"] (get-in by ["scenario_run" :input_schema :required])))
+    (is (contains? by "workspace_agent") "the human client sees the switch")
+    (let [txt (dlb *home* "tools")]
+      (is (zero? (:exit txt)))
+      (is (str/includes? (:out txt) "scenario_run  scenario.run (mutate):")))))
+
+(deftest an-agent-client-gets-the-agent-view-and-its-refusals
+  (let [tools (json/parse-string (:out (dlb-as "agent" *home* "tools" "--json")) true)
+        by (into {} (map (juxt :name identity)) tools)]
+    (is (contains? by "scenario_run"))
+    (is (not (contains? by "workspace_agent")) "the switch is not offered to an agent")
+    (is (not (contains? (get-in by ["scenario_run" :input_schema :properties]) :confirm)) "nor the confirmation token")
+    (is (not (contains? (get-in (into {} (map (juxt :name identity)) (json/parse-string (:out (dlb *home* "tools" "--json" "--for" "agent")) true))
+                                ["scenario_run" :input_schema :properties]) :confirm))
+        "a human can preview the agent's view with --for agent"))
+  (testing "invisible for the CLI of an agent (the daemon refuses it as well, see daemon-test)"
+    (dlb *home* "workspace" "open" "agentws")
+    (let [r (dlb-as "agent" *home* "workspace" "agent" "--ws" "agentws" "--remote-mutations" "true" "--json")]
+      (is (= 2 (:exit r)))
+      (is (= "unknown-op" (get-in (json-line (:out r)) [:error :type]))))
+    (let [r (dlb-as "agent" *home* "scenario" "run" "x.scn" "--ws" "agentws" "--confirm" "tok" "--json")]
+      (is (= 2 (:exit r)))
+      (is (= "bad-args" (get-in (json-line (:out r)) [:error :type])))
+      (is (str/includes? (get-in (json-line (:out r)) [:error :message]) "confirm"))))
+  (testing "a person enables it, then the agent sees the token again"
+    (is (zero? (:exit (dlb *home* "workspace" "agent" "--ws" "agentws" "--remote-mutations" "true"))))
+    (let [by (into {} (map (juxt :name identity)) (json/parse-string (:out (dlb-as "agent" *home* "tools" "--json" "--ws" "agentws")) true))]
+      (is (contains? (get-in by ["scenario_run" :input_schema :properties]) :confirm)))
+    (dlb *home* "workspace" "agent" "--ws" "agentws" "--remote-mutations" "false")))
+
 ;; autostart, reuse, stop ---------------------------------------------------------------------------
 
 (deftest autostart-then-reuse
