@@ -100,9 +100,9 @@ class ContainerFlowsTest : BasePlatformTestCase() {
         git(dir, "init", "-q", "-b", "main"); git(dir, "add", "."); git(dir, "commit", "-qm", "slow")
         val h = bg { CiOps.getInstance(project).local(dir.toString(), "slow.yml", "nap", "docker.io/library/debian:stable-slim") }
         h.begin()
-        wait("the job prints") { h.transcript().contains("sleeping") }
+        wait("the job prints") { h.transcript().contains("| sleeping") }
         h.destroyProcess()
-        wait("the process ends") { h.isProcessTerminated }
+        wait("the process ends", 60) { h.isProcessTerminated }
         assertEquals(h.transcript(), 130, h.exit)
         assertTrue(h.transcript(), h.transcript().contains("-- stopped"))
     }
@@ -111,16 +111,28 @@ class ContainerFlowsTest : BasePlatformTestCase() {
         if (!enabled) { println("SKIP ContainerFlowsTest: set DLB_IDE_CONTAINERS=1 (and hold .scratch/runtime.lock)"); return }
         val ops = FakeOps.getInstance(project)
         assertEquals(emptyList<String>(), bg { ops.list() }.map { it.name })
-        // a fake in front of an URL nobody serves: it records nothing but is declared, started, listed and stopped
-        val f = bg { ops.record("up", "http://localhost:9") }
-        assertEquals("record", f.mode)
-        assertNotNull(f.url)
-        val listed = bg { ops.list() }.single()
-        assertEquals("up", listed.name)
-        assertTrue(listed.recordings.isNotEmpty())
-        val r = bg { ops.replay("up", listed.recordings.last()) }
-        assertEquals("replay", r.mode)
-        bg { ops.stop("up") }
-        assertEquals("stopped", bg { ops.list() }.single().mode)
+        // a fake in front of a server of this test (the container reaches the host's loopback): one exchange is recorded, replayed after the server is gone
+        val upstream = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress(0), 0)
+        upstream.createContext("/") { ex -> val b = "hello from upstream".toByteArray(); ex.sendResponseHeaders(200, b.size.toLong()); ex.responseBody.use { it.write(b) } }
+        upstream.start()
+        try {
+            val f = bg { ops.record("up", "http://localhost:${upstream.address.port}") }
+            assertEquals("record", f.mode)
+            val url = f.url!!
+            val http = java.net.http.HttpClient.newHttpClient()
+            fun get() = http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create("$url/greeting")).build(), java.net.http.HttpResponse.BodyHandlers.ofString()).body()
+            assertEquals("hello from upstream", bg { get() })
+            val listed = bg { ops.list() }.single()
+            assertEquals("up", listed.name)
+            assertEquals(1, listed.recordings.size)
+            upstream.stop(0)
+            val r = bg { ops.replay("up", listed.recordings.last()) }
+            assertEquals("replay", r.mode)
+            assertEquals("hello from upstream", bg { get() })
+            bg { ops.stop("up") }
+            assertEquals("stopped", bg { ops.list() }.single().mode)
+        } finally {
+            upstream.stop(0)
+        }
     }
 }

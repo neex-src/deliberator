@@ -97,14 +97,14 @@ class DaemonOpProcessHandler(
             e.hint?.let { print("   hint: $it") }
             finish(2)
         } catch (e: Exception) {
-            print("!! $e")
-            finish(2)
+            // Stop cancels the request: the answer's future ends cancelled, which is the stop and not a failure
+            if (stopped.get()) { print("-- stopped"); finish(130) } else { print("!! $e"); finish(2) }
         }
     }
 
     private fun finish(code: Int) {
         exit = code
-        if (!isProcessTerminated && !isProcessTerminating) notifyProcessTerminated(code)
+        if (!isProcessTerminated) notifyProcessTerminated(code)   // also from "terminating": that is how a Stop ends
     }
 
     override fun destroyProcessImpl() {

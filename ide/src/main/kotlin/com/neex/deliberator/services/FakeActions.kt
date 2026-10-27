@@ -58,6 +58,7 @@ object FakeActions {
             if (route && name in names) {
                 ServiceOps.getInstance(project).setTopology(name, "fake", fake = name)
                 ServiceOps.getInstance(project).ensure()
+                FakeOps.getInstance(project).list()   // the service is attached now
             }
             Ui.notify(project, "Recording $name", describe(f) + (if (route && name in names) "\n$name is routed through the fake" else ""))
         })
