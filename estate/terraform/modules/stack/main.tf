@@ -385,7 +385,8 @@ resource "aws_iam_role_policy_attachment" "task_execution_managed" {
 locals {
   # The database of service B on a real account: a container in B's task (shared localhost, so DB_URL stays jdbc:postgresql://localhost:5432/estate),
   # initialised from estate/sql/init.sql through an entry point, no RDS and no volume. The password is the same Secrets Manager secret B reads.
-  postgres_sidecar = jsonencode({
+  # (a conditional, so that `file()` is only evaluated for a real run: a copy of the root without estate/sql still applies onto Floci)
+  postgres_sidecar = !var.real_tasks ? "" : jsonencode({
     name       = "postgres"
     image      = var.postgres_image
     essential  = true
