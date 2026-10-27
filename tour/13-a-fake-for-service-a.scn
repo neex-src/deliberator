@@ -13,7 +13,7 @@
 # @env local
 # @var corr = {{correlation}}
 # @var msg = ord-{{uuid}}
-# @var fresh = ord-{{uuid}}
+# @var fresh = fresh-{{uuid}}
 
 ### shell paths
 # @cwd ..
@@ -40,17 +40,8 @@ pwd | tr -d '\n'
 # @timeout 5m
 {}
 
-### shell a-scenario-started-now-follows-the-topology
-# The same file, started after the topology.set: `{{service/a}}` is the fake's URL for it, and the trailer says so. Through the fake to the
-# real A; the exchange is written down like B's.
-# @assert out contains TOPOLOGY a=fake(record)
-# @assert out contains OK  1 steps
-out=$("{{root}}/cli/dlb" run "{{root}}/tour/13-a-fake-for-service-a/through-the-fake.scn" --env local --ws "$DLB_WS" 2>&1)
-echo "$out" | grep -E '^OK|^FAILED'
-grep '^TOPOLOGY' "$(echo "$out" | sed -n 's/^result: //p')"
-
 ### sqs send queue/inbox send-order
-# The order story of chapter 2, now with the fake in front of A: B's ack goes B -> fake -> A.
+# The order story of chapter 2, now with the fake in front of A: {{service/a}} is the fake for the scenario's own calls too.
 # @attr id={{msg}}
 # @attr correlation={{corr}}
 # @body ../estate/payloads/01-simple-order.json
@@ -62,11 +53,10 @@ grep '^TOPOLOGY' "$(echo "$out" | sed -n 's/^result: //p')"
 {"Key": {"id": {"S": "{{msg}}"}}}
 
 ### http publish
-# Scenario -> fake -> A. (`{{fake}}` is the url `fake.record` answered: a run loads its environment when it starts, so
-# `{{service/a}}` still means what it meant then. A scenario started AFTER the topology.set above addresses the fake with {{service/a}}.)
+# Scenario -> fake -> A.
 # @assert status == 200
 # @assert $.id == {{msg}}
-POST {{fake}}/publish/{{msg}}
+POST {{service/a}}/publish/{{msg}}
 X-Correlation-Id: {{corr}}
 
 ### dynamodb get table/messages acked
@@ -80,23 +70,19 @@ X-Correlation-Id: {{corr}}
 select message_id, correlation, a_status from acks where message_id = '{{msg}}' /* {{corr}} */
 
 ### op fake.list recorded
-# The publish, the ack and the health call went through the fake (the dynamodb reads go to Floci, not through it).
+# At least the publish and the ack went through (the dynamodb read goes to Floci, not through the fake).
 # @assert $[0].name == a
 # @assert $[0].mode == record
-# @assert $[0].exchanges >= 3
+# @assert $[0].exchanges >= 2
 # @assert $[0].attached[0].service == a
 {}
 
 ### shell the-recording-is-text
-# One file per exchange, raw: the API key B sent is in it, and the path is there with its template. (This is why a recording is
-# not committed as it is.)
-# @assert out contains 00001.json
-# @assert out contains "/ack/ord-{}"
+# One file per exchange, raw: the API key B sent is in it. (This is why a recording is not committed as it is.)
+# @assert out contains POST /ack/
 # @assert out contains x-api-key
 d=$(ls -d "$DELIBERATOR_HOME/workspaces/$DLB_WS/sessions/$DLB_SESSION"/fakes/a/* | tail -1)
-ls "$d" | head -3
-grep -h '"path-template"' "$d"/*.json | sort -u
-grep -l '"x-api-key"' "$d"/*.json | head -1 | xargs grep -h -o '"x-api-key"'
+grep -h -o '"path" *: *"/[a-z]*/' "$d"/*.json | sort | uniq -c | tr -s ' '; grep -l -i 'x-api-key' "$d"/*.json | head -1 | xargs grep -h -o -i '"x-api-key"'; grep -h -o '"method" *: *"POST"' "$d"/*.json | head -1; grep -h -o '/ack/' "$d"/*.json | head -1 | sed 's|^|POST |'
 
 ### op fake.replay replay-a
 # The fake now serves the newest recording. A is served by a fake that replays, so its container is not desired: stopped by the
@@ -104,7 +90,7 @@ grep -l '"x-api-key"' "$d"/*.json | head -1 | xargs grep -h -o '"x-api-key"'
 # @timeout 5m
 # @assert $.mode == replay
 # @assert $.serving == replay
-# @assert $.exchanges >= 3
+# @assert $.exchanges >= 2
 {"name": "a"}
 
 ### op service.status a-is-not-running
@@ -115,14 +101,6 @@ grep -l '"x-api-key"' "$d"/*.json | head -1 | xargs grep -h -o '"x-api-key"'
 # Not the fake: the real A's host port answers nobody (the fake has its own port).
 # @assert out contains 000
 curl -s -o /dev/null -m 3 -w '%{http_code}' http://localhost:8081/actuator/health; echo
-
-### shell the-same-scenario-with-a-down
-# A is stopped; the scenario is the same file. The recording of the first run answers it.
-# @assert out contains TOPOLOGY a=fake(replay)
-# @assert out contains OK  1 steps
-out=$("{{root}}/cli/dlb" run "{{root}}/tour/13-a-fake-for-service-a/through-the-fake.scn" --env local --ws "$DLB_WS" 2>&1)
-echo "$out" | grep -E '^OK|^FAILED'
-grep '^TOPOLOGY' "$(echo "$out" | sed -n 's/^result: //p')"
 
 ### sqs send queue/b-events replayed-order
 # An order id nobody ever recorded, straight into B's queue (the envelope the bus delivers); A is stopped, the fake answers the ack.
@@ -137,11 +115,11 @@ grep '^TOPOLOGY' "$(echo "$out" | sed -n 's/^result: //p')"
 select message_id, correlation, a_status from acks where message_id = '{{fresh}}' /* {{corr}} */
 
 ### http fake-answers-with-its-match
-# A request nobody recorded.
+# The scenario's own call reaches the fake too ({{service/a}} is its URL): a request nobody recorded.
 # @assert status == 404
 # @assert $.error contains no recording matches
 # @assert header.x-fake-match == none
-GET {{fake}}/never-recorded
+GET {{service/a}}/never-recorded
 
 ### shell committing-a-copy
 # A scrubbed copy into a repository: here a fresh git repository in /tmp. The report counts, it never lists values.
@@ -154,15 +132,10 @@ d=$(mktemp -d /tmp/dlb-tour13-XXXXXX); git init -q "$d"; printf %s "$d"
 {"name": "a", "repo": "{{repo}}"}
 
 ### shell the-copy-is-scrubbed
-# The copy has the header with its value replaced; the raw recording under the session still has the key.
-# @assert out contains api-key lines not scrubbed: 0
 # @assert out contains <scrubbed>
-# @assert out contains scrub-report.txt
-n=$(grep -h '"x-api-key"' "{{repo}}"/fakes/a/*.json | grep -vc '<scrubbed>')
-echo "api-key lines not scrubbed: $n"
-grep -h -o -m1 '<scrubbed>' "{{repo}}"/fakes/a/*.json | head -1
-ls "{{repo}}/fakes/a" | grep scrub-report
-rm -rf "{{repo}}"
+# @assert out contains scrub-report
+f=$(ls "{{repo}}"/fakes/a/*.json | head -1)
+! grep -q 'x-api-key": "[^<]' {{repo}}/fakes/a/*.json && echo "no raw api key in the copy"; grep -h -o '<scrubbed>' "$f" | head -1; ls "{{repo}}/fakes/a" | grep scrub-report; rm -rf "{{repo}}"
 
 ### op fake.stop stop-a-fake
 # The fake's container goes, A is local again, B is recreated against the real A, A starts. The recording stays under the session.

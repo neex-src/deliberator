@@ -130,11 +130,10 @@
         c (assoc :container c)))))
 
 (defn list
-  "`[view + recordings]` of every declared fake; `:recordings` are the ids (what `fake.replay from` takes), oldest first, the
-  directories are `sessions/<key>/fakes/<name>/<id>`."
+  "`[view + recordings]` of every declared fake."
   [ws]
   (vec (for [d (fakes/list ws)]
-         (assoc (view ws d) :recordings (mapv :id (fakes/recordings ws (:name d)))))))
+         (assoc (view ws d) :recordings (mapv #(select-keys % [:id :session :dir :exchanges]) (fakes/recordings ws (:name d)))))))
 
 ;; commit --------------------------------------------------------------------------------------------
 

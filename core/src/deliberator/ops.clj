@@ -45,6 +45,7 @@
     fake.replay name* from port ws                 -> as record + {serving}   [runtime.* fake.started]   (replays a recording; a service served by it stops)
     fake.stop name* ws                             -> {name stopped detached [container]}   [fake.stopped runtime.*]
     fake.list ws                                   -> [{name mode port url container-url ... recordings [id]}]
+    fake.list ws                                   -> [{name mode port url container-url ... recordings [{id session dir exchanges}]}]
     fake.commit name* repo* recording dir ws       -> {name from dir exchanges report}   (a scrubbed copy into a repository)
     service.show name* ws                          -> the description + {status container runtime}
     service.status name ws                         -> [{name status health detail container since drift}]
@@ -1096,6 +1097,7 @@
                 :args (ws-schema :name {:type :string :required true :doc "fake name"})}
    "fake.list" {:fn fake-list :class :read
                 :doc "The declared fakes: mode, urls, upstream, the recording in use with its exchange count, the services attached, and the ids of every recording of the workspace's sessions (fake.replay from)."
+                :doc "The declared fakes: mode, urls, upstream, the recording in use with its exchange count, the services attached, and every recording of the workspace's sessions."
                 :args (ws-schema)}
    "fake.commit" {:fn fake-commit :class :mutate
                   :doc "Copies a recording into a repository, scrubbed by rule (authorization/cookie/api-key headers, token and password fields, JWTs, bearer tokens, e-mails, person-name fields; plus the fake's declared :scrub) with a scrub-report.txt that counts but never lists values. The raw recording stays under the session."
