@@ -155,3 +155,21 @@
       (testing "a hand-written entry is validated"
         (is (seq (env/problems (assoc (env/load "w" "local") :topology {"a" {:mode :fake}}))))
         (is (empty? (env/problems (env/load "w" "local"))))))))
+
+(defn- thrown-type [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))
+
+(deftest typed-errors-before-anything-is-touched
+  (tu/with-temp-home
+    (call "workspace.open" {:ws "w"})
+    (is (= :fake/bad-upstream (thrown-type #(fake/record! "w" "a" "ftp://x" {:session "S"}))))
+    (is (= :service/not-found (thrown-type #(fake/record! "w" "a" "service/ghost" {:session "S"}))))
+    (is (= :fake/no-recording (thrown-type #(fake/replay! "w" "a" {}))) "nothing recorded yet")
+    (is (= :fake/no-recording (thrown-type #(fake/replay! "w" "a" {:from "20200101-000000"}))))
+    (let [empty-dir (io/file (str (store/home)) "empty-recording")]
+      (.mkdirs empty-dir)
+      (is (= :fake/empty-recording (thrown-type #(fake/replay! "w" "a" {:from (str empty-dir)})))))
+    (is (= :fake/not-found (thrown-type #(fake/stop! "w" "ghost" {}))))
+    (is (= :fake/no-recording (thrown-type #(fake/commit! "w" "a" "/tmp" {}))))
+    (is (= :session/none (:type (try (call "fake.record" {:ws "w" :name "a" :upstream "http://u:1"}) (catch clojure.lang.ExceptionInfo e (ex-data e)))))
+        "the op needs a session: the recording lives under it")
+    (is (empty? (fakes/names "w")) "none of it declared a fake")))

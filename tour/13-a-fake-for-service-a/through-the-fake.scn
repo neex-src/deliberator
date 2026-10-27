@@ -1,0 +1,9 @@
+# One call to A by name, nothing about fakes in it. Run by chapter 13 twice: while the fake records (A answers, the fake writes the
+# exchange down) and while it replays (A is stopped, the recording answers). `{{service/a}}` follows the topology of the environment
+# this run STARTS with.
+# @env local
+
+### http a-health
+# @assert status == 200
+# @assert $.status == UP
+GET {{service/a}}/actuator/health
