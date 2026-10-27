@@ -50,9 +50,8 @@ class OpenLinkedLogAction : AnAction(), DumbAware {
         val link = e.getData(ServiceLinks.LINK) ?: return
         Ui.background(p, "Deliberator: log of ${link.service.name}", {
             val path = ServiceOps.getInstance(p).fetchLog(link.service.name).get("path")?.asString
-            ApplicationManager.getApplication().invokeLater {
-                if (path == null || !Ui.openFile(p, path)) Ui.notify(p, "Log of ${link.service.name}", "The daemon returned no log file.", NotificationType.WARNING)
-            }
+            if (path == null) Ui.notify(p, "Log of ${link.service.name}", "The daemon returned no log file.", NotificationType.WARNING)
+            else Ui.openFileLater(p, path) { ok -> if (!ok) Ui.notify(p, "Log of ${link.service.name}", "Cannot open $path", NotificationType.WARNING) }
         })
     }
 }

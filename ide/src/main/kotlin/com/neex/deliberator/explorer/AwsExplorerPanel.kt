@@ -130,14 +130,10 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                 val file = r.get("file")?.asString ?: throw DaemonException("terraform.locate returned no file", "tf/no-file")
                 val line = r.get("line")?.takeIf { it.isJsonPrimitive }?.asInt ?: 1
                 val moduleOnly = r.get("module-only")?.takeIf { it.isJsonPrimitive }?.asBoolean == true
-                ApplicationManager.getApplication().invokeLater({
-                    val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(Path.of(file))
-                    if (vf == null) Ui.notify(project, "Terraform", "Cannot open $file", NotificationType.WARNING)
-                    else {
-                        Ui.openEditor(project, vf, line - 1)
-                        status.text = "$address: ${Path.of(file).fileName}:$line" + if (moduleOnly) "  (the module block: its source is not local)" else ""
-                    }
-                }, ModalityState.nonModal())
+                Ui.openFileLater(project, file, line - 1) { ok ->
+                    if (!ok) Ui.notify(project, "Terraform", "Cannot open $file", NotificationType.WARNING)
+                    else status.text = "$address: ${Path.of(file).fileName}:$line" + if (moduleOnly) "  (the module block: its source is not local)" else ""
+                }
             } catch (e: Exception) {
                 failed("Terraform locate", "locate", e)
             }
@@ -215,7 +211,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                 AwsResources.getInstance().invalidate()
                 ApplicationManager.getApplication().invokeLater({
                     status.text = "terraform $action: $summary"
-                    Ui.openFile(project, path)
+                    Ui.openFileLater(project, path)
                     if (action == "apply") runDrift(root) else refresh()
                 }, ModalityState.nonModal())
             } catch (e: Exception) {
@@ -246,7 +242,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                     render(res)
                     status.text = "${env()}: ${d.matching}/${d.declared} declared present, ${d.missing.size} missing, ${d.undeclared.size} undeclared"
                 }, ModalityState.any())
-                ApplicationManager.getApplication().invokeLater({ Ui.openFile(project, report) }, ModalityState.nonModal())
+                Ui.openFileLater(project, report)
             } catch (e: Exception) {
                 failed("Terraform drift", "drift", e)
             }

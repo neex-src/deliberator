@@ -119,6 +119,11 @@ class CiTest : BasePlatformTestCase() {
         val path = Regex("-- text: (\\S+)").find(t)!!.groupValues[1]
         assertTrue(Files.readString(Path.of(path)).contains("12 tests, 0 failures"))
         assertTrue(t, t.contains("-- followed test (ubuntu) of run 210"))
+        // the printed path is a link to the file (the console's filter)
+        val line = t.lines().first { it.startsWith("-- text: ") }
+        val hit = bg { DaemonPathFilter(project).applyFilter(line, line.length) }
+        assertNotNull(line, hit)
+        assertEquals(path, line.substring(hit!!.resultItems[0].highlightStartOffset, hit.resultItems[0].highlightEndOffset))
     }
 
     fun testAnUnknownRepositoryOrRunIsATypedErrorNotACrash() {

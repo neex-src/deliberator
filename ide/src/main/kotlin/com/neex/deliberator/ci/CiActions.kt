@@ -42,10 +42,10 @@ object CiController {
     /** Acts on a [CiOpen] from a background thread: opens the file, starts the follow, asks for the job. */
     fun handle(project: Project, o: CiOpen) {
         when (o) {
-            is CiOpen.Text -> ApplicationManager.getApplication().invokeLater({
-                if (!Ui.openFile(project, o.path)) Ui.notify(project, "CI", "Cannot open ${o.path}", NotificationType.WARNING)
+            is CiOpen.Text -> Ui.openFileLater(project, o.path) { ok ->
+                if (!ok) Ui.notify(project, "CI", "Cannot open ${o.path}", NotificationType.WARNING)
                 else o.note?.let { Ui.notify(project, "CI: ${o.what}", it) }
-            }, ModalityState.nonModal())
+            }
             is CiOpen.Follow -> {
                 val h = CiOps.getInstance(project).tail(o.repo, o.run, o.job)
                 CiConsoles.showLater(project, h)
@@ -100,7 +100,7 @@ class CiRunsTextAction : CiAction() {
     override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) {
         val path = panel?.runsPath()
         if (path == null) Ui.notify(project, "CI", "Select a repository whose runs are loaded.", NotificationType.WARNING)
-        else if (!Ui.openFile(project, path)) Ui.notify(project, "CI", "Cannot open $path", NotificationType.WARNING)
+        else Ui.openFileLater(project, path) { ok -> if (!ok) Ui.notify(project, "CI", "Cannot open $path", NotificationType.WARNING) }
     }
 }
 

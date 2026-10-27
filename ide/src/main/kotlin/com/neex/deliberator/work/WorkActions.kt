@@ -166,10 +166,8 @@ class OpenPrAction : WorkspaceAction() {
         /** `pr.open`, the worktree attached, the review comments and the checks opened as text. */
         fun openPr(project: Project, repo: String, n: Int, github: String?) = Ui.background(project, "Deliberator: open $repo#$n", {
             val pr = WorkOps.getInstance(project).openPr(repo, n, github)
-            ApplicationManager.getApplication().invokeLater({
-                pr.reviewPath?.let { Ui.openFile(project, it) }
-                pr.checksPath?.let { Ui.openFile(project, it) }
-            }, ModalityState.nonModal())
+            pr.reviewPath?.let { Ui.openFileLater(project, it) }
+            pr.checksPath?.let { Ui.openFileLater(project, it) }
             val w = pr.working
             Ui.notify(project, "$repo#$n" + (pr.title?.let { ": $it" } ?: ""),
                 "worktree ${w.worktree.name} at ${w.worktree.path}" + (if (w.attached == null) " (not attached: ${w.problem})" else " (attached)") +
