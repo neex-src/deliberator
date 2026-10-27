@@ -49,6 +49,7 @@
             [clojure.walk :as walk]
             [deliberator.aws :as aws]
             [deliberator.env :as env]
+            [deliberator.fakes :as fakes]
             [deliberator.podman :as podman]
             [deliberator.service.description :as description]
             [deliberator.service.staging :as staging]
@@ -233,7 +234,10 @@
          (into {} (for [d (description/list ws) :when (description/runnable? d)]
                     [(description/role (:name d))
                      (merge-spec (topology/render-spec ws (description/->spec ws d) (:depends d))
-                                 (get-in cfg [:services (:name d)]))]))))
+                                 (get-in cfg [:services (:name d)]))]))
+         ;; the HTTP fakes (M6.6): one role per declared fake that records or replays
+         (into {} (for [f (fakes/list ws) :when (fakes/active? f)]
+                    [(fakes/role (:name f)) (fakes/->spec ws f)]))))
 
 (defn topology-stopped-roles
   "Role labels (\"service-a\") of the described services whose mode in the `local` environment is not local:
@@ -647,6 +651,13 @@
     (when ctr
       (podman/stop! c (:Id ctr))
       (first (:Names ctr)))))
+
+(defn remove-role!
+  "Stops and removes the container of `role` (label, e.g. \"fake-a\") of `ws`. -> the container name removed, nil when there is none."
+  [ws role]
+  (let [c (connect-client ws (read-config ws))]
+    (first (doall (for [ctr (podman/list-containers c :all true :labels (assoc (ws-labels ws) "deliberator.role" role))]
+                    (do (podman/remove! c (:Id ctr)) (first (:Names ctr))))))))
 
 (defn logs
   "Log events of `role` of `ws` (`{:stream :at :text}`), mirrored to `logs/services/<role>/<date>.log`.

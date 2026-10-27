@@ -43,11 +43,14 @@ in 0.6 s)*. One repository, one plugin id, one distribution.
 | **Service** | A deployable unit (Spring Boot service, Node Lambda): repository, build, container spec, config chain, log pattern, ports. | `services/<name>.edn` |
 | **Topology** | Per environment and service: `local` (container on the runtime), `external {url}` or `off` (decision 46; `fake` is M6, planned). Switching one service and rerunning the same scenario is "bringing it in". | `environments/<env>.edn :topology` |
 | **Topology** | Per environment and service: `local` (container on the runtime), `external {url}`, `off` or `fake {fake}` (M6.6: the service is served by an HTTP fake that records it or replays a recording). Switching one service and rerunning the same scenario is "bringing it in". | `environments/<env>.edn :topology` |
+| **Topology** | Per environment and service: `local` (container on the runtime), `external {url}`, `off` or `fake {fake}` (M6.6: the service is served by an HTTP fake that records it or replays a recording). Switching one service and rerunning the same scenario is "bringing it in". | `environments/<env>.edn :topology` |
 | **Scenario** | A plain text file of ordered steps (`.scn`, §8), committed in a repository or ad hoc in a session. | the file |
 | **Run** | One execution of a scenario: every input and output raw, timings, correlation ids, a rendered text result. Diffable against any other run. | `sessions/<key>/runs/<ts>-<scenario>/` |
 | **Artifact** | Raw bytes fetched or produced, content-addressed, with metadata. Everything else references artifacts. | `raw/sha256/…` |
 | **Cached view** | The latest fetched state of something remote with its age. Two exist today: the config snapshot (parameters and secret metadata, `config.refresh`) and what is deployed (ECS services with their task definition revision and image tags, Lambda versions, CodeDeploy deployments; `deployed.refresh`, `deployed.show` answers from it with its age). | `config/<env>.edn`, `cache/<env>/deployed.edn` |
 | **Marker** | A source position (file, line) whose log lines are highlighted after a run. | `markers.edn` |
+| **Fake** | A runtime container that stands in for a dependency: the HTTP record/replay proxy records a service's traffic under the session and replays it later, scrubbed copies may be committed to a repository. The identity fake is a proposal. | `fakes/<name>.edn`, recordings in `sessions/<key>/fakes/<name>/<stamp>/` |
+| **Provider** | An external process contributing operations through the protocol (§6). Built in M6.5. | `<home>/providers/<name>.edn` |
 | **Fake** | A runtime container that stands in for a dependency: the HTTP record/replay proxy records a service's traffic under the session and replays it later, scrubbed copies may be committed to a repository. The identity fake is a proposal. | `fakes/<name>.edn`, recordings in `sessions/<key>/fakes/<name>/<stamp>/` |
 | **Provider** | An external process contributing operations through the protocol (§6). Built in M6.5. | `<home>/providers/<name>.edn` |
 
@@ -63,6 +66,7 @@ workspaces/<ws>/
   audit.log                     remote calls made while no session was current
   environments/<env>.edn        services/<name>.edn        config/<env>.edn   (the config snapshot, with its age)
   cache/<env>/deployed.edn      cache/<env>/deployed.txt   (what is deployed, fetched-at; `deployed.refresh` writes, `deployed.show` reads)
+  fakes/<name>.edn              an HTTP fake: mode record|replay|stopped, host port, upstream, the recording in use   fakes/.runtime/   the staged proxy script
   project/                      the IDE project directory of the workspace
   services/<name>/classes/      staged classes for hot reload
   raw/sha256/<2>/<62>           raw/sha256/<2>/<62>.meta.edn
@@ -81,6 +85,7 @@ workspaces/<ws>/
                                 GitHub Actions as text (ci.runs, ci.log|tail, ci.diff); every API response is a blob in raw/ first
     queries/<name>.insights     the text of a named Insights query     queries/<name>.scn   a named query: a one-step scenario
     config/                     config snapshots taken while the session was current
+    fakes/<name>/<stamp>/NNNNN.json   one recorded exchange per file, raw, written by the fake before it answers
     runs/<yyyymmdd-hhmmss>-<scenario>/
       run.edn        scenario path + sha, env, vars, topology, status, step summaries, timings
       scenario.scn   the file as it was run
@@ -241,7 +246,7 @@ more `event` lines and exactly one terminal line:
 
 Operations are `area.verb`: `workspace.*`, `session.*`, `env.*`, `runtime.*`, `service.*`,
 `topology.*`, `config.*`, `scenario.*`, `runs.*`, `raw.*`, `repo.*`, `logs.*`, `marker.*`, `aws.*`,
-`terraform.*`, `daemon.*`, plus `op.describe`, which returns every operation with its argument
+`terraform.*`, `fake.*`, `provider.*`, `daemon.*`, plus `op.describe`, which returns every operation with its argument
 schema and class. The CLI's help and the IDE's operations form are generated from `op.describe`,
 so an operation exists in both the moment the core has it; an agent's tool list generated the same
 way (§4.H of the brief) is planned, not built. Planned families, not built: `worktree.*`, `pr.*`,
@@ -379,6 +384,9 @@ The fake-external-systems category (brief §4.I) is designed as: a fake is a run
 declared like a service plus a provider that records and replays; recordings are scrubbed before
 they may be committed; the identity fake issues its own tokens from a local key and serves its
 JWKS, with bad-token templates. Its detailed design is a later session.
+| M6 Terraform + fakes | override files, scrubbed wrapper, cross-repo apply order, resource → container links; record/replay HTTP fakes, identity-fake extension shape | Terraform AWS provider 6.x against Floci for the estate module | M6a built in core and CLI (2026-10-26): override file per root, workspace account id in Floci, `terraform.graph` and `apply-all`, `terraform.locate`, `service.list` links; gate passed (AWS provider 6.x applies the estate module on Floci); the explorer wiring is the IDE's, M6b (2026-10-27): the provider protocol and the HTTP record/replay fake with the topology mode `fake` built in core and CLI; the identity fake is a proposal (roadmap §4, §6) |
+
+The fake-external-systems category (brief §4.I): the HTTP fake is built: a fake is a runtime container declared in
 | M6 Terraform + fakes | override files, scrubbed wrapper, cross-repo apply order, resource → container links; record/replay HTTP fakes, identity-fake extension shape | Terraform AWS provider 6.x against Floci for the estate module | M6a built in core and CLI (2026-10-26): override file per root, workspace account id in Floci, `terraform.graph` and `apply-all`, `terraform.locate`, `service.list` links; gate passed (AWS provider 6.x applies the estate module on Floci); the explorer wiring is the IDE's, M6b (2026-10-27): the provider protocol and the HTTP record/replay fake with the topology mode `fake` built in core and CLI; the identity fake is a proposal (roadmap §4, §6) |
 
 The fake-external-systems category (brief §4.I): the HTTP fake is built: a fake is a runtime container declared in

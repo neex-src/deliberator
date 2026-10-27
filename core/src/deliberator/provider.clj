@@ -156,7 +156,7 @@
                           :hint (str "is " (first command) " on the daemon's PATH? the command is in " (:file cfg)))))
         p {:name name :cfg cfg :proc proc :pending (atom {}) :seq (atom 0) :raw-log raw-log :log-offset offset
            :out (OutputStreamWriter. (.getOutputStream proc) StandardCharsets/UTF_8)
-           :started-at (Instant/now) :pid (.pid proc) :stopping (atom false)}]
+           :started-at (Instant/now) :pid (.pid proc) :stopping (atom false) :reg reg}]
     (protocol/spawn!
      (fn []
        (try
@@ -201,8 +201,10 @@
                     nil)))
     (try (send! p {:id id :op op :args (or args {})})
          (catch java.io.IOException _
-           ;; the process is gone: the reader thread fails the pending entries; wait for it below
-           nil))
+           ;; the process is gone. The reader thread fails the entries it finds when it notices; this one may have been
+           ;; added after that, so it is failed here as well (deliver is once-only)
+           (swap! (:pending p) dissoc id)
+           (deliver result {:ok false :exception (crash-error (:reg p) p)})))
     (let [r (if timeout-ms (deref result timeout-ms ::timeout) @result)]
       (swap! (:pending p) dissoc id)
       (cond (= r ::timeout) (fail :provider/timeout (str "provider " (:name p) " did not answer " op " in " timeout-ms " ms")

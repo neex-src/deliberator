@@ -49,7 +49,8 @@
   {"scenario.run" [:path] "scenario.parse" [:path] "logs.match" [:path] "repo.attach" [:path]
    "marker.add" [:file] "marker.remove" [:file] "marker.list" [:file]
    "terraform.local" [:dir] "terraform.drift" [:dir :file] "terraform.locate" [:root]
-   "terraform.graph" [:roots] "terraform.apply-all" [:roots]})
+   "terraform.graph" [:roots] "terraform.apply-all" [:roots]
+   "fake.replay" [:from] "fake.commit" [:repo :recording]})
 
 (defn- absolutize-path
   "A path argument (or a list of them) that exists relative to the shell's cwd is sent absolute (the daemon's cwd is

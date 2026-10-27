@@ -122,7 +122,7 @@
         tail (concat
               (when-let [t (:services (:topology run))]
                 [(str "TOPOLOGY " (str/join " " (for [[n m] t]
-                                                 (str n "=" (name (:mode m)) (when (:url m) (str " " (:url m)))))))])
+                                                 (str n "=" (name (:mode m)) (when (:serving m) (str "(" (name (:serving m)) ")")) (when (:url m) (str " " (:url m)))))))])
               (when (pos? failed-checks) [(str "FAILED " failed-checks "/" (count checks))])
               (when (:error run) [(str "ERROR: " (:message (:error run)))])
               [(str "RUN " (name (:status run)) " steps " (count steps) " failed " failed-steps)])]

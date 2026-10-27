@@ -40,7 +40,12 @@
     service.adopt path* taskdef name jdwp ws       -> {name created path repo module from}
     service.list env ws                            -> [{name kind repo module port jdwp image mode [url] status container [log-target log]}]
     topology.show env* ws                          -> {env services hash}
-    topology.set env* name* mode* url container-url log-container ws -> as show + {dependents}
+    topology.set env* name* mode* url container-url log-container fake ws -> as show + {dependents}
+    fake.record name* upstream* port session ws    -> {name mode port url container-url container recording exchanges upstream session attached}   [runtime.* fake.started]   (M6.6: the HTTP fake proxies to the upstream and records)
+    fake.replay name* from port ws                 -> as record + {serving}   [runtime.* fake.started]   (replays a recording; a service served by it stops)
+    fake.stop name* ws                             -> {name stopped detached [container]}   [fake.stopped runtime.*]
+    fake.list ws                                   -> [{name mode port url container-url ... recordings [{id session dir exchanges}]}]
+    fake.commit name* repo* recording dir ws       -> {name from dir exchanges report}   (a scrubbed copy into a repository)
     service.show name* ws                          -> the description + {status container runtime}
     service.status name ws                         -> [{name status health detail container since drift}]
     service.build name* ws                         -> {artifact bytes took-ms log sha}   [service.build.line]
@@ -105,6 +110,7 @@
             [deliberator.deployed :as deployed]
             [deliberator.insights :as insights]
             [deliberator.env :as env]
+            [deliberator.fake :as fake]
             [deliberator.logfetch :as logfetch]
             [deliberator.awsdiscover :as awsdiscover]
             [deliberator.ci :as ci]
@@ -488,8 +494,16 @@
     (config/refresh! ws env-name {:path (or path "/")})))
 (defn- service-list [_ {:keys [env] :as args}] (service/list (ws-of args) (or env "local")))
 (defn- topology-show [_ {:keys [env] :as args}] (topology/show (ws-of args) env))
-(defn- topology-set [_ {:keys [env name mode url log-container container-url] :as args}]
-  (topology/set! (ws-of args) env name mode url {:log-container log-container :container-url container-url}))
+(defn- topology-set [_ {:keys [env name mode url log-container container-url fake] :as args}]
+  (topology/set! (ws-of args) env name mode url {:log-container log-container :container-url container-url :fake fake}))
+(defn- fake-record [ctx {:keys [name upstream port] :as args}]
+  (fake/record! (ws-of args) name upstream {:session (session-key (ws-of args) args) :port port :sink (:emit! ctx)}))
+(defn- fake-replay [ctx {:keys [name from port] :as args}]
+  (fake/replay! (ws-of args) name {:from from :port port :sink (:emit! ctx)}))
+(defn- fake-stop [ctx {:keys [name] :as args}] (fake/stop! (ws-of args) name {:sink (:emit! ctx)}))
+(defn- fake-list [_ args] (fake/list (ws-of args)))
+(defn- fake-commit [_ {:keys [name repo recording dir] :as args}]
+  (fake/commit! (ws-of args) name repo {:recording recording :dir dir}))
 (defn- service-show [_ {:keys [name] :as args}] (service/show (ws-of args) name))
 (defn- service-status [_ {:keys [name] :as args}] (service/status (ws-of args) name))
 (defn- service-build [ctx {:keys [name] :as args}] (service/build! (ws-of args) name {:sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)}))
@@ -1056,11 +1070,38 @@
    "topology.set" {:fn topology-set :class :mutate
                    :args (ws-schema :env {:type :string :required true :doc "environment name"}
                                     :name {:type :string :required true :doc "service name"}
-                                    :mode {:type :string :required true :doc "local, external or off"}
+                                    :mode {:type :string :required true :doc "local, external, off or fake"}
                                     :url {:type :string :positional true :doc "base URL, for external"}
                                     :container-url {:type :string :doc "for external: how containers reach it when the url (host view) does not work from a container; default the url with loopback turned into host.containers.internal"}
-                                    :log-container {:type :string :doc "for external: the container whose log stands for log/service-<name>"})
-                   :doc "Sets a service's mode in an environment. {{service/x}} and env.describe follow it; in the local environment off and external mean the service's container is not desired (the next runtime.ensure or service start/restart stops it) and the services that :depends on it are re-rendered and recreated then. Touches no container itself. Answers the new topology plus the dependents."}
+                                    :log-container {:type :string :doc "for external: the container whose log stands for log/service-<name>"}
+                                    :fake {:type :string :doc "for fake: the name of the HTTP fake that serves it (default the service's name); it must be declared (fake.record or fake.replay)"})
+                   :doc "Sets a service's mode in an environment (local, external, off, or fake: served by an HTTP fake of the runtime, in the local environment the service's container stays while the fake records and stops while it replays). {{service/x}} and env.describe follow it; in the local environment off and external mean the service's container is not desired (the next runtime.ensure or service start/restart stops it) and the services that :depends on it are re-rendered and recreated then. Touches no container itself. Answers the new topology plus the dependents."}
+   "fake.record" {:fn fake-record :class :mutate
+                  :doc "Declares an HTTP fake (a babashka record/replay proxy in a container on the runtime's network) and starts a NEW recording under the session: it forwards every request to the upstream and persists each exchange raw as sessions/<key>/fakes/<name>/<stamp>/NNNNN.json before answering. Attach a service with `topology.set local <service> fake --fake <name>` and runtime.ensure; its dependents then call the fake. Answers the fake's url (host) and container-url."
+                  :events ["runtime.pulling" "runtime.starting" "runtime.ready" "fake.started"]
+                  :args (ws-schema :name {:type :string :required true :doc "fake name (by default the service it stands in for)"}
+                                   :upstream {:type :string :required true :doc "service/<name> or an http(s) URL the fake forwards to"}
+                                   :port {:type :int :doc "host port of the fake; default the one it had, else the first free from 18080"}
+                                   :session {:type :string :doc "session whose directory holds the recording; default the current one"})}
+   "fake.replay" {:fn fake-replay :class :mutate
+                  :doc "Serves a recording from the fake: same method+path+query, then same method+path, then a template of the recorded path (ids and long digit runs are wildcards) match; a request with no recording is a 404 `no recording matches`. A service attached to the fake with topology mode fake stops (the next reconcile does it here, now)."
+                  :events ["runtime.pulling" "runtime.starting" "runtime.ready" "fake.started"]
+                  :args (ws-schema :name {:type :string :required true :doc "fake name"}
+                                   :from {:type :string :doc "a recording id of this fake, or an absolute directory of NNNNN.json files (a committed copy); default the newest recording"}
+                                   :port {:type :int :doc "host port, for a fake that is declared by this call"})}
+   "fake.stop" {:fn fake-stop :class :mutate
+                :doc "Removes the fake's container (declaration and recordings stay), sets the services attached to it back to local and reconciles, so the real service runs again and its dependents are recreated against it."
+                :events ["fake.stopped" "runtime.pulling" "runtime.starting" "runtime.ready"]
+                :args (ws-schema :name {:type :string :required true :doc "fake name"})}
+   "fake.list" {:fn fake-list :class :read
+                :doc "The declared fakes: mode, urls, upstream, the recording in use with its exchange count, the services attached, and every recording of the workspace's sessions."
+                :args (ws-schema)}
+   "fake.commit" {:fn fake-commit :class :mutate
+                  :doc "Copies a recording into a repository, scrubbed by rule (authorization/cookie/api-key headers, token and password fields, JWTs, bearer tokens, e-mails, person-name fields; plus the fake's declared :scrub) with a scrub-report.txt that counts but never lists values. The raw recording stays under the session."
+                  :args (ws-schema :name {:type :string :required true :doc "fake name"}
+                                   :repo {:type :string :required true :doc "an attached repository's name, or the absolute path of a checkout"}
+                                   :recording {:type :string :doc "recording id or directory; default the one the fake replays, else the newest"}
+                                   :dir {:type :string :doc "directory inside the repository; default fakes/<name>"})}
    "service.show" {:fn service-show :class :read
                    :doc "One service: its description (task definition entries included) and its runtime status."
                    :args (ws-schema :name {:type :string :required true :doc "service name from service.list"})}
@@ -1286,7 +1327,7 @@
       (call-provider op ctx args)
       (let [args (validate-args op (:args entry) args)]
         (when (and (contains? (:args entry) :ws)
-                   (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
+                   (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (str/starts-with? op "fake.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
                        (and (= :read (:class entry)) (not= "scenario.parse" op))))
           (require-workspace! (:ws args)))
         ((:fn entry) ctx args)))))
