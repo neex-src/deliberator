@@ -106,6 +106,19 @@
      (is (re-find #"(?s)\A### fake ok n1 · ok · \d+ ms\none\n\n### fake n2 · ok · \d+ ms\nok\n\nRUN ok steps 2 failed 0\n\z" txt))
      (is (not (str/includes? txt "FAILED")) "no FAILED line when nothing failed"))))
 
+(deftest a-remote-run-has-no-empty-topology-line
+  ;; found walking the IDE against the real account: an environment without services recorded {} and the trailer began with "TOPOLOGY "
+  (in-home
+   (let [f (io/file (str (store/home)) "s.scn")
+         _ (spit f "### fake ok n1\n")
+         res (engine/run! "w" env (str f) :session "T-1" :topology {:hash "x" :services {}})
+         txt (slurp (get-in res [:paths :result]))]
+     (is (not (str/includes? txt "TOPOLOGY")) txt))
+   (let [f (io/file (str (store/home)) "t.scn")
+         _ (spit f "### fake ok n1\n")
+         res (engine/run! "w" env (str f) :session "T-1" :topology {:hash "x" :services {"a" {:mode :local}}})]
+     (is (str/includes? (slurp (get-in res [:paths :result])) "TOPOLOGY a=local")))))
+
 ;; B26: a linear-space diff, any size, any divergence --------------------------------------------
 
 (defn- lcs-len [a b]

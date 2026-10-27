@@ -220,5 +220,7 @@
         found (discover/discover! ws env-name)
         c (compare-with d (:resources found) (keys (:errors found)))]
     (cond-> (assoc c :env (:name e) :source (or file dir) :region region :errors (:errors found))
-      (seq (:drifted doc)) (assoc :changed (:drifted doc))
+      ;; the explorer kind and the AWS name of a changed resource (its row in the tree), joined by address with what the document declares
+      (seq (:drifted doc)) (assoc :changed (let [by-addr (into {} (map (juxt :address identity)) d)]
+                                             (mapv #(let [x (by-addr (:address %))] (cond-> % x (assoc :kind (:kind x) :aws-name (:name x)))) (:drifted doc))))
       fresh (assoc :refreshed {:lines (count (:lines fresh)) :sha (get-in fresh [:raw :sha])}))))

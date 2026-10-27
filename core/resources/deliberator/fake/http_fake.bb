@@ -47,6 +47,16 @@
         body (.getBytes ^String body StandardCharsets/UTF_8)
         :else (byte-array 0)))
 
+;; httpkit's client hands a repeated response header (Vary, ...) over as ONE string joined with newlines; written back as it is, the
+;; newline splits the status/header block of our answer and the client sees a truncated response (found against checkip.amazonaws.com on the
+;; real account). Repeated headers go out as one comma list, Set-Cookie as separate header lines.
+(defn wire-headers [m]
+  (into {} (map (fn [[k v]] [k (if (and (string? v) (re-find #"[\r\n]" v))
+                                  (let [parts (remove str/blank? (str/split v #"\r?\n"))]
+                                    (if (= "set-cookie" (str/lower-case (name k))) (vec parts) (str/join ", " parts)))
+                                  v)]))
+        m))
+
 (defn lower-headers [h] (into (sorted-map) (for [[k v] h] [(str/lower-case (name k)) v])))
 
 (def id-part #"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}|\d{4,}")
@@ -92,7 +102,7 @@
         (write-exchange! ex)                                  ; persisted before the client sees the answer
         (log "RECORD" (:seq ex) method uri (:status resp))
         {:status (:status resp)
-         :headers (into {} (comp (remove (fn [[k _]] (hop (name k)))) (map (fn [[k v]] [(name k) v]))) (:headers resp))
+         :headers (wire-headers (into {} (comp (remove (fn [[k _]] (hop (name k)))) (map (fn [[k v]] [(name k) v]))) (:headers resp)))
          :body (java.io.ByteArrayInputStream. ^bytes (:body resp))}))))
 
 ;; replay --------------------------------------------------------------------------------------------------------------
@@ -123,7 +133,7 @@
     (if-let [[how ex] (find-exchange method uri (or query-string ""))]
       (do (log "REPLAY" (:seq ex) method uri (name how))
           {:status (get-in ex [:response :status])
-           :headers (assoc (into {} (comp (map (fn [[k v]] [(name k) v])) (remove (fn [[k _]] (drop-resp k)))) (get-in ex [:response :headers]))
+           :headers (assoc (wire-headers (into {} (comp (map (fn [[k v]] [(name k) v])) (remove (fn [[k _]] (drop-resp k)))) (get-in ex [:response :headers])))
                            "x-fake-match" (name how) "x-fake-recording" (str (:seq ex)))
            :body (java.io.ByteArrayInputStream. (map->body (:response ex)))})
       (do (log "MISS" method uri)

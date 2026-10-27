@@ -31,6 +31,55 @@
     {:status (.statusCode resp) :body (.body resp)
      :headers (into {} (for [[k vs] (.map (.headers resp))] [(str/lower-case k) (first vs)]))}))
 
+;; a repeated upstream header (Vary: ...) used to be written back joined with a newline: a truncated answer (curl) or a 500 (newer http-kit) ---
+
+(defn- free-port ^long [] (with-open [s (java.net.ServerSocket. 0)] (.getLocalPort s)))
+
+(defn- raw-get
+  "GET / over a plain socket: the whole answer as text (what a client that is not forgiving sees)."
+  [port]
+  (with-open [s (doto (java.net.Socket. "127.0.0.1" (int port)) (.setSoTimeout 5000))]
+    (.write (.getOutputStream s) (.getBytes "GET /messages/m-1 HTTP/1.0\r\nHost: x\r\n\r\n"))
+    (.flush (.getOutputStream s))
+    (slurp (.getInputStream s))))
+
+(defn- wait-listening [port]
+  (loop [i 0]
+    (or (try (with-open [_ (java.net.Socket. "127.0.0.1" (int port))] true) (catch Exception _ false))
+        (when (< i 60) (Thread/sleep 250) (recur (inc i))))))
+
+(deftest repeated-upstream-headers-reach-the-client-intact
+  ;; found on the real account, recording checkip.amazonaws.com (nginx sends three Vary lines): http-kit's client joins repeated headers with
+  ;; newlines, the fake wrote them back as they were and the answer was cut after the first line. The script runs as a process (babashka).
+  (if-not (try (zero? (:exit (clojure.java.shell/sh "bb" "--version"))) (catch Exception _ false))
+    (println "SKIP repeated-upstream-headers: babashka not on PATH")
+    (let [up-port (free-port) fk-port (free-port)
+          dir (str (java.nio.file.Files/createTempDirectory "dlb-fake-vary" (make-array java.nio.file.attribute.FileAttribute 0)))
+          script (.getCanonicalPath (io/file "resources" "deliberator" "fake" "http_fake.bb"))
+          start (fn [argv env] (let [pb (ProcessBuilder. ^java.util.List argv)]
+                                 (.redirectErrorStream pb true) (.redirectOutput pb java.lang.ProcessBuilder$Redirect/DISCARD)
+                                 (doseq [[k v] env] (.put (.environment pb) k (str v)))
+                                 (.start pb)))
+          up (start ["bb" "-e" (str "(require '[org.httpkit.server :as s]) (s/run-server (fn [_] {:status 200 :headers {\"content-type\" \"text/plain\" "
+                                    "\"vary\" [\"Origin\" \"Access-Control-Request-Method\"]} :body \"up\"}) {:port " up-port "}) @(promise)")] {})
+          fake (fn [mode extra] (start ["bb" script] (merge {"FAKE_MODE" mode "FAKE_PORT" fk-port} extra)))
+          check (fn [what a]
+                  (is (str/starts-with? a "HTTP/1.1 200") (str what ": " (pr-str (subs a 0 (min 120 (count a))))))
+                  (is (re-find #"(?i)vary: Origin, Access-Control-Request-Method\r?\n" a) what)
+                  (is (str/ends-with? (str/trim a) "up") what))]
+      (try
+        (is (wait-listening up-port))
+        (let [rec (fake "record" {"FAKE_UPSTREAM" (str "http://127.0.0.1:" up-port) "FAKE_RECORD_DIR" dir})]
+          (try (is (wait-listening fk-port))
+               (check "record" (raw-get fk-port))
+               (finally (.destroyForcibly rec) (.waitFor rec))))
+        (.destroyForcibly up)
+        (let [rp (fake "replay" {"FAKE_REPLAY_DIR" dir})]
+          (try (is (wait-listening fk-port))
+               (check "replay" (raw-get fk-port))
+               (finally (.destroyForcibly rp) (.waitFor rp))))
+        (finally (.destroyForcibly up))))))
+
 (defn- config [id upstream?]
   {:podman {:endpoint (sup/endpoint)} :network (str "deliberator-test-" id)
    :containers (if upstream?

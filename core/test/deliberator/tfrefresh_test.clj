@@ -60,6 +60,7 @@
             (is (= 1 (count (:changed with))) (pr-str (dissoc with :errors)))
             (is (= ["aws_sqs_queue.q" ["update"]] ((juxt :address :actions) (first (:changed with)))))
             (is (some #{"visibility_timeout_seconds"} (:attributes (first (:changed with)))))
+            (is (= ["sqs" "dlbtest-b39-q"] ((juxt :kind :aws-name) (first (:changed with)))) "the explorer's row of the changed resource")
             (is (= 1 (:declared with)))
             (is (pos? (get-in with [:refreshed :lines])))
             (is (not (str/includes? (pr-str (:changed with)) "45")) "no value in the answer"))

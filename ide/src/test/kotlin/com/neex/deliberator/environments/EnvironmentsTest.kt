@@ -126,6 +126,21 @@ class EnvironmentsTest : BasePlatformTestCase() {
         assertTrue(p.envRow(names.indexOf("local"))[4].contains("local"))
     }
 
+    fun testEditRecordOpensTheEnvironmentsRecordInTheEditorSoTargetsCanBeWritten() {
+        // found walking the IDE against the real account: an environment made in the dialog has no targets and nothing in the IDE could add them
+        save("dev", readOnly = false)
+        val p = newPanel()
+        wait("the list") { p.envNames().contains("dev") }
+        p.selectByName("dev")
+        p.editRecord()
+        val fem = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+        wait("the record opens") { fem.selectedFiles.firstOrNull()?.name == "dev.edn" }
+        val file = fem.selectedFiles.first()
+        assertEquals(wsDir().resolve("environments").resolve("dev.edn").toString(), file.path)
+        val text = String(file.contentsToByteArray())
+        assertTrue(text, text.contains(":read-only false") && text.contains("log/orders"))
+    }
+
     fun testRemoveAsksFirstNamesWhatStaysAndNeverRemovesLocal() {
         save("gone", readOnly = true)
         val p = newPanel()

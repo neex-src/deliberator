@@ -53,9 +53,12 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     private val status = JBLabel(" ")
     private val envBox = JComboBox<String>()
     private var loadingEnvs = false
-    @Volatile private var drift: Drift? = null
+    @Volatile internal var drift: Drift? = null
     /** The Terraform root of the last drift comparison: where a drift row's address is looked up (`terraform.locate`). */
     @Volatile private var driftRoot: String? = null
+
+    /** B39: the drift refreshes the root's state from AWS first (a remote environment's credentials). Off by default: it is a Terraform run. */
+    internal val refreshState = javax.swing.JCheckBox("Refresh state")
 
     /** The last failure of a button (the text of its balloon), for tests. */
     @Volatile internal var lastError: String? = null; private set
@@ -67,7 +70,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     }
 
     internal class KindNode(val kind: String, val title: String, val count: Int) { override fun toString() = "$title ($count)" }
-    internal class ResNode(val kind: String, val r: LiveResource, val undeclared: Boolean = false, val link: ServiceLink? = null) { override fun toString() = r.name }
+    internal class ResNode(val kind: String, val r: LiveResource, val undeclared: Boolean = false, val link: ServiceLink? = null, val changed: Drift.Changed? = null) { override fun toString() = r.name }
     internal class MissingNode(val name: String, val address: String?) { override fun toString() = name }
 
     init {
@@ -79,6 +82,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                     is ResNode -> {
                         append(u.r.name); u.r.ref?.takeIf { u.kind == "ssm" }?.let { append("  $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
                         if (u.undeclared) append("   not in Terraform", SimpleTextAttributes.ERROR_ATTRIBUTES)
+                        u.changed?.let { append("   changed outside Terraform: ${it.attributes.joinToString(", ")}", SimpleTextAttributes.ERROR_ATTRIBUTES) }
                         u.link?.let { append("   -> ${it.text()}", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
                     }
                     is MissingNode -> { append(u.name, SimpleTextAttributes(SimpleTextAttributes.STYLE_STRIKEOUT, java.awt.Color.GRAY)); append("   declared, not in the environment" + (u.address?.let { "  ($it)" } ?: ""), SimpleTextAttributes.ERROR_ATTRIBUTES) }
@@ -95,19 +99,23 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
             override fun keyPressed(e: KeyEvent) { if (e.keyCode == KeyEvent.VK_ENTER) open() }
         })
         val refresh = JButton("Refresh").apply { addActionListener { refresh() } }
+        refreshState.toolTipText = "terraform plan -refresh-only first, with this environment's credentials (reads only, nothing is applied): values changed by hand show as changed. Slow on a big root."
         val driftButton = JButton("Terraform drift…").apply { toolTipText = "Compare a Terraform root (terraform show -json, read only) with this environment"; addActionListener { drift() } }
         val planButton = JButton("Plan").apply { toolTipText = "terraform plan of the chosen root onto this (local) environment"; addActionListener { terraform("plan") } }
         val applyButton = JButton("Apply").apply { toolTipText = "terraform apply of the chosen root onto this (local) environment; refused for a remote one"; addActionListener { terraform("apply") } }
         envBox.addActionListener { if (!loadingEnvs) (envBox.selectedItem as? String)?.let { pick -> WorkspaceService.getInstance(project).selectEnv(pick.substringBefore("  ")); refresh() } }
         add(JPanel(BorderLayout()).apply {
             add(JPanel(BorderLayout()).apply { add(envBox, BorderLayout.WEST); add(status, BorderLayout.CENTER) }, BorderLayout.CENTER)
-            add(JPanel().apply { add(driftButton); add(planButton); add(applyButton); add(refresh) }, BorderLayout.EAST)
+            add(JPanel().apply { add(refreshState); add(driftButton); add(planButton); add(applyButton); add(refresh) }, BorderLayout.EAST)
         }, BorderLayout.NORTH)
         add(JBScrollPane(tree), BorderLayout.CENTER)
         refresh()
     }
 
     private fun env() = WorkspaceService.getInstance(project).selectedEnv
+
+    /** The refresh uses the credentials of a remote environment's profile: a local one is read as it is. */
+    private fun remote() = WorkspaceService.getInstance(project).model.envs.firstOrNull { it.name == env() }?.kind == "remote"
 
     /** The row's service (M6.4) and, for a drift row, its address: the data of the popup actions. */
     override fun uiDataSnapshot(sink: com.intellij.openapi.actionSystem.DataSink) {
@@ -225,13 +233,17 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
         WorkspaceService.getInstance(project).call("explore.write", JsonObject().apply { addProperty("name", name); addProperty("text", content) })
             .resultObject().get("path")?.asString ?: throw DaemonException("explore.write returned no path", "explore/no-path")
 
-    fun runDrift(dir: String) {
-        status.text = "comparing $dir with ${env()} ..."
+    fun runDrift(dir: String, wanted: Boolean = refreshState.isSelected) {
+        val refresh = wanted && remote()
+        status.text = if (refresh) "refreshing $dir from ${env()} (terraform plan -refresh-only) ..." else "comparing $dir with ${env()} ..."
         lastError = null
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
+                var n = 0
                 val r = WorkspaceService.getInstance(project).call("terraform.drift",
-                    JsonObject().apply { addProperty("env", env()); addProperty("dir", dir) }).result!!.asJsonObject
+                    JsonObject().apply { addProperty("env", env()); addProperty("dir", dir); if (refresh) addProperty("refresh", true) }) { ev ->
+                    if (ev.name == "tf.line" && ++n % 10 == 0) setStatus("terraform refresh: ${ev.json.get("line")?.asString?.take(80)}")
+                }.result!!.asJsonObject
                 val d = Drift.parse(r)
                 drift = d
                 driftRoot = dir
@@ -240,7 +252,8 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                 val res = AwsResources.getInstance().fetchNow(project)
                 ApplicationManager.getApplication().invokeLater({
                     render(res)
-                    status.text = "${env()}: ${d.matching}/${d.declared} declared present, ${d.missing.size} missing, ${d.undeclared.size} undeclared"
+                    status.text = "${env()}: ${d.matching}/${d.declared} declared present, ${d.missing.size} missing, ${d.undeclared.size} undeclared" +
+                        (if (d.refreshed) ", ${d.changed.size} changed by hand" else "") + (if (d.unknown.isNotEmpty()) ", ${d.unknown.size} unknown" else "")
                 }, ModalityState.any())
                 Ui.openFileLater(project, report)
             } catch (e: Exception) {
@@ -262,6 +275,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
 
     fun render(res: Map<String, List<LiveResource>>) {
         fillEnvs()
+        refreshState.isEnabled = remote()
         root.removeAllChildren()
         var total = 0
         val dr = drift?.takeIf { it.env == env() }
@@ -271,7 +285,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
             total += items.size
             DefaultMutableTreeNode(KindNode(k.kind, k.title, items.size)).also { n ->
                 val services = WorkspaceService.getInstance(project).model.services
-                items.forEach { n.add(DefaultMutableTreeNode(ResNode(k.kind, it, dr?.isUndeclared(k.kind, it.name) == true, ServiceLinks.forResource(k.kind, it.name, services, it.containers)))) }
+                items.forEach { n.add(DefaultMutableTreeNode(ResNode(k.kind, it, dr?.isUndeclared(k.kind, it.name) == true, ServiceLinks.forResource(k.kind, it.name, services, it.containers), dr?.changeOf(k.kind, it.name)))) }
                 dr?.missing?.filter { it.kind == k.kind }?.forEach { n.add(DefaultMutableTreeNode(MissingNode(it.name, it.address))) }
                 root.add(n)
             }
@@ -287,7 +301,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
         val kind = (kn.userObject as KindNode).kind
         (0 until kn.childCount).map {
             when (val u = (kn.getChildAt(it) as DefaultMutableTreeNode).userObject) {
-                is ResNode -> "$kind: ${u.r.name}" + (if (u.undeclared) " [undeclared]" else "") + (u.link?.let { " -> ${it.text()}" } ?: "")
+                is ResNode -> "$kind: ${u.r.name}" + (if (u.undeclared) " [undeclared]" else "") + (u.changed?.let { " [changed: ${it.attributes.joinToString(",")}]" } ?: "") + (u.link?.let { " -> ${it.text()}" } ?: "")
                 is MissingNode -> "$kind: ${u.name} [missing]"
                 else -> "$kind: $u"
             }
@@ -297,6 +311,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     private fun open() {
         val sel = (tree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject
         if (sel is MissingNode) { sel.address?.let(::openDeclaration); return }
+        if (sel is ResNode && sel.changed != null) { openDeclaration(sel.changed.address); return }   // a resource changed by hand: its declaration
         val n = sel as? ResNode ?: return
         val step = ExplorerSteps.step(n.kind, n.r) ?: return
         openStep(env(), step)
