@@ -41,6 +41,14 @@
         (is (contains? (names "dynamodb") table) "the table the parameter names exists")
         (is (<= 2 (count (names "sqs"))) "inbox and events queues")
         (is (contains? (names "ecs") "estate")))
+      (testing "ECS services and task definitions, not only clusters (B31)"
+        (let [svc (first (filter #(= "estate/estate-service-a" (:name %)) (get-in r [:resources "ecs-services"])))]
+          (is (some? svc) (pr-str (get-in r [:resources "ecs-services"])))
+          (is (str/includes? (str (:ref svc)) ":service/estate/estate-service-a") "the ref is the service ARN")
+          (is (= "estate" (:cluster svc)))
+          (is (= ["service-a"] (:containers svc)) "the container names of its task definition, which tie it to the workspace service a"))
+        (is (contains? (names "ecs-taskdefs") "estate-service-a:1"))
+        (is (contains? (names "ecs-taskdefs") "estate-service-b:1")))
       (testing "names only: no values, no secret strings"
         (is (not (str/includes? (pr-str r) "SecretString")))))))
 

@@ -8,8 +8,11 @@ import com.neex.deliberator.workspace.WorkspaceService
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** One thing that exists in the environment: its [name] and a [ref] (queue URL, ARN, parameter type) when there is one. */
-data class LiveResource(val name: String, val ref: String?)
+/**
+ * One thing that exists in the environment: its [name] and a [ref] (queue URL, ARN, parameter type) when there is one. An ECS service also carries the
+ * [containers] of its task definition (B31): what ties it to the workspace service whose container it runs.
+ */
+data class LiveResource(val name: String, val ref: String?, val containers: List<String> = emptyList())
 
 /**
  * What exists in the project's environment (`aws.discover`), cached per workspace and environment. [get] answers at once from the
@@ -69,7 +72,9 @@ class AwsResources {
             return res.entrySet().associate { (kind, arr) ->
                 kind to (arr.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { e ->
                     val o = e.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
-                    LiveResource(o.get("name")?.asString ?: return@mapNotNull null, o.get("ref")?.takeIf { it.isJsonPrimitive }?.asString)
+                    LiveResource(
+                        o.get("name")?.asString ?: return@mapNotNull null, o.get("ref")?.takeIf { it.isJsonPrimitive }?.asString,
+                        o.get("containers")?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { c -> c.takeIf { it.isJsonPrimitive }?.asString } ?: emptyList())
                 } ?: emptyList())
             }
         }

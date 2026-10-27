@@ -8,6 +8,7 @@ import com.neex.deliberator.workspace.WorkspaceModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** M6.4 and the fakes' rows from the shapes `service.list` and `fake.list` answer: which service an ECS or log-group row belongs to, and how the Services tab shows them. */
@@ -44,6 +45,31 @@ class ServiceLinksTest {
         assertNull(ServiceLinks.forResource("ecs", "estate-cluster", rows))
         val t = ServiceLinks.forResource("logs", "/estate/service-a", rows)!!.text()
         assertEquals("service a · container deliberator-w-service-a · log/service-a", t)
+    }
+
+    @Test fun an_ecs_service_belongs_to_the_service_whose_container_it_runs() {
+        // the estate's ECS service is named <prefix>-service-a and its task definition runs the container service-a (B31)
+        assertEquals("a", ServiceLinks.forResource("ecs-services", "m6a/m6a-service-a", rows, listOf("service-a"))!!.service.name)
+        assertEquals("b", ServiceLinks.forResource("ecs-services", "m6a/orders-api", rows, listOf("sidecar", "service-b"))!!.service.name)   // the container decides, not the name
+        assertEquals("a", ServiceLinks.forResource("ecs-services", "m6a/m6a-service-a", rows)!!.service.name)                           // no containers known: the suffix
+        assertEquals("a", ServiceLinks.forResource("ecs-taskdefs", "m6a-service-a:3", rows)!!.service.name)
+        assertNull(ServiceLinks.forResource("ecs-services", "m6a/m6a-chain", rows, listOf("nginx")))
+        assertNull(ServiceLinks.forResource("ecs-taskdefs", "m6a-service-aa:1", rows))
+        val t = ServiceLinks.forResource("ecs-services", "m6a/m6a-service-a", rows, listOf("service-a"))!!.text()
+        assertEquals("service a · container deliberator-w-service-a · log/service-a", t)
+    }
+
+    @Test fun aws_discover_services_come_through_with_their_containers_and_open_as_describe_steps() {
+        val parsed = com.neex.deliberator.scn.AwsResources.parse(JsonParser.parseString("""{"resources":{
+            "ecs":[{"name":"m6a","ref":"arn:aws:ecs:r:1:cluster/m6a"}],
+            "ecs-services":[{"name":"m6a/m6a-service-a","ref":"arn:aws:ecs:r:1:service/m6a/m6a-service-a","cluster":"m6a","containers":["service-a"]}],
+            "ecs-taskdefs":[{"name":"m6a-service-a:1","ref":"arn:aws:ecs:r:1:task-definition/m6a-service-a:1"}]}}""").asJsonObject)
+        val svc = parsed["ecs-services"]!!.single()
+        assertEquals(listOf("service-a"), svc.containers)
+        assertEquals(emptyList<String>(), parsed["ecs"]!!.single().containers)
+        val step = ExplorerSteps.step("ecs-services", svc)!!
+        assertTrue(step, step.startsWith("### aws ecs.DescribeServices m6a-service-a") && step.contains("\"cluster\": \"m6a\"") && step.contains("\"m6a-service-a\""))
+        assertTrue(ExplorerSteps.step("ecs-taskdefs", parsed["ecs-taskdefs"]!!.single())!!.contains("task-definition/m6a-service-a:1"))
     }
 
     @Test fun the_services_table_shows_the_fake_a_service_is_served_by() {
