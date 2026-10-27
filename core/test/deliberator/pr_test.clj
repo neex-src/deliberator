@@ -130,8 +130,7 @@
   (let [t (pr/review-text docs {:slug "o/r" :n 7 :fetched "T" :auth "none" :head-sha "abcdef0123456789"})]
     (is (str/includes? t "# o/r#7: Add the thing"))
     (is (str/includes? t "merged, by alice, main <- bob:feat, head abcdef012345"))
-    (is (str/includes? t "3 inline comments, 2 reviews, 1 conversation comments"))
-    (is (str/includes? t "## reviews with a verdict or text (1)") "an empty COMMENTED review is only the wrapper of inline comments")
+    (is (str/includes? t "3 inline comments, 1 reviews, 1 conversation comments") "an empty COMMENTED review is not a review")
     (is (str/includes? t "carol  CHANGES_REQUESTED") t)
     (is (not (str/includes? t "dave")))
     (testing "files in order, README before src; the thread: root, hunk tail, reply indented"

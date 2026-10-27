@@ -121,7 +121,6 @@
         replies-of (fn [r] (sort-by #(get % "created_at" "") (get by-parent (get r "id"))))
         by-file (group-by #(get % "path") roots)
         ordered-files (sort (keys by-file))
-        all-reviews reviews
         reviews (remove #(and (= "COMMENTED" (get % "state")) (str/blank? (get % "body"))) reviews)]
     (str "# " slug "#" n ": " (get pr "title") "\n"
          "# " (if (get pr "merged") "merged" (get pr "state")) (when (get pr "draft") ", draft") ", by " (user pr)
@@ -130,10 +129,10 @@
          (when-let [m (get pr "mergeable_state")] (str ", mergeable_state " m)) "\n"
          "# " (get pr "commits") " commits, " (get pr "changed_files") " files, +" (get pr "additions") " -" (get pr "deletions")
          "; " (get pr "html_url") "\n"
-         "# " (count inline) " inline comments, " (count all-reviews) " reviews, " (count conversation) " conversation comments; fetched "
+         "# " (count inline) " inline comments, " (count reviews) " reviews, " (count conversation) " conversation comments; fetched "
          fetched ", auth " auth "\n\n"
          "## description\n" (body-text (get pr "body")) "\n\n"
-         "## reviews with a verdict or text (" (count reviews) ")\n"
+         "## reviews (" (count reviews) ")\n"
          (apply str (for [r (sort-by #(get % "submitted_at" "") reviews)]
                       (str (user r) "  " (get r "state") "  " (get r "submitted_at") "\n"
                            (when-not (str/blank? (get r "body")) (str (indent (body-text (get r "body")) "  ") "\n")))))
