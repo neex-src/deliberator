@@ -143,6 +143,7 @@
       (is (= (daemon/version) (:version (:result (ok! c "hello" {}))))))))
 
 ;; --- agent interface ----------------------------------------------------------------
+;; --- agent interface ----------------------------------------------------------------
 
 (defn- err [c op args]
   (:error (:terminal (tc/request c op args))))
