@@ -168,8 +168,9 @@ goes through:
 
 Every attempt, run or refused, is one EDN line in the session's `audit.log` (`:at :env :account :service :op :class
 :outcome :confirmation :reason :bytes :status :request-sha :response-sha`). Local calls are neither gated nor audited.
-The switch that lets an LLM agent see mutating remote operations only when a workspace enables them is planned (brief
-§4.H), not built.
+The switch that lets an LLM agent see mutating remote operations only when a workspace enables them is
+`workspace.agent`: without it a client that said `hello` as `agent` neither sees nor can use a `confirm` argument or an
+operation flagged `:remote :write`.
 
 **What a remote run persists.** Principle 1 holds for remote calls too: the serialised request and the raw response
 bytes go to `raw/` before anything is decoded, and the step links the same blobs as `request.edn` and
@@ -246,8 +247,8 @@ Operations are `area.verb`: `workspace.*`, `session.*`, `env.*`, `runtime.*`, `s
 `topology.*`, `config.*`, `scenario.*`, `runs.*`, `raw.*`, `repo.*`, `logs.*`, `marker.*`, `aws.*`,
 `terraform.*`, `fake.*`, `provider.*`, `daemon.*`, plus `op.describe`, which returns every operation with its argument
 schema and class. The CLI's help and the IDE's operations form are generated from `op.describe`,
-so an operation exists in both the moment the core has it; an agent's tool list generated the same
-way (§4.H of the brief) is planned, not built. Planned families, not built: `worktree.*`, `pr.*`,
+so an operation exists in both the moment the core has it; an agent's tool list is generated the same
+way (`op.tools`, `dlb tools --json`). Planned families, not built: `worktree.*`, `pr.*`,
 `ci.*` (M5). `provider.*` (list, stop) and the providers' own `<name>.<op>` exist since M6.5. Terraform: `terraform.local` (plan, apply, destroy, override), `terraform.graph`, `terraform.apply-all`, `terraform.locate`, `terraform.drift`. There is no `query.*` family and none is planned: a named query is a one-step `.scn` under the session's `queries/`. Results are
 small by rule: a summary plus paths; full data is on disk.
 
