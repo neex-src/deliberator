@@ -35,6 +35,14 @@ data class ServiceRow(
     val reloadCount: Int?,
     val drift: Boolean,
     val detail: String?,
+    /** The service's runtime container name (`service.list` `container`, M6.4). */
+    val container: String? = null,
+    /** The `log/` target of the environment for this service (`log/service-a`) and what it stands for: a container or a CloudWatch group. */
+    val logTarget: String? = null,
+    val logContainer: String? = null,
+    val logGroup: String? = null,
+    /** In mode `fake`: the HTTP fake that serves it. */
+    val fake: String? = null,
 )
 
 data class EnvRow(val name: String, val kind: String?, val error: String?)
@@ -101,7 +109,8 @@ data class WorkspaceModel(
                 val jdwp = d.int("container-jdwp") ?: d.int("jdwp")
                 ServiceRow(name, d.str("kind"), d.str("mode") ?: "local", d.str("url"), s?.str("status") ?: d.str("status") ?: "?", port, jdwp,
                     port?.let { rt?.portMap?.get(it.toString()) }, jdwp?.let { rt?.portMap?.get(it.toString()) },
-                    s?.int("reload-count"), s?.get("drift")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false, s?.str("detail"))
+                    s?.int("reload-count"), s?.get("drift")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false, s?.str("detail"),
+                    d.str("container"), d.str("log-target"), d.getAsJsonObject("log")?.str("container"), d.getAsJsonObject("log")?.str("cloudwatch"), d.str("fake"))
             }
         }
 

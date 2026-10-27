@@ -105,7 +105,7 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
             DaemonService.getInstance().forget()
             client().call(op, a, onEvent)
         }
-        if (!t.ok) throw DaemonException(t.errorMessage ?: "$op failed", t.errorType ?: "daemon/error", t.error?.get("hint")?.takeIf { it.isJsonPrimitive }?.asString)
+        if (!t.ok) throw DaemonException(t.errorMessage ?: "$op failed", t.errorType ?: "daemon/error", t.error?.get("hint")?.takeIf { it.isJsonPrimitive }?.asString, null, t.error)
         return t
     }
 

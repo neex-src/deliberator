@@ -8,8 +8,11 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 
 /** Every failure of the client/lifecycle layer; [type] is stable (`daemon/unreachable`, `daemon/closed`, ...), [hint] says what to do. */
-class DaemonException(message: String, val type: String, val hint: String? = null, cause: Throwable? = null) :
-    Exception(message, cause)
+class DaemonException(message: String, val type: String, val hint: String? = null, cause: Throwable? = null, val data: JsonObject? = null) :
+    Exception(message, cause) {
+    /** The daemon's `known` list of a typed error (the job names of `ci/no-job`, the repository names of `repo/not-found`): what the argument could have been. */
+    val known: List<String> get() = data?.get("known")?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { e -> e.takeIf { it.isJsonPrimitive }?.asString } ?: emptyList()
+}
 
 /** One event line of a request (`{"id":..,"event":"step.started",...}`). */
 class DaemonEvent(val name: String, val json: JsonObject)

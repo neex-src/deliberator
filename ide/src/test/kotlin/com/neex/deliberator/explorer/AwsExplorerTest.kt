@@ -92,4 +92,19 @@ class AwsExplorerTest : BasePlatformTestCase() {
         val wsDir = Path.of(bg { WorkspaceService.getInstance(project).call("workspace.show").resultObject().get("path").asString })
         assertFalse("no transcript for an apply that was declined", Files.exists(wsDir.resolve("project").resolve("explore").resolve("terraform-apply-local.txt")))
     }
+
+    fun testADriftRowsAddressOpensTheTfFileAtTheDeclaration() {
+        // M6.4: terraform.locate answers file and line; the editor opens there (line 3 = index 2)
+        val root = tf.resolve("loc")
+        Files.createDirectories(root)
+        Files.writeString(root.resolve("main.tf"), "variable \"x\" {\n  default = \"1\"\n}\n\nresource \"aws_sqs_queue\" \"inbox\" {\n  name = \"inbox\"\n}\n")
+        panel.openDeclaration("aws_sqs_queue.inbox", root.toString())
+        wait("the file opens at the declaration") { com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedTextEditor?.virtualFile?.name == "main.tf" }
+        val ed = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedTextEditor!!
+        assertEquals(4, ed.caretModel.logicalPosition.line)
+        // an address nobody declares is the daemon's typed answer, shown
+        panel.openDeclaration("aws_sqs_queue.nope", root.toString())
+        wait("the refusal") { panel.lastError != null }
+        assertTrue(panel.lastError!!, panel.lastError!!.contains("no declaration of aws_sqs_queue.nope"))
+    }
 }
