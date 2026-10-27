@@ -20,6 +20,7 @@ public class Api {
   private static final Logger log = LoggerFactory.getLogger(Api.class);
   private final Publisher publisher;
   private final String apiKey;
+  private int extra = 3;
 
   Api(Publisher publisher, @Value("${app.api-key}") String apiKey) {
     this.publisher = publisher;
@@ -54,7 +55,7 @@ public class Api {
     } catch (ConditionalCheckFailedException e) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "no message " + id);
     }
-    log.info("ACK received id={}", id);
+    log.info("ACK received (jdwp-1793084669344) id={}", id);
     var out = new java.util.LinkedHashMap<String, String>();
     out.put("id", id);
     out.put("status", "ACKED");
