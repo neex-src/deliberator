@@ -1,0 +1,47 @@
+# Chapter 13: the estate's CI/CD pipeline on this machine: act runs the workflow, CodeDeploy deploys, `deployed` shows the result
+#
+# The estate has a workflow (`estate/.github/workflows/deploy.yml`): job `build` builds service A's image, job `deploy` registers a new
+# task definition revision with it and drives a CodeDeploy deployment of the `estate-service-a` service (controller CODE_DEPLOY, the
+# application and group come from the Floci root, chapter 1). `ci.local` runs that job with `act` on the runtime's Podman with the local
+# environment's Floci endpoint, fake keys and region injected, streams the output and keeps it as text under the session's ci/ folder
+# (the raw blob next to the others); a red job would be a result with its log, not an error. Afterwards `deployed.refresh` /
+# `deployed.show` of `local` (chapter 8's view) lists the service's task sets: a new PRIMARY one, on the revision the pipeline registered.
+# The first run pulls the runner image and the Maven image and downloads the dependencies (minutes); later runs reuse the layers.
+# In the IDE: the same operations are in the Operations form (ci.local); the live output is the session's ci/ file.
+# @env local
+
+### shell paths
+# @cwd ..
+# @capture root = out
+pwd | tr -d '\n'
+
+### op deployed.refresh before
+# Where the service stands before the pipeline: one task set at most.
+{"env": "local"}
+
+### op ci.local deploy
+# Both jobs, `build` first (it is `needs` of `deploy`); the keys are in the job's environment, not on act's command line.
+# @timeout 25m
+# @assert $.conclusion == success
+# @assert $.exit == 0
+# @capture log = $.path
+{"repo": "{{root}}", "workflow": "estate/.github/workflows/deploy.yml", "job": "deploy"}
+
+### shell what-the-log-says
+# The deployment ended Succeeded, and the image tag is the commit the workflow ran at.
+# @assert out contains Succeeded
+# @assert out contains estate/service-a:
+grep -E 'deployment d-[a-z0-9]+: Succeeded|Registered|estate/service-a:' "{{log}}" | tail -n 4
+
+### op deployed.refresh after
+{"env": "local"}
+
+### op deployed.show service-a
+# @assert $.count == 1
+# @capture view = $.text
+{"env": "local", "service": "estate-service-a"}
+
+### shell the-task-set
+# The text view of the cache has a last column for services with task sets: a PRIMARY one, on a revision above the service's own.
+# @assert out contains task sets: PRIMARY rev
+grep '^ecs' "{{view}}" | grep 'estate-service-a'
