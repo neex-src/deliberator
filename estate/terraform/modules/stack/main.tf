@@ -61,6 +61,24 @@ variable "region" {
   type    = string
   default = "eu-central-1"
 }
+variable "real_tasks" {
+  type        = bool
+  default     = false
+  description = "The tasks really run on Fargate (real account, switch `run_services` of ../aws): a task role for the AWS calls of the services, the managed execution policy (ECR pull, awslogs), Postgres as a sidecar container of B's task, the awslogs driver as the only log path (the CloudWatch appender of the services is switched off), and an ECS service for B. Off on the local emulator."
+}
+variable "task_cpu" {
+  type    = number
+  default = 256
+}
+variable "task_memory" {
+  type    = number
+  default = 512
+}
+variable "postgres_image" {
+  type        = string
+  default     = "public.ecr.aws/docker/library/postgres:16-alpine"
+  description = "B's database sidecar when real_tasks is on (public ECR, no Docker Hub pull limit)."
+}
 variable "log_retention_days" {
   type    = number
   default = 3
@@ -278,6 +296,8 @@ locals {
   ssm_arn = { for k, p in aws_ssm_parameter.p : k => p.arn }
   common_environment = merge(
     { AWS_REGION = var.region },
+    # the awslogs driver ships stdout; a blank group switches the services' own CloudWatch appender off (common/CloudWatchLogsAppender)
+    var.real_tasks ? { LOGGING_CLOUDWATCH_GROUP = "" } : {},
     var.aws_endpoint_url == "" ? {} : { AWS_ENDPOINT_URL = var.aws_endpoint_url },
     var.container_credentials,
   )
@@ -312,9 +332,10 @@ resource "aws_ecs_task_definition" "service" {
   family                   = "${var.prefix}-service-${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 256
-  memory                   = 512
+  cpu                      = var.task_cpu
+  memory                   = var.task_memory
   execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = var.real_tasks ? aws_iam_role.task[0].arn : null
   container_definitions = templatefile("${path.module}/taskdef.json.tftpl", {
     name        = "service-${each.key}"
     image       = var.service_images[each.key]
@@ -323,6 +344,70 @@ resource "aws_ecs_task_definition" "service" {
     secrets     = each.value.secrets
     log_group   = aws_cloudwatch_log_group.service["service-${each.key}"].name
     region      = var.region
+    sidecar     = var.real_tasks && each.key == "b" ? local.postgres_sidecar : ""
+  })
+}
+
+# --- real tasks: the role the services' AWS SDK calls run as, the execution role's managed policy, B's Postgres sidecar ---
+resource "aws_iam_role" "task" {
+  count = var.real_tasks ? 1 : 0
+  name  = "${var.prefix}-task"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "task" {
+  count = var.real_tasks ? 1 : 0
+  name  = "estate-calls"
+  role  = aws_iam_role.task[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Scan", "dynamodb:Query", "dynamodb:DescribeTable"], Resource = [aws_dynamodb_table.messages.arn] },
+      { Effect = "Allow", Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:SendMessage", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"], Resource = [aws_sqs_queue.inbox.arn, aws_sqs_queue.events.arn] },
+      { Effect = "Allow", Action = ["events:PutEvents"], Resource = [aws_cloudwatch_event_bus.bus.arn] },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "task_execution_managed" {
+  count      = var.real_tasks ? 1 : 0
+  role       = aws_iam_role.task_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+locals {
+  # The database of service B on a real account: a container in B's task (shared localhost, so DB_URL stays jdbc:postgresql://localhost:5432/estate),
+  # initialised from estate/sql/init.sql through an entry point, no RDS and no volume. The password is the same Secrets Manager secret B reads.
+  postgres_sidecar = jsonencode({
+    name       = "postgres"
+    image      = var.postgres_image
+    essential  = true
+    entryPoint = ["sh", "-c"]
+    command    = ["printf '%s\n' \"$INIT_SQL\" > /docker-entrypoint-initdb.d/init.sql && exec docker-entrypoint.sh postgres"]
+    environment = [
+      { name = "POSTGRES_USER", value = var.db_user },
+      { name = "POSTGRES_DB", value = "estate" },
+      { name = "INIT_SQL", value = file("${path.module}/../../../sql/init.sql") },
+    ]
+    secrets = [{ name = "POSTGRES_PASSWORD", valueFrom = aws_secretsmanager_secret.db_password.arn }]
+    healthCheck = {
+      command     = ["CMD-SHELL", "pg_isready -U ${var.db_user} -d estate"]
+      interval    = 5
+      timeout     = 5
+      retries     = 10
+      startPeriod = 10
+    }
+    logConfiguration = {
+      logDriver = "awslogs"
+      options   = { "awslogs-group" = aws_cloudwatch_log_group.service["service-b"].name, "awslogs-region" = var.region, "awslogs-stream-prefix" = "postgres" }
+    }
   })
 }
 

@@ -4,10 +4,17 @@
 # The second half is the chain: HTTP API -> scheduler-create (Lambda) -> a one-off Scheduler schedule -> ecs-scale (Lambda)
 # -> ECS service scaled + SSM parameter put. Checked from the outside: the schedule exists, the service and the parameter
 # change, the schedule deletes itself; the correlation id reaches both Lambdas' logs.
+# Nothing in the file names an environment: the names of the chain (schedule group, parameter, cluster, service, functions) and the
+# waits come from the environment's targets (`scheduler/chain`, `parameter/chain-desired`, `ecs/cluster`, `ecs/service-a`,
+# `function/ecs-scale`, `timing/chain`, `timing/logs`), so it runs on the local estate and on a real account under any prefix.
+# `timing/chain` is how long the chain may take after the schedule's at() time (Floci: seconds; the real Scheduler fired 23 to 47 s
+# late), `timing/logs` how long a log line may need to show up (CloudWatch ingestion).
 # @env local
 # @var corr = {{correlation}}
 # @var msg = ord-{{uuid}}
-# @var param = /estate/chain/desired-count
+# @var param = {{parameter/chain-desired}}
+# @var chain_wait = {{timing/chain}}
+# @var log_wait = {{timing/logs}}
 
 ### sqs send queue/inbox send-order
 # @attr id={{msg}}
@@ -62,13 +69,13 @@ X-Correlation-Id: {{corr}}
 {"Name": "{{param}}", "Value": "1", "Type": "String", "Overwrite": true}
 
 ### aws ecs.UpdateService chain-reset-service
-# @assert $.service.deploymentController.type == CODE_DEPLOY
-{"cluster": "estate", "service": "estate-service-a", "desiredCount": 1}
+# @assert $.service.deploymentController.type matches /^(CODE_DEPLOY|ECS)$/
+{"cluster": "{{ecs/cluster}}", "service": "{{ecs/service-a}}", "desiredCount": 1}
 
 ### http chain-schedule
 # POST /schedule -> scheduler-create creates the one-off schedule, firing in 8 s.
 # @assert status == 202
-# @assert $.group == estate-chain
+# @assert $.group == {{scheduler/chain}}
 # @assert $.schedule == chain-{{msg}}
 # @assert $.input.desiredCount == 3
 # @assert $.input.correlation == {{corr}}
@@ -83,40 +90,42 @@ Content-Type: application/json
 
 ### scheduler get chain-{{msg}} schedule-exists
 # The schedule is there, enabled, aimed at ecs-scale, and deletes itself after it ran.
-# @group estate-chain
+# @group {{scheduler/chain}}
 # @assert $.State == ENABLED
 # @assert $.ScheduleExpression matches /^at\(20/
-# @assert $.Target.Arn matches /:function:estate-ecs-scale$/
+# @assert $.Target.Arn contains :function:{{function/ecs-scale}}
 # @assert $.ActionAfterCompletion == DELETE
 
 ### aws ssm.GetParameter chain-param
 # The config update: ecs-scale put the new value.
-# @until $.Parameter.Value == 3 within 40s
+# @until $.Parameter.Value == 3 within {{chain_wait}}
 {"Name": "{{param}}"}
 
 ### aws ecs.DescribeServices chain-scale
 # The scale: the service now wants 3 tasks.
 # @assert $.services[0].desiredCount == 3
-# @assert $.services[0].deploymentController.type == CODE_DEPLOY
-{"cluster": "estate", "services": ["estate-service-a"]}
+# @assert $.services[0].deploymentController.type matches /^(CODE_DEPLOY|ECS)$/
+{"cluster": "{{ecs/cluster}}", "services": ["{{ecs/service-a}}"]}
 
 ### scheduler list scheduler/chain schedule-gone
 # The one-off schedule deleted itself after firing.
-# @until count == 0 within 30s
+# @until count == 0 within {{chain_wait}}
 
 ### logs log/service-a service-a-log
 # @filter {{corr}}
-# @for 3s
+# @for {{log_wait}}
 # @assert lines >= 2
 
 ### logs log/service-b service-b-log
 # @filter {{corr}}
-# @for 3s
+# @for {{log_wait}}
 # @assert lines >= 1
 
 ### logs log/logger lambda-log
+# Armed right before the HTTP API call that reaches the logger (`@from api-log`): the services' own waits before it can be long.
+# @from api-log
 # @filter {{corr}}
-# @for 8s
+# @for {{log_wait}}
 # @assert lines >= 1
 
 ### logs log/scheduler-create scheduler-create-log
@@ -124,12 +133,12 @@ Content-Type: application/json
 # the Lambda runs when chain-schedule does.
 # @from chain-reset-param
 # @filter {{corr}}
-# @for 20s
+# @for {{chain_wait}}
 # @assert lines >= 1
 
 ### logs log/ecs-scale ecs-scale-log
 # Armed right before the chain starts like the one above; the schedule fires about 8 s into the chain, so the window is longer.
 # @from chain-reset-param
 # @filter {{corr}}
-# @for 25s
+# @for {{chain_wait}}
 # @assert lines >= 1

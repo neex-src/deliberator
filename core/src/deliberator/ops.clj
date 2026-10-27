@@ -1277,7 +1277,7 @@
                                     :env {:type :string :doc "environment name; default the scenario's @env, else local"}
                                     :session {:type :string :doc "session key; default the current session"}
                                     :steps {:type :ints :doc "run only these step numbers"}
-                                    :confirm {:type :string :doc "confirmation token from a confirm-required error"}
+                                    :confirm {:type :string :doc "confirmation token from a confirm-required error; several tokens, comma separated, approve several mutating steps in one run (use with continue: the tokens are bound to the exact requests)"}
                                     :continue {:type :bool :doc "start from the variables and captures of the latest run of this file in the session (step by step)"})}
    "scenario.cancel" {:fn scenario-cancel :class :mutate
                       :doc "Cancels a running scenario by run id; the scenario.run request ends with status cancelled."

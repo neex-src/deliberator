@@ -64,3 +64,28 @@
        (finally
          (when-let [f @stop] (f))
          (podman/remove! c id))))))
+
+(deftest a-cloudwatch-tail-waits-out-throttling-and-dropped-connections
+  ;; B34: on real CloudWatch five tails polling once a second got `Rate exceeded` / `header parser received no bytes`, and the first
+  ;; such error ended the tail with an ERROR 19 s into a 150 s window. Here the first three polls fail like that, the fourth answers.
+  (let [calls (atom 0)
+        q (LinkedBlockingQueue.)
+        busy (ex-info "FilterLogEvents on /g: Rate exceeded" {:type :logs/cloudwatch :aws {:type :aws/error :category :busy :code "ThrottlingException"}})
+        dropped (ex-info "FilterLogEvents on /g: x" {:type :logs/cloudwatch :aws {:type :aws/error :category :fault}})
+        refused (ex-info "FilterLogEvents on /g: denied" {:type :logs/cloudwatch :aws {:type :aws/error :category :forbidden :code "AccessDeniedException"}})
+        events [{:eventId "e1" :timestamp 1000 :message "order 7 stored"}]]
+    (testing "throttled and dropped polls are waited out, the line still arrives"
+      (with-redefs [logs/*poll-backoff-ms* [5 5]
+                    logs/cw-events (fn [& _] (case (swap! calls inc) 1 (throw busy) 2 (throw dropped) 3 (throw busy) events))]
+        (let [stop (logs/cw-source {} "/g" (Instant/ofEpochMilli 0) nil q)]
+          (try (is (= ["order 7 stored"] (texts (drain-for q 600))))
+               (finally (stop))))
+        (is (>= @calls 4))))
+    (testing "a refusal (a policy, not a glitch) still ends the tail with its error"
+      (with-redefs [logs/cw-events (fn [& _] (throw refused))]
+        (let [stop (logs/cw-source {} "/g" (Instant/ofEpochMilli 0) nil (LinkedBlockingQueue.))]
+          (try (let [q2 (LinkedBlockingQueue.)
+                     stop2 (logs/cw-source {} "/g" (Instant/ofEpochMilli 0) nil q2)]
+                 (try (is (instance? Throwable (.poll q2 2 TimeUnit/SECONDS)))
+                      (finally (stop2))))
+               (finally (stop))))))))

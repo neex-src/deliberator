@@ -26,6 +26,7 @@ output "api_id" { value = module.stack.api_id }
 output "chain_parameter" { value = module.stack.chain_parameter }
 output "schedule_group" { value = module.stack.schedule_group }
 output "ecs_service" { value = module.stack.ecs_service }
+output "ecs_cluster" { value = aws_ecs_cluster.estate.name }
 output "scheduler_create_function" { value = module.stack.scheduler_create_function }
 output "ecs_scale_function" { value = module.stack.ecs_scale_function }
 output "table" { value = module.stack.table }

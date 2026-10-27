@@ -3,6 +3,9 @@
     "name": ${jsonencode(name)},
     "image": ${jsonencode(image)},
     "essential": true,
+%{ if sidecar != "" ~}
+    "dependsOn": [{ "containerName": "postgres", "condition": "HEALTHY" }],
+%{ endif ~}
     "portMappings": [{ "containerPort": ${port} }],
     "environment": [
 %{ for k, v in environment ~}
@@ -19,4 +22,7 @@
       "options": { "awslogs-group": ${jsonencode(log_group)}, "awslogs-region": ${jsonencode(region)}, "awslogs-stream-prefix": "ecs" }
     }
   }
+%{ if sidecar != "" ~}
+  ,${sidecar}
+%{ endif ~}
 ]

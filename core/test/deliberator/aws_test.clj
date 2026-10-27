@@ -228,6 +228,36 @@
           (is (= :confirm-required (:type (aws/invoke! c e :ssm :SomethingNew {})))))
         (confirmed! c e :ssm :DeleteParameter {:Name p})))))
 
+(deftest a-dropped-keep-alive-connection-is-a-transient-io-error-for-reads
+  ;; B34: seen on real CloudWatch: `java.io.IOException: HTTP/1.1 header parser received no bytes` ended a log tail
+  (let [transient? #'aws/transient-io?
+        anomaly (fn [t] {:cognitect.anomalies/category :cognitect.anomalies/fault :cognitect.aws.client.impl/throwable t})]
+    (is (transient? (anomaly (java.io.IOException. "HTTP/1.1 header parser received no bytes"))))
+    (is (transient? (anomaly (java.net.SocketException. "Connection reset"))))
+    (is (transient? (anomaly (ex-info "x" {} (java.io.IOException. "wrapped")))) "found in the cause chain")
+    (is (not (transient? (anomaly (java.net.ConnectException. "refused")))) "a refused connect is a fact, not a glitch")
+    (is (not (transient? (anomaly (java.net.UnknownHostException. "nope")))))
+    (is (not (transient? {:cognitect.anomalies/category :cognitect.anomalies/forbidden})) "no throwable, no retry")))
+
+(deftest-floci one-confirm-can-carry-the-tokens-of-several-requests
+  ;; B33: `dlb run order.scn --continue --confirm T1,T8,T9` approves the three mutating steps of a run at once
+  (with-temp-home
+    (with-profile
+      (let [e (writable)
+            c (assoc ctx :session (:key (session/start! "w" "T-1")))
+            p1 (str "/dlbtest/" (uniq "one")) p2 (str "/dlbtest/" (uniq "two"))
+            req (fn [p] {:Name p :Value "on" :Type "String"})
+            t1 (:token (aws/invoke! c e :ssm :PutParameter (req p1)))
+            t2 (:token (aws/invoke! c e :ssm :PutParameter (req p2)))
+            both (str t2 "," t1)]
+        (testing "the token of this request is found among the others and consumed alone"
+          (is (not (aws/error? (aws/invoke! (assoc c :confirm both) e :ssm :PutParameter (req p1))))))
+        (testing "the other token is still live for its own request, the used one is gone"
+          (is (not (aws/error? (aws/invoke! (assoc c :confirm both) e :ssm :PutParameter (req p2)))))
+          (is (= :confirmation (:category (aws/invoke! (assoc c :confirm both) e :ssm :PutParameter (req p1))))))
+        (confirmed! c e :ssm :DeleteParameter {:Name p1})
+        (confirmed! c e :ssm :DeleteParameter {:Name p2})))))
+
 (deftest-floci tokens-expire-after-ten-minutes
   (with-temp-home
     (with-profile
