@@ -91,17 +91,19 @@ class ServiceOps(private val project: Project) {
     fun adopt(path: String): JsonObject = refreshed { svc.call("service.adopt", JsonObject().apply { addProperty("path", path) }).resultObject() }
 
     /** `topology.set` in the selected environment. [mode] is local, external (with [url]) or off. */
-    fun setTopology(name: String, mode: String, url: String? = null, containerUrl: String? = null, logContainer: String? = null): JsonObject =
+    fun setTopology(name: String, mode: String, url: String? = null, containerUrl: String? = null, logContainer: String? = null, fake: String? = null): JsonObject =
         refreshed {
             svc.call("topology.set", args(name, "env" to svc.selectedEnv, "mode" to mode, "url" to url?.takeIf { it.isNotBlank() },
-                "container-url" to containerUrl?.takeIf { it.isNotBlank() }, "log-container" to logContainer?.takeIf { it.isNotBlank() })).resultObject()
+                "container-url" to containerUrl?.takeIf { it.isNotBlank() }, "log-container" to logContainer?.takeIf { it.isNotBlank() },
+                "fake" to fake?.takeIf { it.isNotBlank() })).resultObject()
         }
 
     /** `runtime.ensure`: what the topology changed (stopped / recreated containers) takes effect. */
     fun ensure(onEvent: (DaemonEvent) -> Unit = {}) { svc.runtimeUp(onEvent) }
 
-    /** One-shot `logs.fetch` of the service's container log; the answer's `path` is the file the daemon wrote. */
-    fun fetchLog(name: String): JsonObject = LogService.getInstance(project).fetchNow(FetchRequest(logTarget(name)))
+    /** One-shot `logs.fetch` of the service's `log/` target as `service.list` names it (M6.4; the convention `log/service-<name>` when the row has none); `path` is the file the daemon wrote. */
+    fun fetchLog(name: String): JsonObject =
+        LogService.getInstance(project).fetchNow(FetchRequest(svc.model.services.firstOrNull { it.name == name }?.logTarget ?: logTarget(name)))
 
     /**
      * `service.reload`, rendered. Every `service.reload.step` and the end go to [out] as lines as they arrive; the outcome carries the same lines.

@@ -13,8 +13,8 @@
 (def test-root "ide/src/test/kotlin/com/neex/deliberator")
 
 (def groups
-  {"a" ["audit" "config" "daemon" "explorer" "logs" "scn"]
-   "b" ["environments" "repo" "run" "services" "testing" "ui" "workspace"]})
+  {"a" ["audit" "ci" "config" "daemon" "explorer" "logs" "scn"]
+   "b" ["environments" "repo" "run" "services" "testing" "ui" "work" "workspace"]})
 
 (defn packages
   "The test packages on disk: the directories under `test-root`."

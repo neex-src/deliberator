@@ -149,6 +149,37 @@ class ServicesTest : BasePlatformTestCase() {
         assertEquals("ok", p.selected()?.name)
     }
 
+    fun testTheBuildBeforeADebugSessionCanBeSwitchedOff() {
+        // B19: the IDE builds once before the session exists; the switch is what the walk used to reproduce the bug (the proof is in DECISIONS)
+        assertTrue(ServiceDebugRunner.baselineBuild)
+        ServiceDebugRunner.baselineBuild = false
+        try {
+            assertFalse(bg { ServiceDebugRunner.buildBaseline(project) })
+        } finally {
+            ServiceDebugRunner.baselineBuild = true
+        }
+    }
+
+    fun testTheFakesTableAndTheRecordingsOfTheSelectedFake() {
+        for (id in listOf("deliberator.fake.record", "deliberator.fake.replay", "deliberator.fake.stop")) assertNotNull(id, ActionManager.getInstance().getAction(id))
+        val p = panel()
+        val rows = FakeOps.parse(JsonParser.parseString("""[
+            {"name":"a","mode":"replay","port":18080,"upstream":"http://x:8081","recording":"/s/S1/fakes/a/20261027-2","exchanges":3,"serving":"replay","attached":[{"env":"local","service":"a"}],
+             "recordings":["20261027-1","20261027-2"]},
+            {"name":"b","mode":"stopped","recordings":[]}]"""))
+        p.fakes.render(rows)
+        assertEquals(listOf(listOf("a", "replay", "replay", "http://x:8081", "18080", "a"), listOf("b", "stopped", "", "", "", "")),
+            (0 until p.fakes.table.rowCount).map { r -> (0 until p.fakes.table.columnCount).map { c -> p.fakes.table.getValueAt(r, c).toString() } })
+        assertEquals(emptyList<String>(), p.fakes.recordingLines())
+        p.fakes.table.setRowSelectionInterval(0, 0)
+        // newest first, the one in use marked
+        assertEquals(listOf("20261027-2  (in use, 3 exchanges)", "20261027-1"), p.fakes.recordingLines())
+        // a fake none declared: the daemon answers an empty list and the tab shows none
+        bg { FakeOps.getInstance(project).list() }
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        assertEquals(0, p.fakes.table.rowCount)
+    }
+
     fun testTheTabFollowsAWorkspaceWithoutServices() {
         bg { svc.refreshNow() }
         val p = panel()

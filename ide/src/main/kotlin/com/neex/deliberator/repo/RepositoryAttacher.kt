@@ -23,7 +23,8 @@ import java.nio.file.Path
  */
 @Service(Service.Level.PROJECT)
 class RepositoryAttacher(private val project: Project) {
-    data class Repo(val name: String, val path: String, val kind: String, val attachedAt: String?)
+    /** [bare]: a bare clone of `repo.clone` (no work tree: it cannot be a module or a project; `worktree.start` makes one). [url] is where a clone came from. */
+    data class Repo(val name: String, val path: String, val kind: String, val attachedAt: String?, val bare: Boolean = false, val url: String? = null)
 
     /** [note] is set when there was nothing to do in the IDE ("already part of module X"). */
     data class Outcome(val repo: Repo, val note: String?)
@@ -34,7 +35,12 @@ class RepositoryAttacher(private val project: Project) {
 
     private val ws get() = WorkspaceService.getInstance(project)
 
-    fun list(): List<Repo> = parse(ws.call("repo.list").result)
+    /**
+     * The repositories the project may open: the checkouts with a work tree (`repo.list {bare false}`, B27). The bare clones of `repo.clone`
+     * are only listed with [includeBare] (the Start Working chooser): attaching one as a module or project is what B27 was.
+     */
+    fun list(includeBare: Boolean = false): List<Repo> =
+        parse(ws.call("repo.list", JsonObject().apply { if (!includeBare) addProperty("bare", false) }).result)
 
     fun attach(path: String, kind: String? = null): Outcome {
         val before = list().map { it.name }.toSet()
@@ -118,7 +124,8 @@ class RepositoryAttacher(private val project: Project) {
 
         private fun s(o: JsonObject, k: String) = o.get(k)?.takeIf { it.isJsonPrimitive }?.asString?.removePrefix(":")
 
-        fun parseOne(o: JsonObject) = Repo(s(o, "name") ?: "?", s(o, "path") ?: "", s(o, "kind") ?: "plain", s(o, "attached-at"))
+        fun parseOne(o: JsonObject) = Repo(s(o, "name") ?: "?", s(o, "path") ?: "", s(o, "kind") ?: "plain", s(o, "attached-at"),
+            o.get("bare")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false, s(o, "url"))
 
         fun parse(e: JsonElement?): List<Repo> =
             if (e != null && e.isJsonArray) e.asJsonArray.filter { it.isJsonObject }.map { parseOne(it.asJsonObject) } else emptyList()

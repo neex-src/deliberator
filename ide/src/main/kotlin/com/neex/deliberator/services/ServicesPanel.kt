@@ -27,14 +27,19 @@ class ServicesPanel(private val project: Project) : JPanel(BorderLayout()), UiDa
     val table = JBTable(tableModel).apply { setShowGrid(false); setSelectionMode(ListSelectionModel.SINGLE_SELECTION) }
     private val hint = JBLabel()
     private var rows: List<ServiceRow> = emptyList()
+    /** The fakes below the services (M6.6): `fake.list` and the recordings of the selected fake. */
+    lateinit var fakes: FakesPanel; private set
 
     init {
         val group = ActionManager.getInstance().getAction("deliberator.services") as DefaultActionGroup
         val bar = ActionManager.getInstance().createActionToolbar(ActionPlaces.TOOLWINDOW_TOOLBAR_BAR, group, true)
         bar.targetComponent = this
         add(JPanel(BorderLayout()).apply { add(bar.component, BorderLayout.NORTH); add(hint, BorderLayout.SOUTH) }, BorderLayout.NORTH)
-        add(JBScrollPane(table), BorderLayout.CENTER)
+        fakes = FakesPanel(project)
+        add(JPanel(java.awt.GridLayout(2, 1)).apply { add(JBScrollPane(table)); add(fakes) }, BorderLayout.CENTER)
         PopupHandler.installPopupMenu(table, group, ActionPlaces.POPUP)
+        PopupHandler.installPopupMenu(fakes.table, group, ActionPlaces.POPUP)
+        PopupHandler.installPopupMenu(fakes.recordings, group, ActionPlaces.POPUP)
         svc.addListener(this, ::render)
         render(svc.model)
         // the Workspace tab's own tick runs only while that tab shows: this tab keeps itself current (every 15 s while showing), demo-m3 §9 item 1
@@ -44,11 +49,18 @@ class ServicesPanel(private val project: Project) : JPanel(BorderLayout()), UiDa
         com.intellij.openapi.util.Disposer.register(this) { timer.stop() }
     }
 
+    /** Selects the row of service [name] (the explorer's link to its container). EDT. */
+    fun select(name: String) { rows.indexOfFirst { it.name == name }.takeIf { it >= 0 }?.let { table.setRowSelectionInterval(it, it) } }
+
     /** The selected row (the data of the actions). */
     fun selected(): ServiceRow? = table.selectedRow.takeIf { it >= 0 && it < rows.size }?.let { rows[it] }
 
     override fun uiDataSnapshot(sink: com.intellij.openapi.actionSystem.DataSink) {
         sink[SERVICE] = selected()
+        if (this::fakes.isInitialized) {
+            sink[FAKE] = fakes.selected()
+            sink[RECORDING] = fakes.recordings.selectedValue?.substringBefore("  ")
+        }
     }
 
     fun render(m: WorkspaceModel) {
@@ -61,16 +73,22 @@ class ServicesPanel(private val project: Project) : JPanel(BorderLayout()), UiDa
         else if (rows.isEmpty()) "No services in ${m.ws}: adopt one (Adopt Service...)" else "environment ${m.selectedEnv}"
     }
 
-    override fun dispose() {}
+    override fun dispose() { if (this::fakes.isInitialized) Disposer.dispose(fakes) }
 
     companion object {
         val SERVICE: DataKey<ServiceRow> = DataKey.create("deliberator.service.row")
+        val FAKE: DataKey<FakeRow> = DataKey.create("deliberator.service.fake")
+        val RECORDING: DataKey<String> = DataKey.create("deliberator.service.recording")
         val COLUMNS = arrayOf("Name", "Mode", "Status", "Port", "JDWP", "Reloads")
 
         /** One table row: host ports shown as `host:container` where the container publishes them. */
         fun cells(r: ServiceRow): Array<Any> = arrayOf(
             r.name,
-            when (r.mode) { "external" -> "external" + (r.url?.let { " ($it)" } ?: ""); else -> r.mode },
+            when (r.mode) {
+                "external" -> "external" + (r.url?.let { " ($it)" } ?: "")
+                "fake" -> "fake" + (r.fake?.let { " ($it)" } ?: "")
+                else -> r.mode
+            },
             r.status + (if (r.drift) " (drift)" else ""),
             port(r.hostPort, r.port),
             port(r.hostJdwp, r.jdwp),

@@ -46,6 +46,20 @@ object Ui {
         return true
     }
 
+    /**
+     * [openFile] for any thread: the path is resolved in the VFS (a refresh, which is a slow operation) on a pooled thread, the editor opens on the EDT.
+     * [done] gets false when there is no such file (called on the EDT).
+     */
+    fun openFileLater(project: Project, path: String, line0: Int = 0, done: (Boolean) -> Unit = {}) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(Path.of(path))
+            ApplicationManager.getApplication().invokeLater({
+                if (vf != null) openEditor(project, vf, line0)
+                done(vf != null)
+            }, com.intellij.openapi.application.ModalityState.nonModal())
+        }
+    }
+
     /** Opens [vf] with the caret on 0-based [line0] and answers its text editor (null when the file has none). EDT. */
     fun openEditor(project: Project, vf: VirtualFile, line0: Int = 0): Editor? {
         OpenFileDescriptor(project, vf, maxOf(0, line0), 0).navigate(true)

@@ -46,7 +46,7 @@ import javax.swing.tree.DefaultTreeModel
  * Every file the tab produces (the Terraform transcript, the drift report, the scenario) is written by the daemon (`explore.write`,
  * which names the place); the tab opens the path it gets. Every daemon call is off the EDT.
  */
-class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
+class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), Disposable, com.intellij.openapi.actionSystem.UiDataProvider {
     private val root = DefaultMutableTreeNode("environment")
     private val model = DefaultTreeModel(root)
     private val tree = Tree(model)
@@ -54,6 +54,8 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     private val envBox = JComboBox<String>()
     private var loadingEnvs = false
     @Volatile private var drift: Drift? = null
+    /** The Terraform root of the last drift comparison: where a drift row's address is looked up (`terraform.locate`). */
+    @Volatile private var driftRoot: String? = null
 
     /** The last failure of a button (the text of its balloon), for tests. */
     @Volatile internal var lastError: String? = null; private set
@@ -65,7 +67,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     }
 
     internal class KindNode(val kind: String, val title: String, val count: Int) { override fun toString() = "$title ($count)" }
-    internal class ResNode(val kind: String, val r: LiveResource, val undeclared: Boolean = false) { override fun toString() = r.name }
+    internal class ResNode(val kind: String, val r: LiveResource, val undeclared: Boolean = false, val link: ServiceLink? = null) { override fun toString() = r.name }
     internal class MissingNode(val name: String, val address: String?) { override fun toString() = name }
 
     init {
@@ -77,6 +79,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                     is ResNode -> {
                         append(u.r.name); u.r.ref?.takeIf { u.kind == "ssm" }?.let { append("  $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
                         if (u.undeclared) append("   not in Terraform", SimpleTextAttributes.ERROR_ATTRIBUTES)
+                        u.link?.let { append("   -> ${it.text()}", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
                     }
                     is MissingNode -> { append(u.name, SimpleTextAttributes(SimpleTextAttributes.STYLE_STRIKEOUT, java.awt.Color.GRAY)); append("   declared, not in the environment" + (u.address?.let { "  ($it)" } ?: ""), SimpleTextAttributes.ERROR_ATTRIBUTES) }
                     else -> append(u.toString())
@@ -86,6 +89,8 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) { if (e.clickCount == 2) open() }
         })
+        com.intellij.ui.PopupHandler.installPopupMenu(tree, com.intellij.openapi.actionSystem.ActionManager.getInstance().getAction("deliberator.explorer") as com.intellij.openapi.actionSystem.DefaultActionGroup,
+            com.intellij.openapi.actionSystem.ActionPlaces.POPUP)
         tree.addKeyListener(object : KeyAdapter() {
             override fun keyPressed(e: KeyEvent) { if (e.keyCode == KeyEvent.VK_ENTER) open() }
         })
@@ -103,6 +108,37 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     }
 
     private fun env() = WorkspaceService.getInstance(project).selectedEnv
+
+    /** The row's service (M6.4) and, for a drift row, its address: the data of the popup actions. */
+    override fun uiDataSnapshot(sink: com.intellij.openapi.actionSystem.DataSink) {
+        val u = (tree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject
+        sink[ServiceLinks.LINK] = (u as? ResNode)?.link
+        sink[DRIFT_ADDRESS] = (u as? MissingNode)?.address
+        sink[EXPLORER] = this
+    }
+
+    /**
+     * `terraform.locate` of a drift row's [address] in the root of the last comparison, and the `.tf` file opened with the caret on the declaration (M6.4).
+     * A module from a registry has no local source: the daemon answers the `module` block's own line (`module-only`) and says so.
+     */
+    fun openDeclaration(address: String, inRoot: String? = null) {
+        val root = inRoot ?: driftRoot ?: com.intellij.ide.util.PropertiesComponent.getInstance(project).getValue("deliberator.tf.dir")
+        if (root == null) { Ui.notify(project, "Terraform", "Compare a Terraform root first (Terraform drift...): its address is looked up there.", NotificationType.WARNING); return }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val r = WorkspaceService.getInstance(project).call("terraform.locate", JsonObject().apply { addProperty("root", root); addProperty("address", address) }).resultObject()
+                val file = r.get("file")?.asString ?: throw DaemonException("terraform.locate returned no file", "tf/no-file")
+                val line = r.get("line")?.takeIf { it.isJsonPrimitive }?.asInt ?: 1
+                val moduleOnly = r.get("module-only")?.takeIf { it.isJsonPrimitive }?.asBoolean == true
+                Ui.openFileLater(project, file, line - 1) { ok ->
+                    if (!ok) Ui.notify(project, "Terraform", "Cannot open $file", NotificationType.WARNING)
+                    else status.text = "$address: ${Path.of(file).fileName}:$line" + if (moduleOnly) "  (the module block: its source is not local)" else ""
+                }
+            } catch (e: Exception) {
+                failed("Terraform locate", "locate", e)
+            }
+        }
+    }
 
     /** The status line (tests). */
     internal fun statusText(): String = status.text
@@ -175,7 +211,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                 AwsResources.getInstance().invalidate()
                 ApplicationManager.getApplication().invokeLater({
                     status.text = "terraform $action: $summary"
-                    Ui.openFile(project, path)
+                    Ui.openFileLater(project, path)
                     if (action == "apply") runDrift(root) else refresh()
                 }, ModalityState.nonModal())
             } catch (e: Exception) {
@@ -198,6 +234,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                     JsonObject().apply { addProperty("env", env()); addProperty("dir", dir) }).result!!.asJsonObject
                 val d = Drift.parse(r)
                 drift = d
+                driftRoot = dir
                 val report = writeText("drift-${env()}.txt", d.text())
                 // the tree shows what exists now (an apply just changed it, the cache was dropped): fetched here, off the EDT, not read from a cache that is empty
                 val res = AwsResources.getInstance().fetchNow(project)
@@ -205,7 +242,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                     render(res)
                     status.text = "${env()}: ${d.matching}/${d.declared} declared present, ${d.missing.size} missing, ${d.undeclared.size} undeclared"
                 }, ModalityState.any())
-                ApplicationManager.getApplication().invokeLater({ Ui.openFile(project, report) }, ModalityState.nonModal())
+                Ui.openFileLater(project, report)
             } catch (e: Exception) {
                 failed("Terraform drift", "drift", e)
             }
@@ -233,7 +270,8 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
             if (items.isEmpty()) continue
             total += items.size
             DefaultMutableTreeNode(KindNode(k.kind, k.title, items.size)).also { n ->
-                items.forEach { n.add(DefaultMutableTreeNode(ResNode(k.kind, it, dr?.isUndeclared(k.kind, it.name) == true))) }
+                val services = WorkspaceService.getInstance(project).model.services
+                items.forEach { n.add(DefaultMutableTreeNode(ResNode(k.kind, it, dr?.isUndeclared(k.kind, it.name) == true, ServiceLinks.forResource(k.kind, it.name, services)))) }
                 dr?.missing?.filter { it.kind == k.kind }?.forEach { n.add(DefaultMutableTreeNode(MissingNode(it.name, it.address))) }
                 root.add(n)
             }
@@ -249,7 +287,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
         val kind = (kn.userObject as KindNode).kind
         (0 until kn.childCount).map {
             when (val u = (kn.getChildAt(it) as DefaultMutableTreeNode).userObject) {
-                is ResNode -> "$kind: ${u.r.name}" + if (u.undeclared) " [undeclared]" else ""
+                is ResNode -> "$kind: ${u.r.name}" + (if (u.undeclared) " [undeclared]" else "") + (u.link?.let { " -> ${it.text()}" } ?: "")
                 is MissingNode -> "$kind: ${u.name} [missing]"
                 else -> "$kind: $u"
             }
@@ -257,12 +295,19 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     }
 
     private fun open() {
-        val n = (tree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject as? ResNode ?: return
+        val sel = (tree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject
+        if (sel is MissingNode) { sel.address?.let(::openDeclaration); return }
+        val n = sel as? ResNode ?: return
         val step = ExplorerSteps.step(n.kind, n.r) ?: return
         openStep(env(), step)
     }
 
     override fun dispose() {}
+
+    companion object {
+        val DRIFT_ADDRESS: com.intellij.openapi.actionSystem.DataKey<String> = com.intellij.openapi.actionSystem.DataKey.create("deliberator.explorer.driftAddress")
+        val EXPLORER: com.intellij.openapi.actionSystem.DataKey<AwsExplorerPanel> = com.intellij.openapi.actionSystem.DataKey.create("deliberator.explorer.panel")
+    }
 
     /**
      * Appends [step] to `explore-<env>.scn` of the workspace's project (created with a header by the daemon when missing), opens it, runs

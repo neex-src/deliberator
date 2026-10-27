@@ -67,9 +67,9 @@ object ServiceActions {
     }
 
     /** `topology.set` in the selected environment, then the offer to apply it (`runtime.ensure`). */
-    fun setTopology(project: Project, name: String, mode: String, url: String? = null, containerUrl: String? = null, logContainer: String? = null) {
-        ServiceOps.getInstance(project).setTopology(name, mode, url, containerUrl, logContainer)
-        offerEnsure(project, "$name is now ${if (mode == "external") "external ($url)" else mode} in ${WorkspaceService.getInstance(project).selectedEnv}")
+    fun setTopology(project: Project, name: String, mode: String, url: String? = null, containerUrl: String? = null, logContainer: String? = null, fake: String? = null) {
+        ServiceOps.getInstance(project).setTopology(name, mode, url, containerUrl, logContainer, fake)
+        offerEnsure(project, "$name is now ${if (mode == "external") "external ($url)" else if (mode == "fake") "served by the fake ${fake ?: name}" else mode} in ${WorkspaceService.getInstance(project).selectedEnv}")
     }
 
     /** A balloon with an "Apply now" action; nothing runs unasked. */
@@ -211,7 +211,7 @@ class ServiceAdoptAction : AnAction(), DumbAware {
 /** local / external... / off for the row in the selected environment. */
 class TopologySetAction : ServiceAction("Topology") {
     override fun perform(project: Project, row: ServiceRow) {
-        val items = listOf("local", "external...", "off")
+        val items = listOf("local", "external...", "fake...", "off")
         ApplicationManager.getApplication().invokeLater {
             JBPopupFactory.getInstance().createPopupChooserBuilder(items).setTitle("${row.name}: topology in ${WorkspaceService.getInstance(project).selectedEnv} (now ${row.mode})")
                 .setItemChosenCallback { choice ->
@@ -220,6 +220,7 @@ class TopologySetAction : ServiceAction("Topology") {
                             val d = ExternalDialog(project, row.name)
                             if (d.showAndGet()) { val (u, c, l) = d.answer(); run(project, "topology ${row.name}") { ServiceActions.setTopology(project, row.name, "external", u, c, l) } }
                         }
+                        "fake..." -> FakeActions.attach(project, row)
                         else -> run(project, "topology ${row.name}") { ServiceActions.setTopology(project, row.name, choice) }
                     }
                 }.createPopup().showCenteredInCurrentWindow(project)

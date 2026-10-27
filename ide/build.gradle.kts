@@ -132,6 +132,8 @@ fun Test.configureDeliberatorTests() {
     systemProperty("idea.suppressed.plugins.id", "com.intellij.modules.ultimate")
     systemProperty("deliberator.jar", daemonJar.asFile.absolutePath)
     systemProperty("deliberator.test.homes", layout.buildDirectory.dir("th").get().asFile.absolutePath)
+    // the tests that run containers (a CI job under act, the HTTP fake) are opt-in: `DLB_IDE_CONTAINERS=1`, under .scratch/runtime.lock (ContainerFlowsTest)
+    systemProperty("deliberator.test.containers", System.getenv("DLB_IDE_CONTAINERS") ?: "")
     // backstop (decision 36): a daemon the service starts under test exits on its own after a minute idle
     systemProperty("deliberator.daemon.args", "--idle-minutes 1")
 
