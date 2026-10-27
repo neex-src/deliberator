@@ -190,7 +190,7 @@ class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), 
         Ui.background(project, "Deliberator: remove environment ${e.name}", { EnvironmentOps.remove(WorkspaceService.getInstance(project), e.name) }, { reload() })
     }
 
-    /** Opens `environments/<name>.edn` (the path comes from `env.describe`) in the editor: targets are added by writing them down. */
+    /** Opens the environment's record file (`env.describe` names the path) in the editor: targets are added by writing them down. */
     fun editRecord() {
         val e = selected() ?: return
         var vf: com.intellij.openapi.vfs.VirtualFile? = null
