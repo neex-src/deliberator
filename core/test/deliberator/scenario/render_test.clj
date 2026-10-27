@@ -105,3 +105,43 @@
          txt (slurp (get-in res [:paths :result]))]
      (is (re-find #"(?s)\A### fake ok n1 · ok · \d+ ms\none\n\n### fake n2 · ok · \d+ ms\nok\n\nRUN ok steps 2 failed 0\n\z" txt))
      (is (not (str/includes? txt "FAILED")) "no FAILED line when nothing failed"))))
+
+;; B26: a linear-space diff, any size, any divergence --------------------------------------------
+
+(defn- lcs-len [a b]
+  (let [a (vec a) b (vec b)]
+    (peek (reduce (fn [prev x]
+                    (reduce (fn [row j]
+                              (conj row (if (= x (b j)) (inc (prev j)) (max (peek row) (prev (inc j))))))
+                            [0] (range (count b))))
+                  (vec (repeat (inc (count b)) 0)) a))))
+
+(defn- ops [a b] (#'render/edits a b))
+
+(deftest edits-are-a-shortest-script
+  (let [rnd (java.util.Random. 7)]
+    (dotimes [_ 200]
+      (let [mk #(vec (repeatedly (.nextInt rnd 14) (fn [] (str (.nextInt rnd 4)))))
+            a (mk) b (mk)
+            es (ops a b)]
+        (is (= a (vec (for [[op l] es :when (not= op :ins)] l))))
+        (is (= b (vec (for [[op l] es :when (not= op :del)] l))))
+        (is (= (lcs-len a b) (count (filter #(= :eq (first %)) es))) (pr-str a b))))))
+
+(deftest large-divergent-logs-keep-their-common-lines
+  (testing "B26: 7000 x 7000 lines with nothing in common between a common head and tail is delete-all/insert-all and nothing else"
+    (let [head (mapv #(str "head " %) (range 500)) tail (mapv #(str "tail " %) (range 500))
+          a (vec (concat head (map #(str "a " %) (range 7000)) tail))
+          b (vec (concat head (map #(str "b " %) (range 7000)) tail))
+          es (ops a b)]
+      (is (= 1000 (count (filter #(= :eq (first %)) es))))
+      (is (= 7000 (count (filter #(= :del (first %)) es))))))
+  (testing "B26: lines shared inside the divergent middle are matched (the old table fell back to delete-all/insert-all above 6300 x 6300)"
+    (let [mid-a (mapv #(if (zero? (mod % 7)) (str "same " %) (str "a " %)) (range 8000))
+          mid-b (mapv #(if (zero? (mod % 7)) (str "same " %) (str "b " %)) (range 8000))
+          t0 (System/nanoTime)
+          es (ops mid-a mid-b)
+          ms (quot (- (System/nanoTime) t0) 1000000)
+          shared (inc (quot 7999 7))]
+      (is (= shared (count (filter #(= :eq (first %)) es))))
+      (is (< ms 20000) (str ms " ms")))))

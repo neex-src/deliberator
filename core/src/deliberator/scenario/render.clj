@@ -139,35 +139,99 @@
 
 ;; ---------------------------------------------------------------- diff
 
+(defn- intern-lines
+  "Two line vectors -> two int arrays of the same ids (equal lines, equal ids)."
+  [a b]
+  (let [m (java.util.HashMap.)
+        id (fn [l] (or (.get m l) (let [i (.size m)] (.put m l i) i)))]
+    [(int-array (map id a)) (int-array (map id b))]))
+
+(defn- bisect
+  "Myers' middle snake in linear space (the diff-match-patch formulation) of A[alo,ahi) and B[blo,bhi): the point [x y],
+  relative to the starts, where a forward and a backward search meet, or nil. Memory is O(n + m), time O((n + m) D)."
+  [^ints A ^ints B alo ahi blo bhi]
+  (let [alo (long alo) blo (long blo)
+        n (- (long ahi) alo) m (- (long bhi) blo)
+        max-d (quot (+ n m 1) 2)
+        off max-d
+        len (+ (* 2 max-d) 2)
+        v1 (int-array len -1)
+        v2 (int-array len -1)
+        _ (aset v1 (inc off) (int 0))
+        _ (aset v2 (inc off) (int 0))
+        delta (- n m)
+        front? (odd? delta)
+        st (long-array 4)]                  ; k1start k1end k2start k2end
+    (loop [d 0]
+      (when (< d max-d)
+        (or
+         (loop [k1 (+ (- d) (aget st 0))]
+           (when (<= k1 (- d (aget st 1)))
+             (let [ko (+ off k1)
+                   x (if (or (= k1 (- d)) (and (not= k1 d) (< (aget v1 (dec ko)) (aget v1 (inc ko)))))
+                       (aget v1 (inc ko))
+                       (inc (aget v1 (dec ko))))
+                   x2 (loop [x (long x) y (- (long x) k1)]
+                        (if (and (< x n) (< y m) (== (aget A (+ alo x)) (aget B (+ blo y)))) (recur (inc x) (inc y)) x))
+                   y2 (- x2 k1)]
+               (aset v1 ko (int x2))
+               (cond
+                 (> x2 n) (do (aset st 1 (+ (aget st 1) 2)) (recur (+ k1 2)))
+                 (> y2 m) (do (aset st 0 (+ (aget st 0) 2)) (recur (+ k1 2)))
+                 front? (let [ko2 (- (+ off delta) k1)]
+                          (if (and (<= 0 ko2) (< ko2 len) (not= -1 (aget v2 ko2)) (>= x2 (- n (aget v2 ko2))))
+                            [x2 y2]
+                            (recur (+ k1 2))))
+                 :else (recur (+ k1 2))))))
+         (loop [k2 (+ (- d) (aget st 2))]
+           (when (<= k2 (- d (aget st 3)))
+             (let [ko (+ off k2)
+                   x (if (or (= k2 (- d)) (and (not= k2 d) (< (aget v2 (dec ko)) (aget v2 (inc ko)))))
+                       (aget v2 (inc ko))
+                       (inc (aget v2 (dec ko))))
+                   x2 (loop [x (long x) y (- (long x) k2)]
+                        (if (and (< x n) (< y m) (== (aget A (+ alo (- n x 1))) (aget B (+ blo (- m y 1))))) (recur (inc x) (inc y)) x))
+                   y2 (- x2 k2)]
+               (aset v2 ko (int x2))
+               (cond
+                 (> x2 n) (do (aset st 3 (+ (aget st 3) 2)) (recur (+ k2 2)))
+                 (> y2 m) (do (aset st 2 (+ (aget st 2) 2)) (recur (+ k2 2)))
+                 (not front?) (let [ko1 (- (+ off delta) k2)]
+                                (if (and (<= 0 ko1) (< ko1 len) (not= -1 (aget v1 ko1)))
+                                  (let [x1 (aget v1 ko1)]
+                                    (if (>= x1 (- n x2)) [x1 (- x1 (- ko1 off))] (recur (+ k2 2))))
+                                  (recur (+ k2 2))))
+                 :else (recur (+ k2 2))))))
+         (recur (inc d)))))))
+
+(defn- diff-range!
+  "Appends the edits of A[alo,ahi) against B[blo,bhi) to `out` as [op index] (:eq and :del index into A, :ins into B)."
+  [^ints A ^ints B alo ahi blo bhi ^java.util.ArrayList out]
+  (let [ahi (long ahi) bhi (long bhi)
+        pre (loop [i 0] (if (and (< (+ alo i) ahi) (< (+ blo i) bhi) (== (aget A (+ alo i)) (aget B (+ blo i)))) (recur (inc i)) i))
+        alo (+ alo pre) blo (+ blo pre)
+        suf (loop [i 0] (if (and (< (+ alo i) ahi) (< (+ blo i) bhi) (== (aget A (- ahi 1 i)) (aget B (- bhi 1 i)))) (recur (inc i)) i))
+        ahi' (- ahi suf) bhi' (- bhi suf)]
+    (dotimes [i pre] (.add out [:eq (+ (- alo pre) i)]))
+    (cond
+      (== alo ahi') (doseq [j (range blo bhi')] (.add out [:ins j]))
+      (== blo bhi') (doseq [i (range alo ahi')] (.add out [:del i]))
+      :else (if-let [[x y] (bisect A B alo ahi' blo bhi')]
+              (do (diff-range! A B alo (+ alo x) blo (+ blo y) out)
+                  (diff-range! A B (+ alo x) ahi' (+ blo y) bhi' out))
+              (do (doseq [i (range alo ahi')] (.add out [:del i]))
+                  (doseq [j (range blo bhi')] (.add out [:ins j])))))
+    (dotimes [i suf] (.add out [:eq (+ ahi' i)]))))
+
 (defn- edits
-  "Vector of [op line] with op :eq :del :ins."
+  "Vector of [op line] with op :eq :del :ins: a shortest edit script (Myers, linear space; B26: no size limit, no
+  delete-all/insert-all fallback, logs of any size and any divergence)."
   [a b]
   (let [a (vec a) b (vec b)
-        pre (loop [i 0] (if (and (< i (count a)) (< i (count b)) (= (a i) (b i))) (recur (inc i)) i))
-        suf (loop [i 0] (if (and (< i (- (count a) pre)) (< i (- (count b) pre))
-                                 (= (a (- (count a) 1 i)) (b (- (count b) 1 i))))
-                          (recur (inc i)) i))
-        ma (subvec a pre (- (count a) suf))
-        mb (subvec b pre (- (count b) suf))
-        n (count ma) m (count mb)
-        mid (if (> (* (inc n) (inc m)) 40000000)
-              (concat (map #(vector :del %) ma) (map #(vector :ins %) mb))
-              (let [w (inc m)
-                    t (int-array (* (inc n) w))]
-                (doseq [i (range (dec n) -1 -1) j (range (dec m) -1 -1)]
-                  (aset t (+ (* i w) j)
-                        (if (= (ma i) (mb j))
-                          (inc (aget t (+ (* (inc i) w) (inc j))))
-                          (max (aget t (+ (* (inc i) w) j)) (aget t (+ (* i w) (inc j)))))))
-                (loop [i 0 j 0 out (transient [])]
-                  (cond
-                    (and (< i n) (< j m) (= (ma i) (mb j))) (recur (inc i) (inc j) (conj! out [:eq (ma i)]))
-                    (and (< i n) (or (>= j m) (>= (aget t (+ (* (inc i) w) j)) (aget t (+ (* i w) (inc j))))))
-                    (recur (inc i) j (conj! out [:del (ma i)]))
-                    (< j m) (recur i (inc j) (conj! out [:ins (mb j)]))
-                    :else (persistent! out)))))]
-    (vec (concat (map #(vector :eq %) (subvec a 0 pre)) mid
-                 (map #(vector :eq %) (subvec a (- (count a) suf)))))))
+        [A B] (intern-lines a b)
+        out (java.util.ArrayList.)]
+    (diff-range! A B 0 (count a) 0 (count b) out)
+    (persistent! (reduce (fn [v [op i]] (conj! v [op (if (= op :ins) (b i) (a i))])) (transient []) out))))
 
 (defn unified
   "Unified diff text of two line vectors, empty string when equal."
