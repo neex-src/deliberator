@@ -13,7 +13,7 @@
 # @env local
 # @var corr = {{correlation}}
 # @var msg = ord-{{uuid}}
-# @var fresh = fresh-{{uuid}}
+# @var fresh = ord-{{uuid}}
 
 ### shell paths
 # @cwd ..
@@ -78,11 +78,15 @@ select message_id, correlation, a_status from acks where message_id = '{{msg}}' 
 {}
 
 ### shell the-recording-is-text
-# One file per exchange, raw: the API key B sent is in it. (This is why a recording is not committed as it is.)
-# @assert out contains POST /ack/
+# One file per exchange, raw: the API key B sent is in it, and the path is there with its template. (This is why a recording is
+# not committed as it is.)
+# @assert out contains 00001.json
+# @assert out contains "/ack/ord-{}"
 # @assert out contains x-api-key
 d=$(ls -d "$DELIBERATOR_HOME/workspaces/$DLB_WS/sessions/$DLB_SESSION"/fakes/a/* | tail -1)
-grep -h -o '"path" *: *"/[a-z]*/' "$d"/*.json | sort | uniq -c | tr -s ' '; grep -l -i 'x-api-key' "$d"/*.json | head -1 | xargs grep -h -o -i '"x-api-key"'; grep -h -o '"method" *: *"POST"' "$d"/*.json | head -1; grep -h -o '/ack/' "$d"/*.json | head -1 | sed 's|^|POST |'
+ls "$d" | head -3
+grep -h '"path-template"' "$d"/*.json | sort -u
+grep -l '"x-api-key"' "$d"/*.json | head -1 | xargs grep -h -o '"x-api-key"'
 
 ### op fake.replay replay-a
 # The fake now serves the newest recording. A is served by a fake that replays, so its container is not desired: stopped by the
