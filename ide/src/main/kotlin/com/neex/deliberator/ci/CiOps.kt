@@ -19,7 +19,7 @@ sealed interface CiOpen {
 
 /**
  * M5.2-M5.4: the daemon's `ci.*` ops, one blocking function each (call from a background task); nothing about GitHub is known here, the repository is whatever
- * `ci.runs` accepts (`owner/name`, a github url, a clone's name). The files are the daemon's (`sessions/<k>/ci/`); the view opens the paths it is given.
+ * `ci.runs` accepts (`owner/name`, a github url, a clone's name). The files are the daemon's (in the session's ci directory); the view opens the paths it is given.
  */
 @Service(Service.Level.PROJECT)
 class CiOps(private val project: Project) {

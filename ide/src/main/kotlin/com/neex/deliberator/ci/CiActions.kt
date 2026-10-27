@@ -133,7 +133,7 @@ class CiRemoveRepoAction : CiAction() {
 
 /**
  * `deliberator.ci.local` (M5.4): the workflow job at the caret of a workflow file (`.github/workflows/NAME.yml`) (a chooser when the caret is not in one) runs locally with
- * `ci.local`: act on the runtime's Podman with the local environment's endpoint; the output is a console tab, the result its last line.
+ * `ci.local`: act on the runtime's container engine with the local environment's endpoint; the output is a console tab, the result its last line.
  */
 class RunJobLocallyAction : WorkspaceAction() {
     override fun update(e: AnActionEvent) {

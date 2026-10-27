@@ -150,4 +150,27 @@ class CiTest : BasePlatformTestCase() {
             com.intellij.ide.util.PropertiesComponent.getInstance(project).unsetValue(CiPanel.KEY)
         }
     }
+
+    private fun updated(place: String, file: com.intellij.openapi.vfs.VirtualFile?): com.intellij.openapi.actionSystem.Presentation {
+        val a = ActionManager.getInstance().getAction("deliberator.ci.local")
+        val dc = com.intellij.openapi.actionSystem.impl.SimpleDataContext.builder()
+            .add(com.intellij.openapi.actionSystem.CommonDataKeys.PROJECT, project)
+            .also { b -> if (file != null) b.add(com.intellij.openapi.actionSystem.CommonDataKeys.VIRTUAL_FILE, file) }.build()
+        val e = com.intellij.openapi.actionSystem.AnActionEvent.createEvent(dc, a.templatePresentation.clone(), place, com.intellij.openapi.actionSystem.ActionUiKind.NONE, null)
+        a.update(e)
+        return e.presentation
+    }
+
+    fun testRunJobLocallyIsOnlyOfferedOnAWorkflowFile() {
+        val wf = myFixture.addFileToProject(".github/workflows/ci.yml", "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n").virtualFile
+        val other = myFixture.addFileToProject("src/App.java", "class App {}").virtualFile
+        val onWorkflow = updated(com.intellij.openapi.actionSystem.ActionPlaces.EDITOR_POPUP, wf)
+        assertTrue(onWorkflow.isVisible && onWorkflow.isEnabled)
+        // the editor popup of any other file does not carry it; the menu shows it disabled
+        assertFalse(updated(com.intellij.openapi.actionSystem.ActionPlaces.EDITOR_POPUP, other).isVisible)
+        val menu = updated(com.intellij.openapi.actionSystem.ActionPlaces.MAIN_MENU, other)
+        assertTrue(menu.isVisible)
+        assertFalse(menu.isEnabled)
+        assertEquals(listOf("test"), WorkflowFiles.jobs(String(wf.contentsToByteArray())).map { it.id })
+    }
 }

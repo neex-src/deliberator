@@ -13,14 +13,14 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 /**
- * The flows that run containers of the sandbox's rootless Podman: `ci.local` through a console (act on a fixture workflow whose jobs only print, image debian:stable-slim),
- * and the HTTP fake (record, replay, stop). Opt-in because they own Podman for a while and the core's own act test counts `act-*` containers: run them with
- * `DLB_IDE_PODMAN=1 flock .scratch/runtime.lock bb ide:test --tests '*PodmanFlowsTest'`. Without it each test says so and returns.
+ * The flows that run containers of the sandbox's rootless container engine: `ci.local` through a console (act on a fixture workflow whose jobs only print, image debian:stable-slim),
+ * and the HTTP fake (record, replay, stop). Opt-in because they own the container engine for a while and the core's own act test counts `act-*` containers: run them with
+ * `DLB_IDE_CONTAINERS=1 flock .scratch/runtime.lock bb ide:test --tests '*ContainerFlowsTest'`. Without it each test says so and returns.
  */
-class PodmanFlowsTest : BasePlatformTestCase() {
+class ContainerFlowsTest : BasePlatformTestCase() {
     private lateinit var daemon: TempDaemon
     private lateinit var wsDir: Path
-    private val enabled get() = !System.getProperty("deliberator.test.podman").isNullOrEmpty()
+    private val enabled get() = !System.getProperty("deliberator.test.containers").isNullOrEmpty()
 
     override fun setUp() {
         super.setUp()
@@ -54,7 +54,7 @@ class PodmanFlowsTest : BasePlatformTestCase() {
     }
 
     fun testALocalJobRunsInAConsoleHandlerAndItsResultIsTheLastLine() {
-        if (!enabled) { println("SKIP PodmanFlowsTest: set DLB_IDE_PODMAN=1 (and hold .scratch/runtime.lock)"); return }
+        if (!enabled) { println("SKIP ContainerFlowsTest: set DLB_IDE_CONTAINERS=1 (and hold .scratch/runtime.lock)"); return }
         val dir = Files.createTempDirectory(Path.of(System.getProperty("java.io.tmpdir")), "cil").resolve("proj")
         Files.createDirectories(dir.resolve(".github/workflows"))
         Files.writeString(dir.resolve(".github/workflows/fixture.yml"), """
@@ -93,7 +93,7 @@ class PodmanFlowsTest : BasePlatformTestCase() {
     }
 
     fun testStopCancelsTheRequestAndTheProcessEndsWithoutAnAnswer() {
-        if (!enabled) { println("SKIP PodmanFlowsTest: set DLB_IDE_PODMAN=1 (and hold .scratch/runtime.lock)"); return }
+        if (!enabled) { println("SKIP ContainerFlowsTest: set DLB_IDE_CONTAINERS=1 (and hold .scratch/runtime.lock)"); return }
         val dir = Files.createTempDirectory(Path.of(System.getProperty("java.io.tmpdir")), "cil").resolve("proj")
         Files.createDirectories(dir.resolve(".github/workflows"))
         Files.writeString(dir.resolve(".github/workflows/slow.yml"), "name: slow\non: workflow_dispatch\njobs:\n  nap:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo sleeping; sleep 300\n")
@@ -108,7 +108,7 @@ class PodmanFlowsTest : BasePlatformTestCase() {
     }
 
     fun testAFakeRecordsReplaysAndStopsThroughTheOps() {
-        if (!enabled) { println("SKIP PodmanFlowsTest: set DLB_IDE_PODMAN=1 (and hold .scratch/runtime.lock)"); return }
+        if (!enabled) { println("SKIP ContainerFlowsTest: set DLB_IDE_CONTAINERS=1 (and hold .scratch/runtime.lock)"); return }
         val ops = FakeOps.getInstance(project)
         assertEquals(emptyList<String>(), bg { ops.list() }.map { it.name })
         // a fake in front of an URL nobody serves: it records nothing but is declared, started, listed and stopped

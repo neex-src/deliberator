@@ -230,7 +230,7 @@
                     text="Remove Repository" description="Forget a repository added to this view"/>
             <separator/>
             <action id="deliberator.ci.local" icon="AllIcons.Actions.Lightning" class="com.neex.deliberator.ci.RunJobLocallyAction"
-                    text="Run Job Locally" description="ci.local: the workflow job at the caret runs with act on the runtime's Podman against the local endpoint; live output in a console tab">
+                    text="Run Job Locally" description="ci.local: the workflow job at the caret runs with act on the runtime's container engine against the local endpoint; live output in a console tab">
                 <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             </action>
         </group>

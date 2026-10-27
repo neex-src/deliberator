@@ -25,7 +25,7 @@ data class PrOpened(val repo: String, val n: Int, val working: Working, val revi
 
 /**
  * M5.1 / M5.5: the repository store as the daemon keeps it. Everything asks the daemon (`repo.list`, `repo.clone`, `worktree.*`, `pr.open`) and attaches the
- * worktree path it answers through [RepositoryAttacher], the same code as Attach Repository; the IDE never knows where `repos/` or `worktrees/` are.
+ * worktree path it answers through [RepositoryAttacher], the same code as Attach Repository; the IDE never knows where the clones and worktrees live.
  * Every function blocks: call from a background task. A mutation publishes the new [WorkSnapshot] to the listeners.
  */
 @Service(Service.Level.PROJECT)
