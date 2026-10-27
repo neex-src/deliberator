@@ -7,6 +7,8 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [deliberator.ops :as ops]
+            [deliberator.repo :as repo]
+            [deliberator.service.description]
             [deliberator.store :as store]
             [deliberator.test-util :as tu]))
 
@@ -159,3 +161,22 @@
           (is (= [{:name "three" :missing true}] (mapv #(select-keys % [:name :missing]) (call "worktree.list" {}))))
           (call "worktree.remove" {:repo "proj" :name "three"})
           (is (= [] (call "worktree.list" {}))))))))
+
+(deftest repo-list-marks-bare-clones-and-filters-them-b27
+  (tu/with-temp-home
+    (let [{:keys [origin work]} (fixture (tu/temp-home))
+          _ (call "repo.clone" {:url origin :name "proj"})
+          _ (call "repo.attach" {:path work})
+          rows (call "repo.list" {})
+          by (into {} (map (juxt :name identity)) rows)]
+      (testing "every row says whether it is bare"
+        (is (true? (:bare (by "proj"))))
+        (is (false? (:bare (by "work")))))
+      (testing "bare filters"
+        (is (= ["work"] (mapv :name (call "repo.list" {:bare false}))))
+        (is (= ["proj"] (mapv :name (call "repo.list" {:bare true})))))
+      (testing "what looks for files in a repository does not see the bare clone"
+        (is (= ["work"] (mapv :name (repo/checkouts "w"))))
+        (let [e (thrown #(deliberator.service.description/module-dir "w" {:repo "proj" :module "svc"}))]
+          (is (= :service/repo-bare (:type e)))
+          (is (str/includes? (:hint e) "worktree.start")))))))
