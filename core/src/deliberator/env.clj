@@ -523,6 +523,22 @@
                (swap! retired (fn [v] (vec (remove #(identical? e %) v))))
                (stop-client! e)))))))
 
+(defn credentials
+  "B39: the current credentials of a `:remote` environment's profile as Terraform's AWS provider reads them from the process
+  environment: `{\"AWS_ACCESS_KEY_ID\" .. \"AWS_SECRET_ACCESS_KEY\" .. [\"AWS_SESSION_TOKEN\" ..] \"AWS_REGION\" ..}`, from the same
+  provider the clients use (static keys of the profile, else the CLI bridge). Never persisted or logged by the caller. Throws
+  `{:type :env/credentials}` with the bridge's reason when there are none."
+  [env]
+  (let [{:keys [profile region]} (:aws (validate env))
+        c (creds/fetch (profile-provider profile *credentials-file* *aws-cli*))]
+    (when-not c
+      (throw (ex-info (str "no credentials for profile " profile ": "
+                           (or (:message (credential-failure profile)) "the profile has none (not static keys, and the AWS CLI gave none)"))
+                      {:type :env/credentials :profile profile})))
+    (cond-> {"AWS_ACCESS_KEY_ID" (:aws/access-key-id c) "AWS_SECRET_ACCESS_KEY" (:aws/secret-access-key c)
+             "AWS_REGION" region "AWS_DEFAULT_REGION" region}
+      (:aws/session-token c) (assoc "AWS_SESSION_TOKEN" (:aws/session-token c)))))
+
 (defn aws-client
   "The aws-api client of `service` for `env`, memoised per record and service (slot without a workspace). Not counted:
   for tests and one-off calls; the core calls through `with-client`."

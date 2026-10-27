@@ -12,6 +12,7 @@
         com.cognitect.aws/logs {:mvn/version "871.2.55.11"}
         com.cognitect.aws/sts {:mvn/version "871.2.54.18"}
         com.cognitect.aws/ecs {:mvn/version "871.2.55.16"}
+        com.cognitect.aws/ec2 {:mvn/version "871.2.55.11"}
         com.cognitect.aws/codedeploy {:mvn/version "871.2.54.18"}
         com.cognitect.aws/s3 {:mvn/version "871.2.55.11"}
         com.cognitect.aws/sns {:mvn/version "871.2.55.2"}

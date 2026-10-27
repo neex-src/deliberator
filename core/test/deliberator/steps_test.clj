@@ -13,6 +13,7 @@
             [deliberator.podman :as podman]
             [deliberator.floci-util :as fu]
             [deliberator.podman-test-support :as sup]
+            [deliberator.remote-util :as remote-util]
             [deliberator.runtime :as runtime]
             [deliberator.scenario.engine :as engine]
             [deliberator.session :as session]
@@ -289,6 +290,63 @@
       (is (str/includes? (:text res) "ERROR: unknown target :nope/none in environment local, known: ")))))
 
 ;; --- against the runtime -----------------------------------------------------------------------
+
+(defn- start-counting
+  "A server that answers 200 and counts the requests per method."
+  []
+  (let [seen (atom {}) s (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)]
+    (.createContext s "/" (reify HttpHandler
+                            (handle [_ ex]
+                              (let [^HttpExchange ex ex out (.getBytes "ok" "UTF-8")]
+                                (.readAllBytes (.getRequestBody ex))
+                                (swap! seen update (.getRequestMethod ex) (fnil inc 0))
+                                (.sendResponseHeaders ex 200 (if (= "HEAD" (.getRequestMethod ex)) -1 (alength out)))
+                                (when-not (= "HEAD" (.getRequestMethod ex)) (.write (.getResponseBody ex) out))
+                                (.close ex)))))
+    (.start s)
+    {:server s :seen seen :base (str "http://127.0.0.1:" (.getPort (.getAddress s)))}))
+
+(deftest http-on-a-remote-environment-is-gated-by-method
+  ;; B40: a non-GET request is a mutation on a remote environment, like an AWS write
+  (tu/with-temp-home
+    (let [{:keys [server seen base]} (start-counting)
+          mk (fn [name ro] (assoc (remote-util/remote-record name ro) :targets {:service/echo base}))
+          scn (str "### http service/echo read\n# @assert status == 200\nGET /r\n"
+                   "\n### http service/echo head\nHEAD /r\n"
+                   "\n### http service/echo write\n# @assert status == 200\nPOST /w\nContent-Type: text/plain\n\nhello\n")
+          events (atom [])
+          run (fn [env & opts] (apply run-scn "h" env scn :sink #(swap! events conj %) opts))
+          statuses (fn [res] (mapv :status (:steps (store/read-edn (io/file (get-in res [:paths :run]) "run.edn")))))
+          audit (fn [] (aws/audit-lines {:ws "h" :session "T-1"}))]
+      (try
+        (testing "read-only: the reads go, the POST is refused flat (no token, nothing sent)"
+          (let [res (run (mk "rr" true))]
+            (is (= [:ok :ok :error] (statuses res)) (:text res))
+            (is (str/includes? (:text res) "POST refused: environment rr is read-only"))
+            (is (empty? (filter #(= :confirm.required (:event %)) @events)) "no token for a read-only environment")
+            (is (= {"GET" 1 "HEAD" 1} @seen) "the POST never left")
+            (is (str/starts-with? (step-file res 3 "request.http") "POST ") "the request that was not sent is kept")
+            (is (some #(and (= :http (:service %)) (= "POST" (:op %)) (= :refused (:outcome %)) (= :read-only (:reason %))) (audit)))))
+        (testing "writable: the POST needs a confirmation; the token sends it once, bound to the request"
+          (reset! events [])
+          (let [env (mk "rw" false)
+                res1 (run env)
+                tok (:token (first (filter #(= :confirm.required (:event %)) @events)))]
+            (is (= [:ok :ok :error] (statuses res1)) (:text res1))
+            (is (some? tok))
+            (is (str/includes? (str (some :summary (filter #(= :confirm.required (:event %)) @events))) "POST http://127.0.0.1"))
+            (is (= {"GET" 2 "HEAD" 2} @seen))
+            (let [res2 (run env :confirm tok)]
+              (is (= [:ok :ok :ok] (statuses res2)) (:text res2))
+              (is (= {"GET" 3 "HEAD" 3 "POST" 1} @seen)))
+            (let [res3 (run env :confirm tok)]
+              (is (= :error (last (statuses res3))) "a used token does not send again")
+              (is (= 1 (get @seen "POST"))))
+            (is (some #(and (= "POST" (:op %)) (= :used (:confirmation %)) (= :confirmed (:outcome %))) (audit)))))
+        (testing "a local environment is not gated"
+          (let [res (run (assoc env/default-local :targets {:service/echo base}))]
+            (is (= [:ok :ok :ok] (statuses res)) (:text res))))
+        (finally (.stop ^HttpServer server 0))))))
 
 (deftest http-against-floci-health
   (when-runtime

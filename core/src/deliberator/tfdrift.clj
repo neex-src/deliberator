@@ -8,6 +8,7 @@
             [clojure.string :as str]
             [deliberator.awsdiscover :as discover]
             [deliberator.env :as env]
+            [deliberator.process :as process]
             [deliberator.store :as store]
             [deliberator.tfroot :as tfroot]))
 
@@ -143,13 +144,65 @@
               :else (throw (ex-info "give file or dir" {:type :tf/unreadable})))]
     (json/read-str txt :key-fn keyword)))
 
+(defn- refresh-env
+  "B39: the process environment of the refresh: the daemon's own minus every AWS_* and the shared files, plus the credentials and
+  region of the environment's profile (and its endpoint, an emulator's). Terraform's provider reads them from here; nothing is
+  written to disk."
+  [ws e]
+  (.mkdirs (.toFile (store/path ws "terraform-plugin-cache")))
+  (merge (into {} (remove (fn [[k _]] (str/starts-with? k "AWS_"))) (System/getenv))
+         {"AWS_CONFIG_FILE" "/dev/null" "AWS_SHARED_CREDENTIALS_FILE" "/dev/null" "TF_IN_AUTOMATION" "1"
+          "TF_PLUGIN_CACHE_DIR" (str (store/path ws "terraform-plugin-cache"))}
+         (env/credentials e)
+         (when-let [ep (get-in e [:aws :endpoint])] {"AWS_ENDPOINT_URL" ep})))
+
+(defn refresh!
+  "B39: `terraform plan -refresh-only` of the root `dir` with the credentials of the remote environment `e`'s profile
+  (`terraform init` first when the root has no `.terraform`), the plan saved to a file under the workspace, read back with
+  `terraform show -json` and deleted. Nothing is applied and the state is not written (`-lock=false`: a refresh-only plan only
+  reads). Terraform's transcript is persisted raw and streamed as `tf.line` events. -> `{:plan <file> :lines [..] :raw <ref>}`;
+  the caller deletes the plan. Throws `:tf/refresh-remote-only`, `:tf/no-root`, `:tf/refresh-failed` (exit code and last lines)."
+  [ws e ^java.io.File dir {:keys [vars sink on-cancel! budget-ms]}]
+  (when-not (= :remote (:kind e))
+    (throw (ex-info (str "a refresh uses the credentials of a remote environment; " (:name e) " is " (name (:kind e)))
+                    {:type :tf/refresh-remote-only :env (:name e)
+                     :hint "a local root is planned with terraform.local; point the drift at the remote environment whose resources the root declares"})))
+  (when-not (and (.isDirectory dir) (some #(str/ends-with? (.getName ^java.io.File %) ".tf") (.listFiles dir)))
+    (throw (ex-info (str "no Terraform files in " dir) {:type :tf/no-root :dir (str dir)})))
+  (let [penv (refresh-env ws e)
+        plan (str (store/path ws "terraform" (str "refresh-" (random-uuid) ".tfplan")))
+        _ (.mkdirs (.getParentFile (io/file plan)))
+        run (fn [args] (process/run! (into ["terraform"] args)
+                                     {:dir dir :env penv :on-cancel! on-cancel! :budget-ms budget-ms :what (str "terraform " (first args))
+                                      :line! (fn [l] (when sink (sink {:event "tf.line" :line l})))}))
+        init (when-not (.isDirectory (io/file dir ".terraform")) (run ["init" "-input=false" "-no-color"]))
+        res (when (or (nil? init) (zero? (:exit init)))
+              (run (concat ["plan" "-refresh-only" "-input=false" "-lock=false" "-no-color" (str "-out=" plan)]
+                           (mapcat (fn [[k v]] ["-var" (str (name k) "=" v)]) vars))))
+        lines (vec (concat (:lines init) (:lines res)))
+        raw (store/raw-put! ws (.getBytes (str (str/join "\n" lines) "\n") "UTF-8")
+                            {:source :file :op "terraform.refresh" :env (:name e) :at (java.time.Instant/now)
+                             :content-type "text/plain" :path (str dir)})
+        ok? (and res (zero? (:exit res)))]
+    (when-not ok?
+      (io/delete-file plan true)
+      (throw (ex-info (str "terraform " (if res "plan -refresh-only" "init") " failed in " dir " (exit " (:exit (or (when-not res init) res)) "): "
+                           (str/join " | " (take-last 3 (remove str/blank? lines))))
+                      {:type :tf/refresh-failed :dir (str dir) :sha (:sha raw)
+                       :hint (str "the transcript is persisted (" (:sha raw) "); a root whose variables have no default needs `vars`")})))
+    {:plan plan :lines lines :raw raw}))
+
 (defn drift!
   "`{:env :source :region :declared n :matching n :missing [..] :undeclared [..] :changed [..] :errors {..}}` (`changed` only for a refresh-only
   plan document, see `drifted`). The environment's resources come
   from `awsdiscover` (read calls, raw-persisted). Of the Terraform document only `extract` is persisted, first, and drift is
   computed from that extract: the full document holds the state's secret values (B1)."
-  [ws env-name {:keys [file dir plan] :as src}]
+  [ws env-name {:keys [file dir plan refresh] :as src}]
   (let [e (env/load ws env-name)
+        _ (when (and refresh (or file plan (not dir)))
+            (throw (ex-info "refresh needs dir (and no file or plan)" {:type :tf/unreadable :hint "dlb terraform drift --dir ROOT --refresh"})))
+        fresh (when refresh (refresh! ws e (io/file (str dir)) src))
+        src (cond-> (dissoc src :refresh :vars :sink :on-cancel! :budget-ms) fresh (assoc :plan (:plan fresh)))
         ;; a local environment and a root that terraform.local ran through its override file: its data dir is under the workspace
         data-dir (when (and dir (= :local (:kind e)) (.exists (io/file (str dir) tfroot/override-name)))
                    (let [dd (tfroot/data-dir ws dir)] (when (.isDirectory (io/file dd)) dd)))
@@ -157,7 +210,8 @@
         ;; (`terraform.local` passes -state, m3 05b): `terraform show -json <state>` reads that one
         state (when (and dir (not plan) (not file) (= :local (:kind e)) (not data-dir))
                 (let [p (tfroot/state-path ws dir)] (when (.isFile (io/file p)) p)))
-        doc (extract (read-doc (cond-> src data-dir (assoc :data-dir data-dir) state (assoc :plan state))))
+        doc (try (extract (read-doc (cond-> src data-dir (assoc :data-dir data-dir) state (assoc :plan state))))
+                 (finally (when fresh (io/delete-file (:plan fresh) true))))   ; the plan file holds the state's secrets: not kept
         _ (store/raw-put! ws (.getBytes (json/write-str doc) "UTF-8")
                           {:source :file :op "terraform.show" :extract :tf-declared :env (:name e) :at (java.time.Instant/now)
                            :content-type "application/json" :path (str (or file dir))})
@@ -166,4 +220,5 @@
         found (discover/discover! ws env-name)
         c (compare-with d (:resources found) (keys (:errors found)))]
     (cond-> (assoc c :env (:name e) :source (or file dir) :region region :errors (:errors found))
-      (seq (:drifted doc)) (assoc :changed (:drifted doc)))))
+      (seq (:drifted doc)) (assoc :changed (:drifted doc))
+      fresh (assoc :refreshed {:lines (count (:lines fresh)) :sha (get-in fresh [:raw :sha])}))))

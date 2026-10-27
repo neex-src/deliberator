@@ -57,6 +57,7 @@
                     "DescribeTasks" "DescribeClusters" "ListClusters" "ListTaskDefinitions")
                  (m "UpdateService" "RegisterTaskDefinition" "CreateService" "DeleteService"
                     "CreateCluster" "RunTask" "StopTask"))
+     :ec2 (r "DescribeNetworkInterfaces")
      :codedeploy (merge (r "ListDeployments" "GetDeployment" "ListApplications" "GetApplication"
                            "ListDeploymentGroups" "GetDeploymentGroup")
                         (m "CreateDeployment" "StopDeployment" "CreateApplication"))}))
