@@ -11,7 +11,7 @@
             [core-build]
             [known-bugs]))
 
-(def namespaces '[dlb-test audit-dlb-test])
+(def namespaces '[dlb-test audit-dlb-test check-arch-test])
 
 (def skipped (atom []))
 (def failed-vars (atom #{}))
