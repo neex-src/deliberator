@@ -736,3 +736,11 @@
           (is (re-find #"path: .*/sessions/C2/ci/runs-babashka-fs-ci-" (:out r)) (:out r))
           (is (str/includes? (:out r) "rows: 5") "the rows are printed")
           (is (not (str/includes? (str (:out r) (:err r)) (str/trim tok))) "the token is never printed"))))))
+
+(deftest fake-operations-are-in-the-generated-help
+  ;; M6.6: positionals come from the schema (name, upstream), the topology mode fake is in topology set's help
+  (let [h (:out (dlb *home* "help" "fake"))]
+    (is (str/includes? h "fake record"))
+    (is (str/includes? h "fake replay"))
+    (is (str/includes? h "fake commit")))
+  (is (str/includes? (:out (dlb *home* "help" "topology" "set")) "fake")))

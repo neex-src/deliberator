@@ -1,6 +1,8 @@
 (ns deliberator.topology
   "Progressive topology (M3 piece 03): per environment, every service is `local` (its container on
   the runtime), `external {url}` (served from elsewhere) or `off` (not available). Stored in
+  the runtime), `external {url}` (served from elsewhere), `off` (not available) or `fake {fake}` (served by an HTTP fake of the
+  runtime, M6.6: recording the real service, or replaying a recording while the real one is not needed). Stored in
   `environments/<env>.edn` under `:topology {\"<service>\" {:mode :external|:off [:url] [:log {:container}]}}`;
   no entry means local. The resolution itself (`service/<n>` targets, the typed `topology/service-off`) is
   `deliberator.env/target`; this namespace holds what needs the workspace: `show`, `set!`, `snapshot` (what a
