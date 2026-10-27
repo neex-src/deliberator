@@ -226,6 +226,12 @@
             (ok! human "workspace.agent" {:ws "w1" :remote-mutations true})
             (is (some #(= "pr.fake" (:op %)) (:result (ok! agent "op.describe" {:ws "w1"}))))
             (is (true? (:made (:result (ok! agent "pr.fake" {:ws "w1"})))))))
+        (testing "a scenario run by an agent does not get around it: its op steps are the agent's calls"
+          (ok! human "workspace.agent" {:ws "w1" :remote-mutations false})
+          (let [path (write-file "agent-op.scn" "### op workspace.agent flip\n# @assert ok == false\n# @assert error.type == agent/human-only\n{\"ws\": \"w1\", \"remote-mutations\": true}\n")
+                r (:result (ok! agent "scenario.run" {:ws "w1" :path path}))]
+            (is (= "ok" (:status r)) (pr-str (select-keys r [:status :failed])))
+            (is (false? (:agent-remote-mutations (:result (ok! human "workspace.agent" {:ws "w1"})))) "the switch is still off")))
         (testing "for agent shows an agent's view to a human"
           (ok! human "workspace.agent" {:ws "w1" :remote-mutations false})
           (let [r (:result (ok! human "op.tools" {:ws "w1" :for "agent"}))]
@@ -294,7 +300,8 @@
       (let [{:keys [result]} (ok! c "runtime.sync-env" {:ws "w-sync"})]
         (is (.exists (io/file (:path result))))
         (let [e (env/load "w-sync" "local")]
-          (is (= "http://localhost:4566" (get-in e [:aws :endpoint])))
+          ;; the first free host port of the default 4566 (m3 05b): 4566 itself unless something on the sandbox holds it, as the estate does in pass B
+          (is (= (str "http://localhost:" (get-in (store/read-edn (:path result)) [:containers :floci :ports 4566])) (get-in e [:aws :endpoint])))
           (is (= {:container "deliberator-w-sync-service-a"} (get-in e [:targets :log/service-a]))))))))
 
 (deftest arguments-are-validated-against-the-schema

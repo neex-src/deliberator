@@ -118,7 +118,11 @@
         ;; a local environment and a root that terraform.local ran through its override file: its data dir is under the workspace
         data-dir (when (and dir (= :local (:kind e)) (.exists (io/file (str dir) tfroot/override-name)))
                    (let [dd (tfroot/data-dir ws dir)] (when (.isDirectory (io/file dd)) dd)))
-        doc (extract (read-doc (cond-> src data-dir (assoc :data-dir data-dir))))
+        ;; a local root that points its own providers at the emulator (no override file) keeps its state under the workspace too
+        ;; (`terraform.local` passes -state, m3 05b): `terraform show -json <state>` reads that one
+        state (when (and dir (not plan) (not file) (= :local (:kind e)) (not data-dir))
+                (let [p (tfroot/state-path ws dir)] (when (.isFile (io/file p)) p)))
+        doc (extract (read-doc (cond-> src data-dir (assoc :data-dir data-dir) state (assoc :plan state))))
         _ (store/raw-put! ws (.getBytes (json/write-str doc) "UTF-8")
                           {:source :file :op "terraform.show" :extract :tf-declared :env (:name e) :at (java.time.Instant/now)
                            :content-type "application/json" :path (str (or file dir))})
