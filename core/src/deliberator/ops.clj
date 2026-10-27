@@ -120,6 +120,7 @@
             [deliberator.tfroot :as tfroot]
             [deliberator.awsmodel :as awsmodel]
             [deliberator.markers :as markers]
+            [deliberator.pr :as pr]
             [deliberator.provider :as provider]
             [deliberator.repo :as repo]
             [deliberator.worktree :as worktree]
@@ -1328,6 +1329,7 @@
       (let [args (validate-args op (:args entry) args)]
         (when (and (contains? (:args entry) :ws)
                    (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (str/starts-with? op "fake.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
+                   (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
                        (and (= :read (:class entry)) (not= "scenario.parse" op))))
           (require-workspace! (:ws args)))
         ((:fn entry) ctx args)))))
