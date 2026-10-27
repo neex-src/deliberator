@@ -64,8 +64,16 @@
                       :else args)))
             args (get path-args (:op op)))))
 
-(defn- describe [ch]
-  (let [r (client/request! ch "op.describe" {} (fn [_]))]
+(defn ws-of-words
+  "The workspace the command line names (`--ws W`), nil when it names none: the table an agent may see depends on the workspace
+ , so `op.describe` has to be asked for the same one the call goes to (B35: `DELIBERATOR_CLIENT=agent dlb run x
+  --ws w --confirm T` said `unknown argument --confirm` because the describe went to the default workspace, whose switch was off)."
+  [words]
+  (some (fn [[a b]] (when (and (= "--ws" a) (string? b)) b)) (partition 2 1 words)))
+
+(defn- describe [ch words]
+  (let [ws (ws-of-words words)
+        r (client/request! ch "op.describe" (cond-> {} ws (assoc :ws ws)) (fn [_]))]
     (get-in r [:terminal :result])))
 
 (declare run-op*)
@@ -125,7 +133,7 @@
   (let [{:keys [channel hello]} (endpoint/connect-compatible! home jar)]
     (try
       (do
-        (let [table (describe channel)
+        (let [table (describe channel words)
               help? (or (empty? words) (= "help" (first words)) (some #{"--help" "-h"} words))]
           (cond
             (and help? json?) (do (println (json/generate-string table)) 0)

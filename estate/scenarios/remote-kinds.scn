@@ -1,0 +1,129 @@
+# Every step kind that has an AWS backend, against a remote environment (written for the real estate: `terraform/aws` with run_services).
+# Nothing names a prefix or an address: queues, table, bus, functions, parameters, log groups and the services' addresses come from the
+# environment's targets, plus three this file needs: `queue/probe` (the URL of a queue the file creates and deletes itself; a URL, so that
+# the confirmations of the steps that use it can be issued before the queue exists), `queue/probe-name` (its name) and `parameter/probe`
+# (a parameter it puts and deletes). On a writable environment every mutating step needs its confirmation:
+#   dlb run estate/scenarios/remote-kinds.scn --env E --steps <the mutating ones>   (prints the tokens)
+#   dlb run ... --continue --confirm T1,T2,...                                       (the whole file, approved)
+# @env local
+# @var corr = {{correlation}}
+# @var msg = kinds-{{uuid}}
+# @var wait = {{timing/logs}}
+
+### http a-health
+# @assert status == 200
+# @assert $.status == UP
+GET {{service/a}}/actuator/health
+
+### http b-health
+# @assert status == 200
+# @assert $.status == UP
+GET {{service/b}}/actuator/health
+
+### aws sts.GetCallerIdentity who
+# @assert $.Account == {{env.account}}
+{}
+
+### aws sqs.CreateQueue make-probe
+{"QueueName": "{{queue/probe-name}}"}
+
+### sqs send queue/probe probe-send
+# @attr id={{msg}}
+# @assert messageId matches /^[0-9a-f-]{36}$/
+probe body {{msg}}
+
+### sqs receive queue/probe probe-peek
+# The default on a remote environment: VisibilityTimeout 0, nothing deleted.
+# @until count == 1 within 30s
+# @wait 3s
+# @assert count == 1
+
+### sqs receive queue/probe probe-peek-again
+# Still there: a peek does not consume.
+# @wait 3s
+# @assert count == 1
+
+### sqs receive queue/probe probe-consume
+# @delete
+# @wait 3s
+# @assert count == 1
+
+### sqs receive queue/probe probe-empty
+# @wait 3s
+# @assert count == 0
+
+### aws sqs.DeleteQueue drop-probe
+{"QueueUrl": "{{queue/probe}}"}
+
+### sqs send queue/inbox order-in
+# @attr id={{msg}}
+# @attr correlation={{corr}}
+# @body ../payloads/01-simple-order.json
+# @assert messageId matches /^[0-9a-f-]{36}$/
+
+### dynamodb get table/messages order-get
+# @until $.status.S == RECEIVED within 30s
+# @assert $.id.S == {{msg}}
+{"Key": {"id": {"S": "{{msg}}"}}}
+
+### dynamodb query table/messages order-query
+# @assert count == 1
+{"KeyConditionExpression": "id = :i", "ExpressionAttributeValues": {":i": {"S": "{{msg}}"}}}
+
+### dynamodb scan table/messages order-scan
+# @assert count >= 1
+{"Limit": 5}
+
+### http publish
+# @assert status == 200
+# @assert $.id == {{msg}}
+POST {{service/a}}/publish/{{msg}}
+X-Correlation-Id: {{corr}}
+
+### eventbridge put bus/main put-event
+# An event no rule matches: the put itself is the check.
+# @source rt.probe
+# @detail-type kinds
+# @assert failed == 0
+# @assert eventId matches /^[0-9a-f-]{36}$/
+{"id": "{{msg}}", "correlation": "{{corr}}"}
+
+### lambda invoke function/logger invoke-logger
+# @log-tail
+# @assert status == 200
+{"probe": "{{msg}}", "correlation": "{{corr}}"}
+
+### logs log/logger logger-log
+# The invocation's own log line, from the Lambda's CloudWatch group.
+# @from invoke-logger
+# @filter {{corr}}
+# @for {{wait}}
+# @assert lines >= 1
+
+### aws ssm.PutParameter put-param
+{"Name": "{{parameter/probe}}", "Value": "v1-{{msg}}", "Type": "String", "Overwrite": true}
+
+### aws ssm.GetParameter get-param
+# @assert $.Parameter.Value == v1-{{msg}}
+{"Name": "{{parameter/probe}}"}
+
+### aws ssm.DeleteParameter drop-param
+{"Name": "{{parameter/probe}}"}
+
+### scheduler list scheduler/chain schedules
+# @assert count == 0
+
+### sql db/main acks
+# @until rows == 1 within 30s
+# @assert col.message_id == {{msg}}
+select message_id, a_status from acks where message_id = '{{msg}}'
+
+### wait settle
+# @for 2s
+
+### logs insights service-a-lines
+# @group log/service-a
+# @since 30m
+# @assert status == Complete
+# @assert bytes-scanned > 0
+fields @timestamp, @message | filter @message like /{{msg}}/ | limit 5

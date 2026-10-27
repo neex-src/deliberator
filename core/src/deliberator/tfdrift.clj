@@ -30,9 +30,15 @@
 (defn- walk-module [m]
   (concat (:resources m) (mapcat walk-module (:child_modules m))))
 
-(defn- values-root [doc]
-  (or (get-in doc [:values :root_module])
-      (get-in doc [:planned_values :root_module])))
+(defn- values-root
+  "The resources of a document: a state's `values`, a plan's `planned_values`, and for a refresh-only plan (empty `planned_values`) the
+  refreshed state it carries as `prior_state` (B36)."
+  [doc]
+  (let [pm (get-in doc [:planned_values :root_module])]
+    (or (get-in doc [:values :root_module])
+        (when (or (seq (:resources pm)) (seq (:child_modules pm))) pm)
+        (get-in doc [:prior_state :values :root_module])
+        pm)))
 
 (defn- arn-region [arn]
   (when (string? arn) (let [p (str/split arn #":")] (when (> (count p) 3) (not-empty (nth p 3))))))
@@ -48,6 +54,24 @@
            :child_modules (mapv keep-module (:child_modules m))}
     (:address m) (assoc :address (:address m))))
 
+(defn- changed-attributes
+  "The names of the attributes that differ between `before` and `after` of one change (names only: the values may be secrets)."
+  [before after]
+  (vec (sort (for [k (distinct (concat (keys before) (keys after)))
+                   :when (not= (get before k) (get after k))]
+               (name k)))))
+
+(defn drifted
+  "B36: what Terraform's own refresh found changed outside Terraform, from the `resource_drift` of a plan document
+  (`terraform plan -refresh-only -out=P`, then `terraform.drift --plan P`): `[{:address :type :name :actions :attributes}]`, the
+  attribute NAMES that differ and never their values. Empty for a state or a plan without drift."
+  [doc]
+  (vec (for [r (:resource_drift doc)
+             :let [c (:change r)]]
+         {:address (:address r) :type (:type r) :name (:name r)
+          :actions (vec (:actions c))
+          :attributes (changed-attributes (:before c) (:after c))})))
+
 (defn extract
   "What of a Terraform JSON document is persisted (decision 54, B1): the versions and, per resource of the root and child modules
   (`values`, or `planned_values` of a plan, kept under the same key), address, mode, type, name, index, provider and the values
@@ -56,7 +80,8 @@
   [doc]
   (let [k (if (get-in doc [:values :root_module]) :values :planned_values)]
     (cond-> (select-keys doc [:format_version :terraform_version])
-      (values-root doc) (assoc k {:root_module (keep-module (values-root doc))}))))
+      (values-root doc) (assoc k {:root_module (keep-module (values-root doc))})
+      (seq (:resource_drift doc)) (assoc :drifted (drifted doc)))))
 
 (defn declared
   "`[{:kind :name :address :region}]` of the resources of a Terraform JSON document that the explorer knows kinds of.
@@ -73,21 +98,30 @@
 
 (defn compare-with
   "Drift of `declared` against `found` (`{kind [{:name}]}`): `:missing` declared and absent, `:undeclared` present and not declared
-  (only for the kinds Terraform declares something of; the `default` event bus is never reported), `:matching` count."
-  [declared found]
-  (let [dk (group-by :kind declared)
-        have (fn [kind] (into #{} (map :name) (get found kind)))
-        missing (vec (for [d declared :when (not (contains? (have (:kind d)) (:name d)))] (select-keys d [:kind :name :address])))
-        names (fn [kind] (into #{} (map :name) (get dk kind)))
-        undeclared (vec (for [[kind items] (sort-by key found)
-                              :when (contains? dk kind)
-                              {:keys [name]} items
-                              :when (and (not (contains? (names kind) name))
-                                         (not (and (= kind "eventbridge") (= name "default"))))]
-                          {:kind kind :name name}))]
-    {:missing missing :undeclared undeclared
-     :matching (- (count declared) (count missing))
-     :declared (count declared)}))
+  (only for the kinds Terraform declares something of; the `default` event bus is never reported), `:matching` count.
+  `unreadable` (the kinds whose listing failed, e.g. a read-only profile without `iam:ListRoles`; collection of names or keywords):
+  what is declared of those is `:unknown`, neither matching nor missing (B37: a reader's `missing: 8` claimed roles and a bus were
+  gone that it was never allowed to list)."
+  ([declared found] (compare-with declared found nil))
+  ([declared found unreadable]
+   (let [dk (group-by :kind declared)
+         unreadable (into #{} (map name) unreadable)
+         have (fn [kind] (into #{} (map :name) (get found kind)))
+         unknown (vec (for [d declared :when (contains? unreadable (:kind d))] (select-keys d [:kind :name :address])))
+         missing (vec (for [d declared
+                            :when (and (not (contains? unreadable (:kind d))) (not (contains? (have (:kind d)) (:name d))))]
+                        (select-keys d [:kind :name :address])))
+         names (fn [kind] (into #{} (map :name) (get dk kind)))
+         undeclared (vec (for [[kind items] (sort-by key found)
+                               :when (contains? dk kind)
+                               {:keys [name]} items
+                               :when (and (not (contains? (names kind) name))
+                                          (not (and (= kind "eventbridge") (= name "default"))))]
+                           {:kind kind :name name}))]
+     (cond-> {:missing missing :undeclared undeclared
+              :matching (- (count declared) (count missing) (count unknown))
+              :declared (count declared)}
+       (seq unknown) (assoc :unknown unknown)))))
 
 (defn read-doc
   "The Terraform JSON document: `file` when given, else `terraform show -json [plan]` run in `dir` (read-only; a scrubbed
@@ -110,7 +144,8 @@
     (json/read-str txt :key-fn keyword)))
 
 (defn drift!
-  "`{:env :source :region :declared n :matching n :missing [..] :undeclared [..] :errors {..}}`. The environment's resources come
+  "`{:env :source :region :declared n :matching n :missing [..] :undeclared [..] :changed [..] :errors {..}}` (`changed` only for a refresh-only
+  plan document, see `drifted`). The environment's resources come
   from `awsdiscover` (read calls, raw-persisted). Of the Terraform document only `extract` is persisted, first, and drift is
   computed from that extract: the full document holds the state's secret values (B1)."
   [ws env-name {:keys [file dir plan] :as src}]
@@ -129,5 +164,6 @@
         region (get-in e [:aws :region])
         d (declared doc region)
         found (discover/discover! ws env-name)
-        c (compare-with d (:resources found))]
-    (assoc c :env (:name e) :source (or file dir) :region region :errors (:errors found))))
+        c (compare-with d (:resources found) (keys (:errors found)))]
+    (cond-> (assoc c :env (:name e) :source (or file dir) :region region :errors (:errors found))
+      (seq (:drifted doc)) (assoc :changed (:drifted doc)))))

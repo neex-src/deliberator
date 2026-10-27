@@ -325,6 +325,10 @@
       (and (not local?) (contains? policy-codes code))
       (str "the IAM policy of " where " (account " account ") denies " (name service) ":" (name op)
            " (" code "): a permission, not an expired login")
+      (and (not local?) (contains? #{"QueueDoesNotExist" "AWS.SimpleQueueService.NonExistentQueue"} code))
+      (str "queue not found via " where ", account " account ": the name is wrong for this account and region, or the IAM policy "
+           "denies sqs:" (name op) " (SQS answers a missing permission as a missing queue); check the target of environment "
+           (:name env) " and its policy")
       :else
       (case category
         (:unavailable :interrupted)
@@ -406,7 +410,7 @@
        :message (or (:message (credential-bridge-error env r))
                     (:message r) (:Message r) (get-in r [:ErrorResponse :Error :Message]) (get-in r [:Error :Message])
                     (:cognitect.anomalies/message r)
-                    (some-> t ex-message) (str cat))
+                    (some-> t ex-message) (str "no message from AWS (" (name cat) ")"))
        :hint (or (:hint (credential-bridge-error env r)) (hint env cat code service op-name))
        :service service :op op-name :env (:name env) :raw raw}
       {::error true})))

@@ -106,6 +106,14 @@
            (approve "service.start" ["service" "start" "a" "--secrets-from" "local2"])))
     (is (= "to approve: dlb run x.scn --confirm T --steps 1" (approve "scenario.run" ["run" "x.scn"])))))
 
+(deftest the-describe-an-agent-gets-is-the-one-of-the-workspace-the-call-names
+  ;; B35: found on real AWS: the agent's table said the confirm argument did not exist, because the describe went to workspace `default`
+  (let [ws-of-words (requiring-resolve 'dlb.main/ws-of-words)]
+    (is (= "rt" (ws-of-words ["run" "x.scn" "--env" "rt-write" "--ws" "rt" "--confirm" "T"])))
+    (is (= "w" (ws-of-words ["--ws" "w"])))
+    (is (nil? (ws-of-words ["run" "x.scn" "--env" "e"])))
+    (is (nil? (ws-of-words ["run" "x.scn" "--ws"])) "a trailing --ws names nothing")))
+
 (deftest a-run-with-several-confirmations-lists-them-and-approves-them-in-one-line
   ;; B33: order.scn on a writable remote environment has three mutating steps
   (let [cs [{:step 1 :token "T1" :summary "SendMessage q"} {:step 8 :token "T8" :summary "PutParameter /p"} {:step 9 :token "T9" :summary "UpdateService"}]

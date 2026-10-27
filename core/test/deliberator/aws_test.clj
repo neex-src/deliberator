@@ -228,6 +228,18 @@
           (is (= :confirm-required (:type (aws/invoke! c e :ssm :SomethingNew {})))))
         (confirmed! c e :ssm :DeleteParameter {:Name p})))))
 
+(deftest sqs-answers-a-missing-permission-as-a-missing-queue-and-the-hint-says-both
+  ;; found with rvw-denied on real AWS: `QueueDoesNotExist ... or you do not have access to it` came with the hint "rejected by profile ..."
+  (let [env {:kind :remote :name "rt-denied" :aws {:profile "rvw-denied" :region "eu-central-1" :account "000000000000"}}
+        h (aws/hint env :incorrect "QueueDoesNotExist" :sqs :GetQueueUrl)]
+    (is (str/includes? h "denies sqs:GetQueueUrl"))
+    (is (str/includes? h "name is wrong"))
+    (is (not (str/includes? h "expired")) "this is not a login problem")
+    (testing "a throttled call is not blamed on credentials"
+      (let [t (aws/hint env :busy "ThrottlingException" :logs :FilterLogEvents)]
+        (is (str/includes? t "throttled"))
+        (is (not (str/includes? t "aws sso login")))))))
+
 (deftest a-dropped-keep-alive-connection-is-a-transient-io-error-for-reads
   ;; B34: seen on real CloudWatch: `java.io.IOException: HTTP/1.1 header parser received no bytes` ended a log tail
   (let [transient? #'aws/transient-io?

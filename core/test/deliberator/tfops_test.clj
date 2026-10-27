@@ -113,3 +113,43 @@
     (binding [store/*home* home]
       (env/save! "w" env/default-local)
       (is (= :tf/no-root (:type (err #(call "terraform.drift" {:ws "w" :env "local" :dir home}))))))))
+
+(deftest a-refresh-plan-shows-what-was-changed-by-hand-and-never-the-values
+  ;; B36: `terraform plan -refresh-only -out=P` records what a person changed outside Terraform in `resource_drift`; the drift result
+  ;; names the attributes (a parameter's value, a queue's visibility timeout) and keeps no value (a SecureString's would be a secret)
+  (let [secret "s3cr3t-value-changed-by-hand"
+        doc {:format_version "1.2" :terraform_version "1.9.0"
+             :planned_values {:root_module {:resources [{:address "aws_ssm_parameter.p" :mode "managed" :type "aws_ssm_parameter" :name "p"
+                                                         :values {:name "/x/y" :value "old"}}]}}
+             :resource_drift [{:address "aws_ssm_parameter.p" :type "aws_ssm_parameter" :name "p"
+                               :change {:actions ["update"] :before {:name "/x/y" :value "old" :version 1}
+                                        :after {:name "/x/y" :value secret :version 2}}}
+                              {:address "module.stack.aws_sqs_queue.events" :type "aws_sqs_queue" :name "events"
+                               :change {:actions ["update"] :before {:visibility_timeout_seconds 60} :after {:visibility_timeout_seconds 45}}}]}
+        x (tfdrift/extract doc)]
+    (is (= [{:address "aws_ssm_parameter.p" :type "aws_ssm_parameter" :name "p" :actions ["update"] :attributes ["value" "version"]}
+            {:address "module.stack.aws_sqs_queue.events" :type "aws_sqs_queue" :name "events" :actions ["update"]
+             :attributes ["visibility_timeout_seconds"]}]
+           (:drifted x)))
+    (is (not (str/includes? (json/write-str x) secret)) "the persisted extract holds no value")
+    (is (= (tfdrift/declared doc nil) (tfdrift/declared x nil)) "declared still agrees with the extract")
+    (testing "a refresh-only plan keeps its resources in prior_state, planned_values is empty"
+      (let [rp (-> doc (assoc :planned_values {:root_module {}})
+                   (assoc :prior_state {:values {:root_module (get-in doc [:planned_values :root_module])}}))]
+        (is (= [{:kind "ssm" :name "/x/y" :address "aws_ssm_parameter.p" :region nil}] (tfdrift/declared rp nil)))
+        (is (= (tfdrift/declared rp nil) (tfdrift/declared (tfdrift/extract rp) nil)))))
+    (testing "a state or a plan without drift has no :drifted"
+      (is (not (contains? (tfdrift/extract (dissoc doc :resource_drift)) :drifted))))))
+
+(deftest a-kind-that-could-not-be-listed-is-unknown-not-missing
+  ;; B37: found with the reader on real AWS: `missing: 8` named the roles and the bus (the reader may not list iam or events)
+  (let [declared [{:kind "sqs" :name "q1" :address "aws_sqs_queue.q1"} {:kind "sqs" :name "q2" :address "aws_sqs_queue.q2"}
+                  {:kind "iam" :name "r1" :address "aws_iam_role.r1"} {:kind "eventbridge" :name "b1" :address "aws_cloudwatch_event_bus.b1"}]
+        found {"sqs" [{:name "q1"}]}]
+    (is (= {:matching 1 :declared 4 :missing [{:kind "sqs" :name "q2" :address "aws_sqs_queue.q2"}]
+            :unknown [{:kind "iam" :name "r1" :address "aws_iam_role.r1"} {:kind "eventbridge" :name "b1" :address "aws_cloudwatch_event_bus.b1"}]
+            :undeclared []}
+           (tfdrift/compare-with declared found ["iam" :eventbridge])))
+    (testing "without a failed listing the two are missing, as before"
+      (is (= 3 (count (:missing (tfdrift/compare-with declared found)))))
+      (is (not (contains? (tfdrift/compare-with declared found) :unknown))))))
