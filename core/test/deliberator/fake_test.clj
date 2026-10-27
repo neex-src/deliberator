@@ -41,7 +41,7 @@
 
 (defn- cleanup! [ws cfg]
   (try (runtime/down! ws) (catch Throwable _ nil))
-  (try (podman/remove-network! (runtime/podman-client ws) (:network cfg)) (catch Throwable _ nil)))
+  (try (podman/remove-network! (runtime/podman-client ws cfg) (:network cfg)) (catch Throwable _ nil)))
 
 (deftest record-scrub-commit-replay-and-the-topology-mode
   (when-podman
