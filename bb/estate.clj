@@ -120,6 +120,15 @@
   (fs/create-dirs (str repo "/.scratch/tf-plugin-cache"))
   (apply p/shell {:dir tf-dir :env (tf-env) :extra-env {}} "terraform" args))
 
+(defn state-file
+  "The Terraform state of the Floci root for workspace `ws`: `<home>/workspaces/<ws>/terraform/<root-id>/terraform.tfstate`, where core's
+  `terraform.local` keeps the state of a root too (`tfroot/state-path`: `<basename>-<8 hex of the sha-256 of the canonical path>`), so
+  a plan in the IDE sees what `bb estate:up` applied and two workspaces on one host never share a state (m3 05b)."
+  [ws]
+  (let [p (.getCanonicalPath (java.io.File. ^String tf-dir))
+        hex (apply str (map #(format "%02x" %) (.digest (java.security.MessageDigest/getInstance "SHA-256") (.getBytes p "UTF-8"))))]
+    (str (home) "/workspaces/" ws "/terraform/" (str/replace (fs/file-name p) #"[^A-Za-z0-9._-]" "_") "-" (subs hex 0 8) "/terraform.tfstate")))
+
 (defn local-env
   "The workspace's `local` environment record (environments/local.edn, written by runtime sync-env)."
   [ws]
@@ -143,10 +152,10 @@
     (daemon-client/call! "env.save" {:ws ws :name "local2" :record e})))
 
 (defn- tf-outputs
-  "`terraform output -json` of the Floci root as {name value}."
-  []
+  "`terraform output -json` of the Floci root of `ws` as {name value}."
+  [ws]
   (into {} (for [[k v] (json/parse-string (:out (p/shell {:dir tf-dir :env (tf-env) :out :string}
-                                                           "terraform" "output" "-json" "-no-color")))]
+                                                           "terraform" "output" "-json" "-no-color" (str "-state=" (state-file ws)))))]
              [k (get v "value")])))
 
 (defn- write-chain-targets!
@@ -170,17 +179,18 @@
     (let [endpoint (local-endpoint ws)]
       (println "floci endpoint" endpoint)
       (step "terraform init" #(terraform "init" "-input=false" "-no-color"))
-      (step "terraform apply" #(terraform "apply" "-auto-approve" "-input=false" "-no-color"
+      (fs/create-dirs (fs/parent (state-file ws)))
+      (step "terraform apply" #(terraform "apply" "-auto-approve" "-input=false" "-no-color" (str "-state=" (state-file ws))
                                           "-var" (str "endpoint=" endpoint) "-var" (str "auto_publish=" auto)
                                           "-var" (str "container_endpoint=http://" (container ws "floci") ":4566")
                                           "-var" (str "service_a_url=http://" (container ws "service-a") ":8081")
                                           "-var" (str "db_url=jdbc:postgresql://" (container ws "postgres") ":5432/deliberator"))))
     (write-local2! (ws-of args))
-    (step "chain targets in the local environment" #(write-chain-targets! (ws-of args) (tf-outputs)))
+    (step "chain targets in the local environment" #(write-chain-targets! ws (tf-outputs ws)))
     (step "adopt services"
           (fn []
             (let [out (json/parse-string (:out (p/shell {:dir tf-dir :env (tf-env) :out :string}
-                                                        "terraform" "output" "-json" "-no-color")))
+                                                        "terraform" "output" "-json" "-no-color" (str "-state=" (state-file ws)))))
                   tds (get-in out ["task_definitions" "value"])]
               (daemon-client/call! "repo.attach" {:ws ws :path repo})
               (fs/create-dirs (str repo "/.scratch/estate"))
@@ -221,11 +231,14 @@
 (defn status [args]
   (let [ws (ws-of args)]
     (runtime args "status" "--ws" ws)
-    (doseq [[n port] [["a" 8081] ["b" 8082]]]
-      (println (str "service-" n " :" port " /actuator/health") (health (str "http://localhost:" port "/actuator/health"))))))
+    (doseq [n ["a" "b"]
+            :let [url (get-in (local-env ws) [:targets (keyword (str "service/" n))])]]
+      (println (str "service-" n " " url " /actuator/health") (health (str url "/actuator/health"))))))
 
 (defn down [args]
   (let [ws (ws-of args)]
     (runtime args "down" "--ws" ws)
-    (doseq [f (fs/glob tf-dir "terraform.tfstate*")] (fs/delete f))
+    (doseq [f (concat (fs/glob tf-dir "terraform.tfstate*")                     ; the state before it was per workspace
+                      (fs/glob (fs/parent (state-file ws)) "terraform.tfstate*"))]
+      (fs/delete f))
     (println "terraform state of the floci root removed")))

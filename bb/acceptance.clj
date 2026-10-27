@@ -104,7 +104,9 @@
         t0 (System/nanoTime)]
     (core-build/ensure-jar!)
     (try
-      (if (and (healthy? 8081) (healthy? 8082))
+      (if (let [targets (try (:targets (estate/local-env ws)) (catch Exception _ nil))
+                port (fn [t] (some-> (get targets t) (str/replace #"^.*:" "") parse-long))]
+            (and (port :service/a) (port :service/b) (healthy? (port :service/a)) (healthy? (port :service/b))))
         (println "estate already up (service A and B healthy)")
         (estate/up ["--ws" ws]))
       (let [env {"DELIBERATOR_HOME" home
