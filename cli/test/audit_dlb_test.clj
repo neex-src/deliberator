@@ -34,10 +34,19 @@
     (loop [] (or (f) (when (< (System/currentTimeMillis) end) (Thread/sleep 100) (recur))))))
 
 (defn- spawn
-  "Starts `dlb args` without waiting; -> the babashka.process."
+  "Starts `dlb args` without waiting; -> the babashka.process. SIGINT is reset to its default in the child (`env --default-signal=INT`, which
+  execs `dlb`, so the pid stays the one of `dlb`): a shell starts its background jobs with SIGINT ignored, an ignored signal stays ignored
+  across exec, and `kill -INT` would then do nothing when `bb cli:test` itself runs as a background job (B30)."
   [home & args]
   (apply p/process {:out :string :err :string :extra-env {"DELIBERATOR_HOME" home "DLB_DAEMON_ARGS" "--idle-minutes 0.5"}}
-         t/dlb-bin args))
+         "env" "--default-signal=INT" t/dlb-bin args))
+
+(defn- sigint-ignored?
+  "Whether process `pid` ignores SIGINT (the SigIgn mask of /proc/<pid>/status, bit 1); nil where /proc says nothing."
+  [pid]
+  (try (some-> (re-find #"SigIgn:\s*([0-9a-fA-F]+)" (slurp (str "/proc/" pid "/status"))) second
+               (Long/parseUnsignedLong 16) (bit-test 1))
+       (catch Exception _ nil)))
 
 (deftest sigint-mid-run-cancels-the-run
   (dlb *home* "session" "start" "SIG")
@@ -46,6 +55,7 @@
         pid (.pid ^Process (:proc proc))]
     (try
       (is (some? (until 20000 (fn [] (some (fn [r] (= "running" (:status r))) (run-rows *home*))))) "the run started")
+      (is (not (sigint-ignored? pid)) "dlb does not ignore SIGINT (a signal ignored by the parent shell is reset by `spawn`)")
       (p/shell {:continue true} "kill" "-INT" (str pid))
       (let [exited (.waitFor ^Process (:proc proc) 15 java.util.concurrent.TimeUnit/SECONDS)]
         (is (true? exited) "dlb ended after SIGINT")

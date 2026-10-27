@@ -139,3 +139,18 @@
       (is (= :tf/cycle (:type (ex-data e))))
       (is (= #{"a" "b"} (set (:cycle (ex-data e))))))
     (is (= :tf/bad-roots (:type (ex-data (try (tfroot/graph [a a]) (catch clojure.lang.ExceptionInfo e e))))))))
+
+(deftest the-targets-of-one-event-rule-are-applied-one-at-a-time
+  ;; B29: Floci 2.3.0 loses an update when two PutTargets/RemoveTargets hit one rule together, which made the destroy of the estate fail
+  ;; with "Rule still has targets". Terraform runs unrelated resources in parallel, so the targets of a rule must be chained.
+  (let [text (slurp (str estate "/modules/stack/main.tf"))
+        blocks (re-seq #"(?s)resource \"aws_cloudwatch_event_target\" \"(\w+)\" \{(.*?)\n\}" text)
+        by-rule (group-by (fn [[_ _ body]] (second (re-find #"rule\s*=\s*([\w.]+)" body))) blocks)]
+    (is (seq blocks) "the module has event targets")
+    (doseq [[rule ts] by-rule
+            :let [names (set (map second ts))
+                  chained (for [[_ n body] ts
+                                :let [deps (re-find #"depends_on\s*=\s*\[([^\]]*)\]" body)]
+                                :when (and deps (some #(str/includes? (second deps) (str "aws_cloudwatch_event_target." %)) (disj names n)))]
+                            n)]]
+      (is (>= (count chained) (dec (count ts))) (str "the targets of " rule " depend on one another: " (pr-str names))))))
