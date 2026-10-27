@@ -69,7 +69,7 @@ workspaces/<ws>/
   raw/follow/                   a follow in progress, adopted into raw/ when it ends
   logs/services/<service>/<date>.log   logs/build/   logs/reload/
   repos/<name>.git              bare clones (repo.clone); git fetches into refs/remotes/origin/*
-  worktrees/<repo>/<name>/      worktrees (worktree.start); the branch outlives the directory
+  worktrees/<repo>/<name>/      worktrees (worktree.start; pr.open makes pr-<n> from refs/pull/<n>/head); the branch outlives the directory
   github.edn                    optional: where the GitHub token comes from (never the token), the API base
   terraform-plugin-cache/
   sessions/<key>/
@@ -79,6 +79,8 @@ workspaces/<ws>/
     logs/insights-<name>-<ts>.txt   a Logs Insights answer as text, the bytes scanned in its header
     ci/runs-<repo>-<workflow>-<ts>.txt   <repo>-<run>-<job>-<id>.log   diff-<repo>-<red>-vs-<green>-<job>.diff   requests.log
                                 GitHub Actions as text (ci.runs, ci.log|tail, ci.diff); every API response is a blob in raw/ first
+    ci/ci-local-<dir>-<workflow>-<job>-<ts>.log   a local pipeline run (ci.local: act on the runtime's Podman), appended as lines arrive, adopted into raw/ at the end
+    pr/pr-<owner>-<repo>-<n>-review.txt   a pull request's description, reviews, inline threads and conversation (pr.open); its checks are ci/runs-*-<sha12>-<ts>.txt
     queries/<name>.insights     the text of a named Insights query     queries/<name>.scn   a named query: a one-step scenario
     config/                     config snapshots taken while the session was current
     fakes/<name>/<stamp>/NNNNN.json   one recorded exchange per file, raw, written by the fake before it answers

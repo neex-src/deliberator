@@ -47,11 +47,10 @@
   `op-describe-lists-every-operation-with-its-schema` until the name is added here, on purpose, in the same commit as its
   `dlb` help and docs. Every other test derives its expectations from `ops/table`."
   ["hello" "op.describe" "daemon.stop" "provider.list" "provider.stop" "fake.record" "fake.replay" "fake.stop" "fake.list" "fake.commit" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "explore.write" "session.note" "session.start" "session.end" "session.list" "session.current"
-  ["hello" "op.describe" "daemon.stop" "provider.list" "provider.stop" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "explore.write" "session.note" "session.start" "session.end" "session.list" "session.current"
    "audit.show" "config.chain" "config.refresh" "deployed.refresh" "deployed.show" "logs.insights"
    "env.list" "env.describe" "env.check" "env.save" "env.create" "env.remove" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
    "aws.describe" "aws.discover" "terraform.drift" "terraform.local" "terraform.graph" "terraform.apply-all" "terraform.locate"
-   "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "repo.attach" "repo.detach" "repo.list" "repo.clone" "worktree.start" "worktree.list" "worktree.remove" "ci.runs" "ci.log" "ci.tail" "ci.diff" "logs.fetch" "logs.match" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
+   "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "repo.attach" "repo.detach" "repo.list" "repo.clone" "worktree.start" "worktree.list" "worktree.remove" "ci.runs" "ci.log" "ci.tail" "ci.diff" "ci.local" "pr.open" "logs.fetch" "logs.match" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
 
 ;; --- lifecycle ----------------------------------------------------------------------------------
 

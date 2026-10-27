@@ -100,6 +100,15 @@
       (:memory td) (assoc :memory (:memory td))
       (:registeredAt td) (assoc :registered-at (->inst (:registeredAt td))))))
 
+(defn task-set-row
+  "A task set of DescribeServices (CODE_DEPLOY and EXTERNAL services have them): the CodeDeploy-owned `PRIMARY` one runs the revision
+  of the last deployment, while the service's own `:task-definition` stays the one it was created with."
+  [t]
+  (cond-> {:id (:id t) :status (:status t) :task-definition (:taskDefinition t)
+           :revision (some-> (:taskDefinition t) arn-tail parse-long)}
+    (:stabilityStatus t) (assoc :stability (:stabilityStatus t))
+    (:runningCount t) (assoc :running (:runningCount t))))
+
 (defn ecs-row
   "A service of DescribeServices plus its task definition row (nil when it could not be read)."
   [cluster-name s td]
@@ -117,7 +126,8 @@
       (:createdAt s) (assoc :created-at (->inst (:createdAt s)))
       (:family td) (assoc :family (:family td))
       (seq (:containers td)) (assoc :containers (:containers td))
-      (:deploymentController s) (assoc :controller (get-in s [:deploymentController :type])))))
+      (:deploymentController s) (assoc :controller (get-in s [:deploymentController :type]))
+      (seq (:taskSets s)) (assoc :task-sets (mapv task-set-row (:taskSets s))))))
 
 (defn lambda-row [f]
   (cond-> {:kind :lambda :name (:FunctionName f) :arn (:FunctionArn f) :version (:Version f)
@@ -204,7 +214,8 @@
 ;; --- views --------------------------------------------------------------------------------------------------
 
 (defn text-view
-  "The tab separated view: kind, cluster, name, revision|version, tags|code sha, desired/running, updated."
+  "The tab separated view: kind, cluster, name, revision|version, tags|code sha, desired/running, updated (an ECS service with task sets
+  adds a last column `task sets: PRIMARY rev 3 ecs-svc/...`)."
   [{:keys [env fetched-at services deployments errors absent]}]
   (str "# deployed in " env ", fetched " fetched-at "\n"
        "# kind\tcluster\tname\trevision/version\timages/tags\tdesired/running\tupdated\n"
@@ -217,6 +228,8 @@
                            "") "\t"
                          (case (:kind s) :ecs (str (:desired s) "/" (:running s)) "") "\t"
                          (or (some-> (case (:kind s) :ecs (->> (:deployments s) (keep :updated-at) sort last) (:last-modified s)) str) "")
+                         (when-let [ts (seq (:task-sets s))]
+                           (str "\ttask sets: " (str/join ", " (for [t ts] (str (:status t) " rev " (:revision t) " " (:id t))))))
                          "\n")))
        (when (seq deployments)
          (str "# codedeploy\n"

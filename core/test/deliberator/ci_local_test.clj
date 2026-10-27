@@ -1,0 +1,164 @@
+(ns deliberator.ci-local-test
+  "M5.4 `ci.local` without the estate: the pure pieces (directory, workflow and environment resolution, the act command line) and
+  REAL `act` runs on the sandbox's rootless Podman of a fixture repository whose jobs only print (image debian:stable-slim, which the sandbox
+  has): a green job, a red one (a result, not an error), the injected variables, the `logs.line` events against the session file, the
+  raw blob, and a cancelled run that leaves no `act-*` container. The estate's own pipeline is `ci-local-estate-test`."
+  (:require [clojure.java.io :as io]
+            [clojure.java.shell :as sh]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [deliberator.cilocal :as cl]
+            [deliberator.env :as env]
+            [deliberator.floci-util :as fu]
+            [deliberator.ops :as ops]
+            [deliberator.podman :as podman]
+            [deliberator.store :as store]
+            [deliberator.test-util :as tu]))
+
+(defn- git [dir & args]
+  (let [r (apply sh/sh "git" "-c" "user.name=t" "-c" "user.email=t@t" "-c" "commit.gpgsign=false" (concat args [:dir (str dir)]))]
+    (when-not (zero? (:exit r)) (throw (ex-info (str "git " (str/join " " args) ": " (:err r)) {:r r})))
+    (str/trim (:out r))))
+
+(defn- thrown [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))
+
+(def ^:private plain-image "docker.io/library/debian:stable-slim")
+
+(def ^:private workflow "name: fixture
+on: workflow_dispatch
+jobs:
+  say:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo \"endpoint=$AWS_ENDPOINT_URL region=$AWS_REGION key=$AWS_ACCESS_KEY_ID\"
+      - run: echo \"pager=[$AWS_PAGER] a-real-secret=[${AWS_SESSION_TOKEN:-unset}] home-profile=[${AWS_PROFILE:-unset}]\"
+  boom:
+    needs: say
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo about to fail
+      - run: exit 3
+  slow:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo sleeping now; sleep 300
+")
+
+(defn- repo-dir
+  "A git repository with a commit and the fixture workflow under `<root>/proj`."
+  [root]
+  (let [d (io/file root "proj")]
+    (.mkdirs (io/file d ".github" "workflows"))
+    (spit (io/file d ".github" "workflows" "fixture.yml") workflow)
+    (git d "init" "-q" "-b" "main") (git d "add" ".") (git d "commit" "-q" "-m" "fixture")
+    (str d)))
+
+(defn- podman-up? []
+  (try (podman/available? (podman/client (podman/default-endpoint))) (catch Exception _ false)))
+
+(defn- act-containers []
+  (let [c (podman/client (podman/default-endpoint))]
+    (vec (for [x (podman/list-containers c :all true) :let [n (first (:Names x))] :when (and n (str/starts-with? (str/replace n #"^/" "") "act-"))] n))))
+
+(defn- ctx [events cancelled]
+  {:emit! #(swap! events conj %) :on-cancel! (fn [_]) :cancelled? #(boolean @cancelled) :daemon {:follows (atom 0)}})
+
+(deftest resolution-and-the-command-line
+  (tu/with-temp-home
+    (let [dir (repo-dir (tu/temp-home))]
+      (testing "an absolute directory, a recorded checkout by name, a bare clone needs a worktree"
+        (is (= dir (cl/resolve-dir "w" dir nil)))
+        (ops/call! "repo.attach" {} {:ws "w" :path dir})
+        (is (= dir (cl/resolve-dir "w" "proj" nil)))
+        (is (= :ci/no-dir (:type (thrown #(cl/resolve-dir "w" "/nowhere/at/all" nil)))))
+        (is (= :repo/not-found (:type (thrown #(cl/resolve-dir "w" "nope" nil)))))
+        (let [origin (io/file (tu/temp-home) "o.git")]
+          (.mkdirs origin) (git origin "init" "-q" "--bare" "-b" "main" ".")
+          (git dir "push" (str origin) "main")
+          (ops/call! "repo.clone" {} {:ws "w" :url (str origin) :name "bare"})
+          (is (= :ci/bare-repo (:type (thrown #(cl/resolve-dir "w" "bare" nil)))))
+          (ops/call! "worktree.start" {} {:ws "w" :repo "bare" :branch "feat"})
+          (is (str/ends-with? (cl/resolve-dir "w" "bare" "feat") "/worktrees/bare/feat"))
+          (is (= :ci/no-dir (:type (thrown #(cl/resolve-dir "w" "bare" "zzz")))))))
+      (testing "the workflow: a path, a name under .github/workflows, else the known ones"
+        (let [wf (str dir "/.github/workflows/fixture.yml")]
+          (is (= wf (cl/resolve-workflow dir ".github/workflows/fixture.yml")))
+          (is (= wf (cl/resolve-workflow dir "fixture.yml")))
+          (is (= wf (cl/resolve-workflow dir "fixture")))
+          (is (= wf (cl/resolve-workflow dir wf)))
+          (let [e (thrown #(cl/resolve-workflow dir "deploy"))]
+            (is (= :ci/no-workflow (:type e)))
+            (is (= ["fixture.yml"] (:known e))))))
+      (testing "act's command line"
+        (let [argv (cl/act-argv {:event "workflow_dispatch" :workflow "/w.yml" :job "say" :image "img:1" :pull? false
+                                 :env {"B" "2" "A" "1"}})]
+          (is (= ["act" "workflow_dispatch" "-W" "/w.yml" "-j" "say" "-P" "ubuntu-latest=img:1" "-P" "ubuntu-22.04=img:1" "--rm" "--pull=false"
+                  "--env" "A=1" "--env" "B=2"] argv))
+          (is (not (some #{"--pull=false"} (cl/act-argv {:event "e" :workflow "w" :job "j" :image "i" :pull? true :env {}}))))))
+      (testing "the local environment gives the endpoint, fake keys and region, and nothing else"
+        (let [e {:kind :local :aws {:endpoint "http://localhost:4566" :region "eu-central-1"
+                                    :credentials {:access-key-id "test" :secret-access-key "test"}}}]
+          (is (= {"AWS_ENDPOINT_URL" "http://localhost:4566" "AWS_DEFAULT_REGION" "eu-central-1" "AWS_REGION" "eu-central-1"
+                  "AWS_ACCESS_KEY_ID" "test" "AWS_SECRET_ACCESS_KEY" "test" "AWS_EC2_METADATA_DISABLED" "true" "AWS_PAGER" ""}
+                 (cl/injected-env e)))
+          (is (= "test" (get (cl/injected-env (assoc e :aws {:endpoint "x" :region "r"})) "AWS_ACCESS_KEY_ID")) "no credentials in the record: the fake ones")))
+      (testing "refusals before anything runs"
+        (is (= :ci/no-job (:type (thrown #(cl/run! "w" {:repo dir :workflow "fixture" :job ""})))))
+        (let [plain (io/file (tu/temp-home) "plain")]
+          (.mkdirs (io/file plain ".github" "workflows")) (spit (io/file plain ".github" "workflows" "x.yml") workflow)
+          (git plain "init" "-q" "-b" "main")      ; a repository with no commit: act cannot read its ref
+          (is (= :ci/not-a-git-repo (:type (thrown #(cl/run! "w" {:repo (str plain) :workflow "x" :job "say"}))))))
+        (env/save! "w" {:name "dev" :kind :remote :aws {:profile "dlbtest-dev" :region "eu-central-1" :account "210987654321"}
+                        :targets {:service/a "https://a.example.test"}})
+        (is (= :ci/not-local (:type (thrown #(cl/run! "w" {:repo dir :workflow "fixture" :job "say" :env "dev"})))))))))
+
+(deftest a-green-and-a-red-job-on-the-real-act
+  (if-not (podman-up?)
+    (fu/skip! "ci-local" "Podman's socket does not answer")
+    (tu/with-temp-home
+      (let [dir (repo-dir (tu/temp-home))
+            events (atom []) none (atom false)
+            before (set (act-containers))
+            run (fn [job] (ops/call! "ci.local" (ctx events none) {:ws "w" :repo dir :workflow "fixture" :job job :image plain-image :session "S"}))
+            green (run "say")]
+        (testing "green: a result with the exit and the file, lines streamed as logs.line"
+          (is (= "success" (:conclusion green)) (pr-str (dissoc green :argv)))
+          (is (zero? (:exit green)))
+          (is (.isFile (io/file (:path green))))
+          (is (str/includes? (:path green) "/sessions/S/ci/ci-local-proj-fixture.yml-say-"))
+          (let [text (slurp (:path green))
+                lines (filter #(= "logs.line" (:event %)) @events)]
+            (is (= (count (str/split-lines text)) (count lines)) "every line of the file was an event")
+            (is (str/includes? text "[deliberator] act workflow_dispatch -W") "provenance first")
+            (is (not (str/includes? text "AWS_SECRET_ACCESS_KEY")) "the keys are in the environment, not in the printed command line")
+            (is (str/includes? text "endpoint=http://localhost:19 region=eu-central-1 key=test") "the local environment's endpoint, region and fake key reached the job")
+            (is (str/includes? text "pager=[] a-real-secret=[unset] home-profile=[unset]") "nothing else of AWS"))
+          (is (.isFile (io/file (str (store/raw-path "w" (:sha green))))) "the raw blob was adopted"))
+        (testing "red: a failing job is a result, with its output; needs ran first"
+          (reset! events [])
+          (let [red (run "boom")
+                text (slurp (:path red))]
+            (is (= "failure" (:conclusion red)))
+            (is (= 1 (:exit red)))
+            (is (str/includes? text "endpoint=http://localhost:19") "the job it needs ran first")
+            (is (str/includes? text "about to fail"))))
+        (is (= before (set (act-containers))) "act removed its containers")))))
+
+(deftest cancelling-stops-act-and-leaves-no-container
+  (if-not (podman-up?)
+    (fu/skip! "ci-local" "Podman's socket does not answer")
+    (tu/with-temp-home
+      (let [dir (repo-dir (tu/temp-home))
+            events (atom []) cancelled (atom false)
+            before (set (act-containers))
+            f (future (ops/call! "ci.local" (ctx events cancelled) {:ws "w" :repo dir :workflow "fixture" :job "slow" :image plain-image :session "S"}))]
+        (let [deadline (+ (System/currentTimeMillis) 90000)]
+          (while (and (< (System/currentTimeMillis) deadline)
+                      (not (some #(str/includes? (str (:text %)) "sleeping now") @events)))
+            (Thread/sleep 300)))
+        (is (some #(str/includes? (str (:text %)) "sleeping now") @events) "the job started")
+        (reset! cancelled true)
+        (let [r (deref f 60000 ::hung)]
+          (is (not= ::hung r) "the request returned after the cancel")
+          (is (= "cancelled" (:conclusion r)) (pr-str (select-keys r [:conclusion :exit]))))
+        (is (= before (set (act-containers))) "no act container is left behind")))))

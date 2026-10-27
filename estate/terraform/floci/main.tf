@@ -57,6 +57,7 @@ provider "aws" {
     scheduler      = var.endpoint
     apigatewayv2   = var.endpoint
     cloudwatch     = var.endpoint
+    codedeploy     = var.endpoint
   }
 }
 

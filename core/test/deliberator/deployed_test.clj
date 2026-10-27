@@ -41,6 +41,18 @@
     (testing "without a readable task definition the revision still comes from the ARN"
       (is (= 7 (:revision (d/ecs-row "prod" {:serviceName "svc" :taskDefinition "arn:aws:ecs:eu-central-1:1:task-definition/svc:7"} nil)))))))
 
+(deftest a-code-deploy-service-shows-its-task-sets
+  (let [arn #(str "arn:aws:ecs:eu-central-1:1:task-definition/svc:" %)
+        row (d/ecs-row "prod" {:serviceName "svc" :taskDefinition (arn 1) :deploymentController {:type "CODE_DEPLOY"}
+                               :taskSets [{:id "ecs-svc/1" :status "PRIMARY" :taskDefinition (arn 2) :stabilityStatus "STEADY_STATE" :runningCount 0}]}
+                       nil)]
+    (testing "the service keeps the revision it was made with; the PRIMARY task set is the deployed one"
+      (is (= 1 (:revision row)))
+      (is (= [{:id "ecs-svc/1" :status "PRIMARY" :task-definition (arn 2) :revision 2 :stability "STEADY_STATE" :running 0}] (:task-sets row))))
+    (testing "the text view says so in a last column"
+      (is (str/includes? (d/text-view {:env "e" :fetched-at "t" :services [row]}) "\ttask sets: PRIMARY rev 2 ecs-svc/1\n")))
+    (is (nil? (:task-sets (d/ecs-row "prod" {:serviceName "svc" :taskDefinition (arn 1)} nil))) "a service without task sets has no key")))
+
 (deftest a-lambda-row-is-version-and-code-identity
   (let [row (d/lambda-row {:FunctionName "a sandbox AWS account-logger" :FunctionArn "arn:aws:lambda:eu-central-1:1:function:a sandbox AWS account-logger" :Version "$LATEST"
                            :Runtime "nodejs20.x" :Handler "index.handler" :MemorySize 128 :Timeout 10 :CodeSha256 "sha=" :CodeSize 321

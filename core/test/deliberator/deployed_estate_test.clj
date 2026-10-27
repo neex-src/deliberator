@@ -112,7 +112,8 @@
             (call "deployed.refresh" {:ws "default" :env "dlbremote"})
             (let [svc (first (filter #(= "m4-estate-a" (:name %)) (:services (d/cached "default" "dlbremote"))))]
               (is (= "estate" (:cluster svc)))
-              (is (= "estate/service-a:local" (get-in svc [:containers 0 :image])))
-              (is (= "local" (get-in svc [:containers 0 :tag]))))
+              ;; the newest revision: `local` as Terraform made it, or the commit tag `ci.local` registered (ci_local_estate_test)
+              (is (str/starts-with? (str (get-in svc [:containers 0 :image])) "estate/service-a:"))
+              (is (= (get-in svc [:containers 0 :tag]) (subs (str (get-in svc [:containers 0 :image])) (count "estate/service-a:")))))
             (finally (aws/invoke! {:ws "default"} local :ecs :DeleteService {:cluster "estate" :service "m4-estate-a" :force true}))))))
     (fu/skip! (fu/current-test) "set ESTATE_WS=<ws> (after bb estate:up --ws <ws>)")))

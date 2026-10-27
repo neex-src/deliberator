@@ -178,7 +178,7 @@
   (when-let [m (:module taskdef)]
     (let [f (io/file m)]
       (cond (.isAbsolute f) f
-            repo (when-let [r (first (filter #(= repo (:name %)) (repo/list ws)))] (io/file (:path r) m))))))
+            repo (when-let [r (first (filter #(= repo (:name %)) (repo/checkouts ws)))] (io/file (:path r) m))))))
 
 (defn- relaxed [n] (str/upper-case (str/replace n #"[.\-]" "_")))
 

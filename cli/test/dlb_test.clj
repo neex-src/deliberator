@@ -716,12 +716,24 @@
 
 (deftest ci-help-and-typed-errors
   (is (str/includes? (:out (dlb *home* "help" "ci")) "dlb ci runs <repo>"))
+  (is (str/includes? (:out (dlb *home* "help" "ci")) "dlb ci local <repo> <workflow> <job>"))
+  (is (str/includes? (:out (dlb *home* "help" "pr")) "dlb pr open <repo> <n>"))
+  (let [h (:out (dlb *home* "help" "ci" "local"))]
+    (is (str/includes? h "events: logs.line"))
+    (is (str/includes? h "--worktree")))
   (is (str/includes? (:out (dlb *home* "help" "ci" "diff")) "dlb ci diff <run>"))
   (dlb *home* "workspace" "open" "ci5")
   (dlb *home* "session" "start" "C1" "--ws" "ci5")
   (let [r (dlb *home* "ci" "log" "12345" "--ws" "ci5")]
     (is (= 2 (:exit r)))
-    (is (str/includes? (:err r) "ci/bad-repo") (:err r))))
+    (is (str/includes? (:err r) "ci/bad-repo") (:err r)))
+  (testing "ci local and pr open fail typed before doing anything"
+    (let [r (dlb *home* "ci" "local" "/nonexistent-dir" "x.yml" "job" "--ws" "ci5")]
+      (is (= 2 (:exit r)))
+      (is (str/includes? (:err r) "ci/no-dir") (:err r)))
+    (let [r (dlb *home* "pr" "open" "nope" "1" "--ws" "ci5")]
+      (is (= 2 (:exit r)))
+      (is (str/includes? (:err r) "repo/not-found") (:err r)))))
 
 (deftest ci-against-real-github-when-there-is-a-token
   ;; read-only: babashka/fs (public) has failed and green runs of workflow ci; a job's log download needs a token

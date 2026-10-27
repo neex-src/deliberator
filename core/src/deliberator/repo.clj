@@ -47,6 +47,12 @@
   [ws]
   (vec (:repositories (workspace/load ws))))
 
+(defn checkouts
+  "The entries of `ws` that have a work tree: the attached checkouts, not the bare clones of `clone!` (B27: a bare clone is no project,
+  no module path lives in it; `worktree.start` makes a work tree of it). What looks for files inside a repository uses this."
+  [ws]
+  (vec (remove :bare (list ws))))
+
 (defn- save! [ws repos] (workspace/save! (assoc (workspace/load ws) :repositories (vec repos))))
 
 (defn attach!
