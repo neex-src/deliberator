@@ -62,8 +62,12 @@ class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), 
         val useButton = JButton("Use").apply { toolTipText = "Make the chosen environment the project's (config views, AWS tab, scenarios)"; addActionListener { useSelected() } }
         refreshButton.addActionListener { refreshDeployed() }
         val textButton = JButton("Open text").apply { toolTipText = "The deployed view as text (tab separated)"; addActionListener { openText() } }
+        val recordButton = JButton("Edit record").apply {
+            toolTipText = "The environment's record (targets, read-only, profile) as text in the editor; the next run reads it"
+            addActionListener { editRecord() }
+        }
         val auditButton = JButton("Audit log...").apply { toolTipText = "The audit trail of a session as text, the confirmations highlighted"; addActionListener { AuditLogs.choose(project) } }
-        add(JPanel(FlowLayout(FlowLayout.LEFT)).apply { add(newButton); add(removeButton); add(useButton); add(refreshButton); add(textButton); add(auditButton) }, BorderLayout.NORTH)
+        add(JPanel(FlowLayout(FlowLayout.LEFT)).apply { add(newButton); add(removeButton); add(useButton); add(refreshButton); add(textButton); add(recordButton); add(auditButton) }, BorderLayout.NORTH)
         val lower = JPanel(BorderLayout()).apply { add(status, BorderLayout.NORTH); add(JBScrollPane(depTable), BorderLayout.CENTER) }
         add(OnePixelSplitter(true, 0.4f).apply { firstComponent = JBScrollPane(envTable); secondComponent = lower }, BorderLayout.CENTER)
         envTable.selectionModel.addListSelectionListener { if (!it.valueIsAdjusting) selected()?.let(::showDeployed) }
@@ -184,6 +188,16 @@ class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), 
                 "(the config snapshot, the deployed view, raw responses, session runs) stays where it is.")
         if (!ok) return
         Ui.background(project, "Deliberator: remove environment ${e.name}", { EnvironmentOps.remove(WorkspaceService.getInstance(project), e.name) }, { reload() })
+    }
+
+    /** Opens the environment's record file (`env.describe` names the path) in the editor: targets are added by writing them down. */
+    fun editRecord() {
+        val e = selected() ?: return
+        var vf: com.intellij.openapi.vfs.VirtualFile? = null
+        Ui.background(project, "Deliberator: open the record of ${e.name}", {
+            val p = EnvironmentOps.recordPath(WorkspaceService.getInstance(project), e.name)
+            if (p != null) vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByNioFile(java.nio.file.Path.of(p))
+        }, { vf?.let { Ui.openEditor(project, it, 0) } })
     }
 
     private fun openText() {

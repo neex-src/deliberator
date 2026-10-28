@@ -395,7 +395,13 @@
                   ". An sso_session or role_arn profile must also exist in the AWS config the daemon sees (AWS_CONFIG_FILE, "
                   "~/.aws/config); a profile of static keys needs its keys in the shared credentials file")})))
 
-(defn- ->error [env service op-name r raw]
+(defn- xml-message
+  "The `<Message>` of an XML error body (EC2's `<Response><Errors><Error><Code>..</Code><Message>..`), which aws-api's error map does not carry."
+  [^bytes body]
+  (when (and body (pos? (alength body)))
+    (some-> (re-find #"(?s)<Message>(.*?)</Message>" (String. body "UTF-8")) second str/trim not-empty)))
+
+(defn- ->error [env service op-name r raw body]
   (let [t (throwable r)
         cat (if (and t (connection-failure? t))
               :unavailable
@@ -410,6 +416,7 @@
        :message (or (:message (credential-bridge-error env r))
                     (:message r) (:Message r) (get-in r [:ErrorResponse :Error :Message]) (get-in r [:Error :Message])
                     (:cognitect.anomalies/message r)
+                    (xml-message body)
                     (some-> t ex-message) (str "no message from AWS (" (name cat) ")"))
        :hint (or (:hint (credential-bridge-error env r)) (hint env cat code service op-name))
        :service service :op op-name :env (:name env) :raw raw}
@@ -532,7 +539,7 @@
                                :response-sha (:sha resp-ref)}
                         anomaly? (assoc :category (keyword (name (:cognitect.anomalies/category r))))))
                 (if anomaly?
-                  (assoc (->error env api op-name r raw) :elapsed-ms elapsed)
+                  (assoc (->error env api op-name r raw body) :elapsed-ms elapsed)
                   (with-meta r {::raw raw ::elapsed-ms elapsed}))))]
     (if (and remote? (= class :mutate))
       (let [[verdict x] (gate ctx env api op-name request fp line)]

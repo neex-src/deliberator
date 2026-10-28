@@ -574,3 +574,13 @@
             (is (= 1 (get-in r [:facts "count"])))
             (is (= 0 (depth)))))
         (aws/invoke! ctx local :sqs :DeleteQueue {:QueueUrl url})))))
+
+(deftest an-ec2-error-carries-the-message-aws-sent
+  ;; found on the real account (B38's EC2 read): aws-api's error map has the code but not the XML <Message>, the user read "no message from AWS (incorrect)"
+  (let [xml "<?xml version=\"1.0\"?><Response><Errors><Error><Code>InvalidNetworkInterfaceID.NotFound</Code><Message>The networkInterface ID 'eni-0123' does not exist</Message></Error></Errors><RequestID>r</RequestID></Response>"
+        r {:cognitect.anomalies/category :cognitect.anomalies/incorrect :cognitect.aws.error/code "InvalidNetworkInterfaceID.NotFound"}
+        e (#'aws/->error {:name "dev" :kind :local} :ec2 "DescribeNetworkInterfaces" r {} (.getBytes xml "UTF-8"))]
+    (is (= "InvalidNetworkInterfaceID.NotFound" (:code e)))
+    (is (str/includes? (:message e) "eni-0123' does not exist") (:message e))
+    (is (= "no message from AWS (incorrect)" (:message (#'aws/->error {:name "dev" :kind :local} :ssm "GetParameter" r {} (byte-array 0))))
+        "JSON services that send no message keep the honest label")))

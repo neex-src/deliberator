@@ -107,4 +107,44 @@ class AwsExplorerTest : BasePlatformTestCase() {
         wait("the refusal") { panel.lastError != null }
         assertTrue(panel.lastError!!, panel.lastError!!.contains("no declaration of aws_sqs_queue.nope"))
     }
+
+    fun testAChangedByHandResourceIsMarkedInTheTreeAndItsRowOpensTheDeclaration() {
+        // B39 in the explorer: terraform.drift with a refresh names the attributes; the row of that resource says so
+        val root = tf.resolve("chg")
+        Files.createDirectories(root)
+        Files.writeString(root.resolve("main.tf"), "resource \"aws_ssm_parameter\" \"p02\" {\n  name = \"/x/p02\"\n}\n")
+        val env = WorkspaceService.getInstance(project).selectedEnv
+        panel.drift = Drift.parse(com.google.gson.JsonParser.parseString("""{"env":"$env","source":"$root","declared":1,"matching":1,"missing":[],"undeclared":[],
+            "refreshed":{"lines":3},"changed":[{"address":"aws_ssm_parameter.p02","kind":"ssm","aws-name":"/x/p02","attributes":["value","version"]}]}""").asJsonObject)
+        panel.render(mapOf("ssm" to listOf(com.neex.deliberator.scn.LiveResource("/x/p02", null), com.neex.deliberator.scn.LiveResource("/x/p03", null))))
+        assertEquals(listOf("ssm: /x/p02 [changed: value,version]", "ssm: /x/p03"), panel.lines())
+        panel.openDeclaration("aws_ssm_parameter.p02", root.toString())
+        wait("the file opens at the declaration") { com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedTextEditor?.virtualFile?.name == "main.tf" }
+        assertEquals(0, com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedTextEditor!!.caretModel.logicalPosition.line)
+    }
+
+    fun testRefreshStateIsOnlyForARemoteEnvironment() {
+        // the checkbox is off-limits for the local emulator and a drift asked with it is the plain read (the daemon refuses a refresh of a local root)
+        panel.render(emptyMap())
+        assertFalse("the temp workspace's environment is local", panel.refreshState.isEnabled)
+        panel.refreshState.isSelected = true
+        panel.runDrift(tf.resolve("ok").toString())
+        wait("the comparison ends") { panel.statusText().contains("declared present") || panel.lastError != null }
+        assertNull("no refresh was asked of a local environment: ${panel.lastError}", panel.lastError)
+        val fem = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+        wait("the report opens") { fem.openFiles.any { it.name == "drift-local.txt" } }
+        fem.openFiles.forEach { fem.closeFile(it) }
+    }
+
+    fun testAnEnvironmentThatCannotBeReadSaysWhyAndNotThatTheRuntimeIsDown() {
+        // found with the denied profile on the real account: the tab said "nothing found (is the runtime up?)" for a remote environment
+        val record = com.google.gson.JsonParser.parseString("""{"kind":"remote","read-only":true,"aws":{"profile":"m5-no-such-profile","region":"eu-central-1","account":"123456789012"},"targets":{}}""").asJsonObject
+        val svc = WorkspaceService.getInstance(project)
+        bg { svc.call("env.save", com.google.gson.JsonObject().apply { addProperty("name", "dev"); add("record", record); addProperty("check", false) }); svc.refreshNow() }
+        svc.selectEnv("dev")
+        panel.refresh()
+        wait("the reason") { panel.statusText().contains("nothing could be read") }
+        assertFalse(panel.statusText(), panel.statusText().contains("runtime"))
+        assertTrue(panel.statusText(), panel.statusText().contains("aws.discover"))
+    }
 }

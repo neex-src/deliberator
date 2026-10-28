@@ -20,6 +20,10 @@ object EnvironmentOps {
         }).resultObject(),
     ).also { svc.refreshNow() }
 
+    /** The record file of [env] (`env.describe` names it): the targets of an environment are text, edited in the editor. */
+    fun recordPath(svc: WorkspaceService, env: String): String? =
+        svc.call("env.describe", JsonObject().apply { addProperty("name", env) }).resultObject().get("path")?.takeIf { it.isJsonPrimitive }?.asString
+
     /** `env.remove`; what was fetched through the environment stays (the daemon says so). */
     fun remove(svc: WorkspaceService, name: String) {
         svc.call("env.remove", JsonObject().apply { addProperty("name", name) })

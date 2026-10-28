@@ -207,12 +207,13 @@
 (defn plan
   "Static half of a run, see the ns docstring. Returns `{:path :sha :bytes :header :steps}` where
   each step carries `:kind-map`; throws, creating nothing."
-  [ws env scenario-path & {:keys [steps resolve-target vars builtins]}]
-  (let [path (.toAbsolutePath (.toPath (java.io.File. (str scenario-path))))
+  [ws env scenario-path & {:keys [steps resolve-target check-target vars builtins]}]
+  (let [check-target (or check-target resolve-target)   ; B38: the plan checks that a target exists, it does not look up a task address
+        path (.toAbsolutePath (.toPath (java.io.File. (str scenario-path))))
         bs (Files/readAllBytes path)
         parsed (parse/parse bs :path path :kinds (kinds/registry))
         _ (when (empty? (:steps parsed)) (throw (ex-info "the scenario has no steps" {:type :scenario/parse :line 1 :message "no steps"})))
-        base (set (keys (vars/snapshot (:header parsed) :correlation "plan" :env env :vars vars :builtins builtins :resolve resolve-target)))
+        base (set (keys (vars/snapshot (:header parsed) :correlation "plan" :env env :vars vars :builtins builtins :resolve check-target)))
         selected (when steps (set steps))
         _ (doseq [n selected]
             (when-not (<= 1 n (count (:steps parsed)))
@@ -222,7 +223,7 @@
           (if-let [s (first ss)]
             (let [kmap (kinds/for-verb (kinds/get-kind (:kind s)) (:verb s))
                   _ (validate-step! kmap s)
-                  _ (check-vars! s (if (:concurrent? kmap) base defined) resolve-target)
+                  _ (check-vars! s (if (:concurrent? kmap) base defined) check-target)
                   caps (map #(:name (with-expr (:line s) (fn [] (expr/parse-capture %)))) (dir-values s "capture"))]
               (recur (rest ss)
                      (if (:concurrent? kmap) defined (into defined caps))

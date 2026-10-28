@@ -118,6 +118,7 @@
             [deliberator.ci :as ci]
             [deliberator.cilocal :as cilocal]
             [deliberator.hcl :as hcl]
+            [deliberator.ecstarget :as ecstarget]
             [deliberator.tfdrift :as tfdrift]
             [deliberator.tflocal :as tflocal]
             [deliberator.tfroot :as tfroot]
@@ -746,7 +747,9 @@
                                     :on-created (fn [run]
                                                   (swap! (:runs d) assoc (:run-id run) run)
                                                   ((:on-cancel! ctx) (fn [] (engine/cancel! run))))
-                                    :resolve-target (fn [k] (env/target @env* (keyword k)))
+                                    ;; B38: an ECS service target is looked up when a step uses it (its task address changes), not at the plan
+                                    :resolve-target (fn [k] (ecstarget/resolve-target {:ws ws :session sess} @env* (env/target @env* (keyword k))))
+                                    :check-target (fn [k] (env/target @env* (keyword k)))
                                     :reload-env (fn [] (reset! env* (env/load ws env-name)))
                                     :topology (topology/snapshot ws e)
                                     :host ctx}
@@ -838,10 +841,11 @@
     (verify-remote! ctx ws env-name)
     (awsdiscover/discover! ws env-name)))
 
-(defn- terraform-drift [ctx {:keys [env file dir plan] :as args}]
+(defn- terraform-drift [ctx {:keys [env file dir plan refresh vars] :as args}]
   (let [ws (ws-of args) env-name (or env "local")]
     (verify-remote! ctx ws env-name)
-    (tfdrift/drift! ws env-name (cond-> {} file (assoc :file file) dir (assoc :dir dir) plan (assoc :plan plan)))))
+    (tfdrift/drift! ws env-name (cond-> {} file (assoc :file file) dir (assoc :dir dir) plan (assoc :plan plan)
+                                        refresh (assoc :refresh true :vars vars :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx))))))
 
 (defn- terraform-local [ctx {:keys [env dir action vars] :as args}]
   (tflocal/run! (ws-of args) (or env "local") {:dir dir :action (or action "plan") :vars vars :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)}))
@@ -1292,7 +1296,9 @@
                       :args (ws-schema :env {:type :string :doc "environment name (default local)"}
                                        :file {:type :string :doc "terraform show -json output file"}
                                        :dir {:type :string :doc "a Terraform root directory (terraform show -json runs there, no apply)"}
-                                       :plan {:type :string :doc "saved plan file in dir"})}
+                                       :plan {:type :string :doc "saved plan file in dir"}
+                                       :refresh {:type :bool :doc "B39: run `terraform plan -refresh-only` in dir first, with the credentials of the environment's profile (a remote environment), so value changes made by hand show as `changed`; nothing is applied"}
+                                       :vars {:type :object :doc "-var values for the refresh (variables of the root without a default)"})}
    "terraform.graph" {:fn terraform-graph :class :read
                       :doc "The order of several Terraform roots, read from their .tf files and never evaluated: root B comes after root A when B has a `terraform_remote_state` that reads A's state (an s3 backend key or a local path that A's backend names) or a `data` source that looks up, by a literal name, a resource A declares (`data \"aws_iam_role\"` with `name = \"x\"` and A's `resource \"aws_iam_role\"` with the same). Answers the roots, the edges (with the file and line that made each), the order (directories, dependencies first, otherwise as given) and the remote states that point at no given root. A cycle is an error."
                       :args {:roots {:type :strings :required true :positional true :doc "Terraform root directories, comma separated"}}}

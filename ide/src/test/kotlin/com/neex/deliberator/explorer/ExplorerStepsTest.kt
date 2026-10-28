@@ -37,4 +37,14 @@ class ExplorerStepsTest {
         assertEquals("ssm", AwsResources.forMember("ssm", "Name")!!.first)
         assertEquals(null, AwsResources.forMember("sns", "Name"))
     }
+
+    @Test fun sections_that_failed_are_kept_so_the_tab_can_say_why_it_is_empty() {
+        // found walking the IDE against the real account with the denied profile: every section answered "not authorized" and the tab said "is the runtime up?"
+        val r = JsonParser.parseString("""{"resources":{"sqs":[]},"errors":{"dynamodb":"User: arn:aws:iam::1:user/denied is not authorized to perform: dynamodb:ListTables","kinesis":"needs a subscription"}}""").asJsonObject
+        val e = AwsResources.parseErrors(r)
+        assertEquals(setOf("dynamodb", "kinesis"), e.keys)
+        assertTrue(e["dynamodb"]!!.contains("not authorized"))
+        assertEquals(emptyMap<String, String>(), AwsResources.parseErrors(JsonParser.parseString("""{"resources":{}}""").asJsonObject))
+        assertEquals(emptyMap<String, String>(), AwsResources.parseErrors(null))
+    }
 }

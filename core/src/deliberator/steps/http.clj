@@ -17,11 +17,18 @@
   line, body); `response.<ext>` = the raw response body alone (json/xml/html/txt/bin by content
   type and content). Status and headers live in the step's facts: `status`, `bytes`, and every
   response header as `header.<lowercase-name>` (repeated headers joined with `, `). `$` addresses a
-  JSON body. Errors keep the request bytes and carry a hint built from the URL and environment."
+  JSON body. Errors keep the request bytes and carry a hint built from the URL and environment.
+
+  B40: on a REMOTE environment a request whose method is not GET, HEAD or OPTIONS is a mutation like any
+  AWS write: `:read-only true` refuses it flat (no token, nothing is sent), `:read-only false` makes it a confirmation
+  (the token is bound to the method, the URL and the body). A local environment is not gated."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
+            [deliberator.aws :as aws]
             [deliberator.scenario.kinds :as kinds]
-            [deliberator.steps.common :as c])
+            [deliberator.steps.aws :as sa]
+            [deliberator.steps.common :as c]
+            [deliberator.store :as store])
   (:import (java.net URI)
            (java.net.http HttpClient HttpClient$Redirect HttpClient$Version HttpRequest
                           HttpRequest$BodyPublishers HttpResponse$BodyHandlers)
@@ -119,6 +126,22 @@
              (.connectTimeout (Duration/ofSeconds 10))
              .build)))
 
+(def safe-methods
+  "The methods that only read (RFC 9110 section 9.2.1 minus TRACE): everything else is a mutation on a remote environment."
+  #{"GET" "HEAD" "OPTIONS"})
+
+(defn gate!
+  "B40: the gate of a request on a remote environment. A safe method passes. Any other is one mutation: read-only -> refused,
+  no token; else it needs the confirmation token bound to [method url body sha]. Throws the step ERROR (`confirm.required` event
+  on the run's sink); returns nil when the request may be sent. `rq-bytes` is kept in the error, the user sees what was not sent."
+  [ctx method url ^bytes body rq-bytes]
+  (when (and (= :remote (some-> ctx :env :kind)) (not (safe-methods method)))
+    (let [g (aws/gate! (select-keys ctx [:ws :session :confirm]) (:env ctx) :http (keyword method)
+                       {:Url url :BodySha256 (store/sha256 (or body (byte-array 0)))})]
+      (when (aws/error? g)
+        (let [e (sa/failure ctx g)]
+          (throw (ex-info (ex-message e) (merge (ex-data e) {:request-bytes rq-bytes :request-ext "http"}) e)))))))
+
 (defn run [ctx step]
   (let [{:keys [method url headers body]} (parse-request (:body step))
         url (full-url ctx step url)
@@ -126,6 +149,7 @@
                   (not-any? #(= "x-correlation-id" (str/lower-case (first %))) headers)
                   (conj ["X-Correlation-Id" (:step-correlation ctx)]))
         rq-bytes (serialise method url headers body)
+        _ (gate! ctx method url body rq-bytes)
         host (try (let [u (URI. url)] (str (.getHost u) (when (pos? (.getPort u)) (str ":" (.getPort u)))))
                   (catch Exception _ url))
         ex (fn [msg hint cause]

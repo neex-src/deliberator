@@ -22,7 +22,7 @@ data class LiveResource(val name: String, val ref: String?, val containers: List
  */
 @Service(Service.Level.APP)
 class AwsResources {
-    private class Entry(val at: Long, val byKind: Map<String, List<LiveResource>>)
+    private class Entry(val at: Long, val byKind: Map<String, List<LiveResource>>, val errors: Map<String, String> = emptyMap())
 
     private val cache = ConcurrentHashMap<String, Entry>()
     private val refreshing = AtomicBoolean(false)
@@ -49,9 +49,14 @@ class AwsResources {
         return try {
             val r = ScnDaemon.call(client, project, "aws.discover", JsonObject().apply { addProperty("env", svc.selectedEnv) }, timeoutMs = 60_000)
             val byKind = parse(r.takeIf { it.isJsonObject }?.asJsonObject)
-            cache[key] = Entry(System.currentTimeMillis(), byKind)
+            cache[key] = Entry(System.currentTimeMillis(), byKind, parseErrors(r.takeIf { it.isJsonObject }?.asJsonObject))
             byKind
-        } catch (_: Exception) { cache[key]?.byKind ?: emptyMap() }
+        } catch (e: Exception) {
+            // the daemon refused the whole listing (a profile that cannot log in, an account that differs): say so, do not look like an empty account
+            val prior = cache[key]
+            cache[key] = Entry(System.currentTimeMillis(), prior?.byKind ?: emptyMap(), mapOf("aws.discover" to (e.message ?: e.toString())))
+            prior?.byKind ?: emptyMap()
+        }
     }
 
     private fun refreshAsync(project: Project) {
@@ -61,11 +66,18 @@ class AwsResources {
         }
     }
 
+    /** The sections of the last fetch that failed (kind -> the daemon's words: a permission, a subscription), empty before a fetch. */
+    fun errors(project: Project): Map<String, String> = key(project)?.let { cache[it]?.errors } ?: emptyMap()
+
     /** Forget what was fetched (after a step that creates or deletes things). */
     fun invalidate() = cache.clear()
 
     companion object {
         fun getInstance(): AwsResources = ApplicationManager.getApplication().getService(AwsResources::class.java)
+
+        /** `aws.discover`'s `errors`: a section that could not be listed is an error, never an empty list. */
+        fun parseErrors(result: JsonObject?): Map<String, String> =
+            result?.get("errors")?.takeIf { it.isJsonObject }?.asJsonObject?.entrySet()?.associate { (k, v) -> k to (v.takeIf { it.isJsonPrimitive }?.asString ?: v.toString()) } ?: emptyMap()
 
         fun parse(result: JsonObject?): Map<String, List<LiveResource>> {
             val res = result?.get("resources")?.takeIf { it.isJsonObject }?.asJsonObject ?: return emptyMap()

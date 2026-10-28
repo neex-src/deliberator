@@ -120,7 +120,7 @@
         failed-checks (count (remove :ok checks))
         failed-steps (count (filter (comp #{:failed :error} :status) steps))
         tail (concat
-              (when-let [t (:services (:topology run))]
+              (when-let [t (not-empty (:services (:topology run)))]   ; a remote environment has no services: no empty "TOPOLOGY " line
                 [(str "TOPOLOGY " (str/join " " (for [[n m] t]
                                                  (str n "=" (name (:mode m)) (when (:serving m) (str "(" (name (:serving m)) ")")) (when (:url m) (str " " (:url m)))))))])
               (when (pos? failed-checks) [(str "FAILED " failed-checks "/" (count checks))])

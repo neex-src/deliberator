@@ -10,12 +10,15 @@
     (is (contains? awscall/verbs "s3.ListBuckets"))
     (is (contains? awscall/verbs "sns.Publish"))
     (is (contains? awscall/verbs "states.StartExecution"))
+    (is (contains? awscall/verbs "ec2.DescribeNetworkInterfaces") "B38: the ECS service target reads the task's interface; a scenario may ask the same")
     (is (> (count awscall/verbs) 1000))))
 
 (deftest unknown-operations-are-mutations-unless-they-only-read
   (is (= :read (ops/op-class :s3 "ListBuckets")))
   (is (= :read (ops/op-class :iam "GetUser")))
   (is (= :mutate (ops/op-class :sns "Publish")))
+  (is (= :read (ops/op-class :ec2 "DescribeInstances")))
+  (is (= :mutate (ops/op-class :ec2 "RunInstances")))
   (is (= :mutate (ops/op-class :s3 "DeleteBucket")))
   (testing "the read prefixes count only for the services the generic kind added"
     (is (= :mutate (ops/op-class :sqs "GetThing")))
