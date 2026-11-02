@@ -83,9 +83,12 @@ class ScnRunner(private val project: Project) : Disposable {
     @Volatile var confirmer: (Confirmation) -> Boolean = { c ->
         var yes = false
         ApplicationManager.getApplication().invokeAndWait({
+            val which = if (c.of > 1) " (${c.index} of ${c.of})" else ""
+            val last = c.index == c.of
             yes = Messages.showYesNoDialog(project,
-                "Step ${c.step} needs confirmation:\n\n${c.summary}\n\nRun it again with this confirmation?",
-                "Confirm Remote Change", "Confirm and Run", "Cancel", Messages.getWarningIcon()) == Messages.YES
+                "Step ${c.step} needs confirmation$which:\n\n${c.summary}\n\n" +
+                    if (last) "Run it again with ${if (c.of > 1) "these confirmations" else "this confirmation"}?" else "The run starts again when every confirmation is answered.",
+                "Confirm Remote Change", if (last) "Confirm and Run" else "Confirm", "Cancel", Messages.getWarningIcon()) == Messages.YES
         }, ModalityState.nonModal())
         yes
     }
@@ -157,7 +160,7 @@ class ScnRunner(private val project: Project) : Disposable {
      * One `scenario.run` and what follows it: the reload, and the confirmations of `confirm-required` one by one
      * (each yes is another run of that one step). Blocking, off the EDT; the caller has set the running state.
      */
-    fun execute(path: String, steps: List<Int>, confirm: String?): RunSnapshot? {
+    fun execute(path: String, steps: List<Int>, confirm: String?, round: Int = 0): RunSnapshot? {
         val svc = WorkspaceService.getInstance(project)
         ensureSession(svc)
         val st = state(path)
@@ -202,11 +205,20 @@ class ScnRunner(private val project: Project) : Disposable {
         st.call = call
         if (st.cancelRequested) call.cancel()
         val terminal: DaemonTerminal = try { call.await() } catch (e: CancellationException) { return null }
-        return afterTerminal(path, terminal, steps)
+        return afterTerminal(path, terminal, steps, round)
     }
 
-    /** What a terminal means: a run to read, a confirmation to ask for, or an error. Public for the confirm test. */
-    fun afterTerminal(path: String, terminal: DaemonTerminal, steps: List<Int>): RunSnapshot? {
+    /**
+     * What a terminal means: a run to read, confirmations to ask for, or an error. Public for the confirm test.
+     *
+     * A run that reaches mutating steps of a remote environment ends `confirm-required` with one confirmation per such step, and the steps
+     * after them have run without their effect (an order that was never sent has nothing to wait for). So the confirmations are asked
+     * one by one up front, and when all are answered yes the SAME run (the same steps) starts again once with every token
+     * (`confirm` = `T1,T8,T9`; the daemon hands the first run's variables and captures back, a token is bound to the exact request).
+     * No answer is acted on alone: a Cancel stops before anything is repeated. A repeat that asks again (a request that
+     * changed between the runs) is asked about again, at most [MAX_CONFIRM_ROUNDS] times.
+     */
+    fun afterTerminal(path: String, terminal: DaemonTerminal, steps: List<Int>, round: Int = 0): RunSnapshot? {
         if (terminal.ok) {
             val runDir = terminal.resultObject().getAsJsonObject("paths")?.get("run")?.asString ?: return null
             return finished(path, loadSnapshot(runDir))
@@ -215,12 +227,14 @@ class ScnRunner(private val project: Project) : Disposable {
             val err = terminal.error
             val runDir = err?.getAsJsonObject("result")?.getAsJsonObject("paths")?.get("run")?.asString
             val snap = runDir?.let { finished(path, loadSnapshot(it)) }
-            var last = snap
-            for (c in Confirmation.parse(err)) {
-                if (!confirmer(c)) break
-                last = execute(path, listOf(c.step), c.token) ?: last
+            val asked = Confirmation.parse(err)
+            if (asked.isEmpty()) return snap
+            if (round >= MAX_CONFIRM_ROUNDS) {
+                Ui.notify(project, "Run ${path.substringAfterLast('/')}", "Step ${asked.first().step} still needs confirmation after $round repeats: its request changed between the runs. Run again.", NotificationType.WARNING)
+                return snap
             }
-            return last
+            for (c in asked) if (!confirmer(c)) return snap
+            return execute(path, steps, asked.joinToString(",") { it.token }, round + 1) ?: snap
         }
         throw DaemonException(terminal.errorMessage ?: "scenario.run failed", terminal.errorType ?: "daemon/error",
             terminal.error?.get("hint")?.takeIf { it.isJsonPrimitive }?.asString)
@@ -343,5 +357,8 @@ class ScnRunner(private val project: Project) : Disposable {
 
         /** A run of [steps] continues the latest run of its file unless it runs everything or starts at step 1. */
         fun continues(steps: List<Int>): Boolean = steps.isNotEmpty() && 1 !in steps
+
+        /** How many times a run may start again because it asked for confirmations again. */
+        const val MAX_CONFIRM_ROUNDS = 3
     }
 }

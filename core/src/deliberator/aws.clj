@@ -429,9 +429,15 @@
 
 (defn- item-ref [r] (select-keys r [:sha :path :bytes]))
 
-(defn- summary-target [request]
-  (some (fn [[k v]] (when (and (string? v) (re-find #"(Name|Url|Arn|Id)$" (name k))) v))
-        request))
+(defn- summary-target
+  "What a confirmation names: an ECS service (`cluster/service`, found on a real UpdateService that said only `UpdateService on rt-write`), a task
+  definition family (a RegisterTaskDefinition named its task role instead), else the first string of a key ending in Name, Url, Arn or Id."
+  [request]
+  (let [s (fn [k] (let [v (get request k)] (when (and (string? v) (seq v)) v)))]
+    (or (when-let [svc (s :service)] (str (some-> (s :cluster) (str "/")) svc))
+        (s :family)
+        (some (fn [[k v]] (when (and (string? v) (re-find #"(Name|Url|Arn|Id)$" (name k))) v))
+              request))))
 
 (defn- summary [env op-name request]
   (str op-name (when-let [t (summary-target request)] (str " " t))

@@ -283,7 +283,57 @@ class RunFromEditorTest : BasePlatformTestCase() {
         assertFalse("the run read the buffer that is shown", view.stale)
     }
 
-    fun testConfirmRequiredAsksOnceAndRerunsThatStepWithTheToken() {
+    /** The daemon's `confirm-required` terminal of a run [first] whose steps [asked] (step, token, summary) needed a confirmation. */
+    private fun confirmTerminal(first: RunSnapshot, vararg asked: Triple<Int, String, String>): DaemonTerminal {
+        val err = JsonObject().apply {
+            addProperty("type", "confirm-required"); addProperty("message", "step ${asked.first().first} needs confirmation: ${asked.first().third}")
+            addProperty("token", asked.first().second); addProperty("summary", asked.first().third); addProperty("step", asked.first().first)
+            add("confirmations", JsonArray().also { a -> for ((st, tok, sum) in asked) a.add(JsonObject().apply { addProperty("step", st); addProperty("token", tok); addProperty("summary", sum) }) })
+            add("result", JsonObject().apply {
+                addProperty("status", "failed")
+                add("paths", JsonObject().apply { addProperty("run", first.runDir); addProperty("result", first.resultPath) })
+            })
+        }
+        return DaemonTerminal(false, null, err, "{}")
+    }
+
+    /**
+     * Found on the real account (order.scn from the editor): a run asks for confirmations of mutating steps and the steps after them ran
+     * without the effect of the ones that were not sent yet. Answering each confirmation with a run of that one step left the later
+     * steps failed for good, so no run from the editor could be green. The confirmations are asked up front and the SAME run starts again
+     * once, with every token; a Cancel repeats nothing.
+     */
+    fun testSeveralConfirmationsAreAskedUpFrontAndTheRunStartsAgainOnceForAllOfThem() {
+        val (vf, view) = open(fourSteps())
+        val first = runAndWait(view, vf, null)
+        val terminal = confirmTerminal(first, Triple(2, "tokA", "SendMessage queue/inbox on dev (account 1234)"), Triple(4, "tokB", "PutParameter /x on dev (account 1234)"))
+        val log = ArrayList<String>()
+        runner.confirmer = { log += "ask ${it.step} ${it.index}/${it.of}"; true }
+        val snap = bg { runner.afterTerminal(vf.path, terminal, emptyList()) }!!
+        assertEquals("both asked before anything runs again, in order", listOf("ask 2 1/2", "ask 4 2/2"), log)
+        assertEquals("the repeat is the whole run again, not the confirmed steps alone", setOf(1, 2, 3, 4), snap.sections.keys)
+        assertEquals("one repeat for the two confirmations", 2, bg { runner.history(vf.path) }.size)
+
+        log.clear()
+        runner.confirmer = { log += "ask ${it.step}"; it.step != 4 }
+        bg { runner.afterTerminal(vf.path, terminal, emptyList()) }
+        assertEquals("asked both, the second was declined", listOf("ask 2", "ask 4"), log)
+        assertEquals("a Cancel repeats nothing, not even the step that was confirmed", 2, bg { runner.history(vf.path) }.size)
+    }
+
+    fun testARepeatThatAsksAgainIsAskedAboutAtMostThreeTimes() {
+        val (vf, view) = open(fourSteps())
+        val first = runAndWait(view, vf, null)
+        // a daemon that never takes the token (a request that differs between the runs): the run goes on asking, the loop must end
+        val terminal = confirmTerminal(first, Triple(2, "tokA", "SendMessage queue/inbox on dev (account 1234)"))
+        var asked = 0
+        runner.confirmer = { asked++; true }
+        bg { runner.afterTerminal(vf.path, terminal, emptyList(), ScnRunner.MAX_CONFIRM_ROUNDS) }
+        assertEquals("at the limit nothing is asked and nothing runs", 0, asked)
+        assertEquals(1, bg { runner.history(vf.path) }.size)
+    }
+
+    fun testConfirmRequiredAsksOnceAndRunsAgainWithTheToken() {
         val (vf, view) = open(fourSteps())
         val first = runAndWait(view, vf, null)
         // the error shape of daemon_test's confirm-required test
@@ -307,7 +357,7 @@ class RunFromEditorTest : BasePlatformTestCase() {
         val snap = bg { runner.afterTerminal(vf.path, terminal, emptyList()) }!!
         assertEquals("the dialog saw the summary once", 1, asked.size)
         assertTrue(asked.single().summary.contains("SendMessage"))
-        assertEquals("the repeat ran that one step", setOf(2), snap.sections.keys)
+        assertEquals("the repeat is the run that asked (all of it) with the token", setOf(1, 2, 3, 4), snap.sections.keys)
         assertEquals(2, bg { runner.history(vf.path) }.size)
 
         runner.confirmer = { false }

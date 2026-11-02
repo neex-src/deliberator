@@ -228,6 +228,21 @@
           (is (= :confirm-required (:type (aws/invoke! c e :ssm :SomethingNew {})))))
         (confirmed! c e :ssm :DeleteParameter {:Name p})))))
 
+(deftest a-confirmation-names-the-ecs-service-and-the-task-definition-family
+  ;; found on real AWS from the IDE's confirmation dialog: `UpdateService on rt-write (account ...)` named no service, and
+  ;; `RegisterTaskDefinition arn:...:role/rt1102-task` named the task role instead of what was registered
+  (let [summary #'aws/summary
+        env {:name "rt-write" :aws {:account "000000000000"}}]
+    (is (= "UpdateService rt1102/rt1102-service-a on rt-write (account 000000000000)"
+           (summary env "UpdateService" {:cluster "rt1102" :service "rt1102-service-a" :taskDefinition "rt1102-service-a" :forceNewDeployment true})))
+    (is (= "UpdateService rt1102-service-a on rt-write (account 000000000000)" (summary env "UpdateService" {:service "rt1102-service-a"})))
+    (is (= "RegisterTaskDefinition rt1102-service-a on rt-write (account 000000000000)"
+           (summary env "RegisterTaskDefinition" {:family "rt1102-service-a" :taskRoleArn "arn:aws:iam::000000000000:role/rt1102-task"})))
+    (testing "the earlier rule still names the rest"
+      (is (= "PutParameter /x on rt-write (account 000000000000)" (summary env "PutParameter" {:Name "/x" :Value "1"})))
+      (is (= "SendMessage https://q on rt-write (account 000000000000)" (summary env "SendMessage" {:QueueUrl "https://q" :MessageBody "b"})))
+      (is (= "Invoke on rt-write (account 000000000000)" (summary env "Invoke" {:Payload "x"}))))))
+
 (deftest sqs-answers-a-missing-permission-as-a-missing-queue-and-the-hint-says-both
   ;; found with rvw-denied on real AWS: `QueueDoesNotExist ... or you do not have access to it` came with the hint "rejected by profile ..."
   (let [env {:kind :remote :name "rt-denied" :aws {:profile "rvw-denied" :region "eu-central-1" :account "000000000000"}}

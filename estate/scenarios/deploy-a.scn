@@ -1,0 +1,31 @@
+# A real deploy of service A and the address that follows it (B38, decision 67). `{{service/a}}` is an ECS target
+# (`{:ecs {:cluster ... :service ... :port ...}}`): the address of the running task is looked up every time a step uses it, so the
+# same step reaches the replaced task after the deploy. The deploy is UpdateService with the newest ACTIVE revision of the task
+# definition family (`taskDefinition` without a revision) and forceNewDeployment, so it replaces the task also when no new
+# revision was registered. Targets used: `service/a`, `ecs/cluster`, `ecs/service-a` (the task definition family is named like the service).
+# @env local
+
+### http health-before
+# @assert status == 200
+# @assert $.status == UP
+GET {{service/a}}/actuator/health
+
+### aws ecs.UpdateService deploy
+# @assert $.service.deployments[0].rolloutState == IN_PROGRESS
+{"cluster": "{{ecs/cluster}}", "service": "{{ecs/service-a}}", "taskDefinition": "{{ecs/service-a}}", "forceNewDeployment": true}
+
+### aws ecs.DescribeServices rollout
+# @until $.services[0].deployments[0].rolloutState == COMPLETED within 300s
+{"cluster": "{{ecs/cluster}}", "services": ["{{ecs/service-a}}"]}
+
+### aws ecs.DescribeServices settled
+# The replaced task is gone: one deployment, one running task.
+# @until $.services[0].runningCount == 1 within 180s
+# @assert $.services[0].deployments[0].rolloutState == COMPLETED
+{"cluster": "{{ecs/cluster}}", "services": ["{{ecs/service-a}}"]}
+
+### http health-after
+# The same address target, a different task.
+# @until status == 200 within 90s
+# @assert $.status == UP
+GET {{service/a}}/actuator/health

@@ -60,8 +60,11 @@
       (:session decl) (assoc :session (:session decl))
       serving (assoc :serving (name serving)))))
 
-(defn- reconcile! [ws sink]
-  (runtime/ensure! ws {:sink sink}))
+(defn- reconcile!
+  "Reconciles the runtime for a fake. A service whose jar is not built is skipped (a `runtime.skipped` event), not an error: found with the IDE
+  against a real Fargate service A, `fake.record error runtime/missing-jar` for an unrelated adopted service and the fake's container never came up."
+  [ws sink]
+  (runtime/ensure! ws {:sink sink :skip-unbuilt true}))
 
 (defn record!
   "Declares fake `name` (`upstream`: `service/<n>` or a URL) and starts a new recording in `session`'s directory; the proxy

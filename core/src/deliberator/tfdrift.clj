@@ -55,11 +55,19 @@
            :child_modules (mapv keep-module (:child_modules m))}
     (:address m) (assoc :address (:address m))))
 
+(defn- blank-value?
+  "Absent, null, an empty map, list or string: the provider's way of saying nothing."
+  [v]
+  (or (nil? v) (and (coll? v) (empty? v)) (and (string? v) (str/blank? v))))
+
 (defn- changed-attributes
-  "The names of the attributes that differ between `before` and `after` of one change (names only: the values may be secrets)."
+  "The names of the attributes that differ between `before` and `after` of one change (names only: the values may be secrets).
+  Null against an empty map or list is not a difference: the AWS provider's refresh read `tags = {}` where the state said null on 46 of the
+  65 resources of the real estate's own root, none of them touched by hand, and the explorer called them \"changed by hand\"."
   [before after]
   (vec (sort (for [k (distinct (concat (keys before) (keys after)))
-                   :when (not= (get before k) (get after k))]
+                   :let [b (get before k) a (get after k)]
+                   :when (and (not= b a) (not (and (blank-value? b) (blank-value? a))))]
                (name k)))))
 
 (defn drifted
@@ -68,10 +76,12 @@
   attribute NAMES that differ and never their values. Empty for a state or a plan without drift."
   [doc]
   (vec (for [r (:resource_drift doc)
-             :let [c (:change r)]]
+             :let [c (:change r)
+                   attrs (changed-attributes (:before c) (:after c))]
+             :when (or (seq attrs) (not= ["update"] (vec (:actions c))))]   ; an update whose only differences were nothing against nothing is not a change
          {:address (:address r) :type (:type r) :name (:name r)
           :actions (vec (:actions c))
-          :attributes (changed-attributes (:before c) (:after c))})))
+          :attributes attrs})))
 
 (defn extract
   "What of a Terraform JSON document is persisted (decision 54, B1): the versions and, per resource of the root and child modules
@@ -156,6 +166,17 @@
          (env/credentials e)
          (when-let [ep (get-in e [:aws :endpoint])] {"AWS_ENDPOINT_URL" ep})))
 
+(defn failure-reason
+  "Why a Terraform run failed, from its transcript: the `Error:` lines (the first two, then a count), not the last three lines, which are
+  the tail of the error box (`with module.stack.aws_iam_role.task[0], on ../modules/stack/main.tf line 352` named no cause; the cause, an
+  AccessDenied for iam:GetRole of the deploy profile, was above it). Without an `Error:` line: the last three lines."
+  [lines]
+  (let [errs (->> lines (map #(str/replace % #"^[│|\s]+" "")) (filter #(str/starts-with? % "Error:")) distinct vec)
+        cut (fn [s] (if (> (count s) 400) (str (subs s 0 400) "...") s))]
+    (if (seq errs)
+      (str (str/join " ; " (map cut (take 2 errs))) (when (> (count errs) 2) (str " (and " (- (count errs) 2) " more)")))
+      (str/join " | " (take-last 3 (remove str/blank? lines))))))
+
 (defn refresh!
   "B39: `terraform plan -refresh-only` of the root `dir` with the credentials of the remote environment `e`'s profile
   (`terraform init` first when the root has no `.terraform`), the plan saved to a file under the workspace, read back with
@@ -187,9 +208,12 @@
     (when-not ok?
       (io/delete-file plan true)
       (throw (ex-info (str "terraform " (if res "plan -refresh-only" "init") " failed in " dir " (exit " (:exit (or (when-not res init) res)) "): "
-                           (str/join " | " (take-last 3 (remove str/blank? lines))))
+                           (failure-reason lines))
                       {:type :tf/refresh-failed :dir (str dir) :sha (:sha raw)
-                       :hint (str "the transcript is persisted (" (:sha raw) "); a root whose variables have no default needs `vars`")})))
+                       :hint (str "the transcript is persisted (" (:sha raw) "); a root whose variables have no default needs `vars`"
+                                  (when (re-find #"AccessDenied|not authorized|UnauthorizedOperation" (failure-reason lines))
+                                    (str "; the profile of environment " (:name e) " cannot read everything the root declares (a refresh reads every resource, IAM roles too):"
+                                         " refresh with an environment whose profile may, a read-only record on it is enough")))})))
     {:plan plan :lines lines :raw raw}))
 
 (defn drift!

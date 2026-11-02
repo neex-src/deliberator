@@ -613,14 +613,25 @@
 
 (defn ensure!
   "Reconciles the runtime of `ws` with its `runtime.edn` and the service descriptions and waits until it is healthy.
-  Idempotent. `:only` (role labels such as \"service-a\") reconciles just those. `:secrets-from` `{role {:env \"local2\"
+  Idempotent. `:only` (role labels such as \"service-a\") reconciles just those. `:skip-unbuilt` leaves a service whose jar or exploded
+  classpath is not built alone (a `runtime.skipped` event) instead of failing with `runtime/missing-jar`. `:secrets-from` `{role {:env \"local2\"
   :values {ENV value}}}` creates that role with those real secret values instead of the local fakes.
   -> `(status ws)`."
   ([ws] (ensure! ws {}))
-  ([ws {:keys [sink timeout-ms infra-only only secrets-from] :or {timeout-ms default-timeout-ms}}]
+  ([ws {:keys [sink timeout-ms infra-only only secrets-from skip-unbuilt] :or {timeout-ms default-timeout-ms}}]
    (let [cfg (load-config! ws sink)
          cfg (if infra-only cfg (allocate-service-ports! (connect-client ws cfg) ws cfg))
+         unbuilt? (fn [d] (or (and (:jar-path d) (not (.isFile (java.io.File. ^String (:jar-path d)))))
+                              (and (:exploded d)
+                                   (some #(not (.isDirectory (java.io.File. ^String %)))
+                                         (cons (get-in d [:exploded :dependency]) (map :seed (get-in d [:exploded :dirs])))))))
          ds (cond->> (desired-all ws cfg) infra-only (remove :service?) only (filter (comp (set only) :role)))
+         ;; `skip-unbuilt`: what a caller that is not about the services (a fake) must not fail on: the service is left as it is
+         ds (if skip-unbuilt
+              (let [{skipped true kept false} (group-by (comp boolean unbuilt?) ds)]
+                (doseq [d skipped] (emit sink {:event "runtime.skipped" :role (:role d) :reason "not built: bb estate:build"}))
+                (vec kept))
+              ds)
          ;; `secrets-from {role {:env :values}}`: real secret values for that role, held in memory only. The hash
          ;; carries a marker (env + fresh start id), never a value, so such a start always recreates the container.
          ds (mapv (fn [d] (if-let [{:keys [env values]} (get secrets-from (:role d))]
