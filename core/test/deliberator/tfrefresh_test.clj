@@ -84,35 +84,51 @@
         (is (= :tf/refresh-remote-only (:type (ex-data e))) (some-> e ex-message))
         (is (str/includes? (str (:hint (ex-data e))) "terraform.local"))))))
 
+(defn- rm-rf
+  "Deletes a directory tree. `.deleteOnExit` does nothing for a directory that is not empty, and this one holds the AWS provider (about 800 MB)."
+  [^java.io.File dir]
+  (doseq [f (reverse (file-seq dir))] (io/delete-file f true)))
+
+(defn- scratch-root
+  "A fresh directory under the repository's `.scratch/` (git-ignored, on the disk), not under /tmp: the root holds an installed provider."
+  []
+  (let [base (doto (io/file "../.scratch/test-tmp") .mkdirs)]
+    (io/file (str (Files/createTempDirectory (.toPath base) "dlb-b39r" (make-array FileAttribute 0))))))
+
 (fu/deftest-floci drift-refresh-sees-a-change-made-by-hand
+  ;; the root used to be made in /tmp (a tmpfs of 4.7 GB) and never removed (`.deleteOnExit` does not remove a directory that has files): every
+  ;; run kept 795 MB of provider there, five runs filled it and the next failed in `terraform init` with `no space left on device`
+  ;; (found by check:all on 2026-11-02). It is made under .scratch/ now and removed at the end, also when init fails.
   (remote-util/with-remote-at-floci [remote local]
-    (let [root (doto (io/file (str (Files/createTempDirectory "dlb-b39r" (make-array FileAttribute 0)))) (.deleteOnExit))
-          _ (spit (io/file root "main.tf") main-tf)
-          penv (merge (into {} (System/getenv)) (env/credentials remote)
-                      {"AWS_ENDPOINT_URL" fu/url "AWS_CONFIG_FILE" "/dev/null" "AWS_SHARED_CREDENTIALS_FILE" "/dev/null"
-                       "TF_IN_AUTOMATION" "1"})
-          tf (fn [& args] (shell/with-sh-dir (str root) (shell/with-sh-env penv (apply shell/sh "terraform" (concat args ["-no-color"])))))
-          init (tf "init" "-input=false")
-          apply1 (when (zero? (:exit init)) (tf "apply" "-input=false" "-auto-approve"))]
+    (let [root (scratch-root)]
       (try
-        (is (zero? (:exit init)) (:err init))
-        (is (zero? (:exit apply1)) (str (:out apply1) (:err apply1)))
-        (let [url (:QueueUrl (aws/invoke! {:ws "default"} local :sqs :GetQueueUrl {:QueueName "dlbtest-b39-q"}))
-              _ (aws/invoke! {:ws "default"} local :sqs :SetQueueAttributes {:QueueUrl url :Attributes {"VisibilityTimeout" "45"}})
-              without (call "terraform.drift" {:ws "default" :env "dlbremote" :dir (str root)})
-              with (call "terraform.drift" {:ws "default" :env "dlbremote" :dir (str root) :refresh true})]
-          (testing "without a refresh the state says nothing about the value"
-            (is (nil? (:changed without))))
-          (testing "with it the attribute that was changed by hand is named, and never its value"
-            (is (= 1 (count (:changed with))) (pr-str (dissoc with :errors)))
-            (is (= ["aws_sqs_queue.q" ["update"]] ((juxt :address :actions) (first (:changed with)))))
-            (is (some #{"visibility_timeout_seconds"} (:attributes (first (:changed with)))))
-            (is (= ["sqs" "dlbtest-b39-q"] ((juxt :kind :aws-name) (first (:changed with)))) "the explorer's row of the changed resource")
-            (is (= 1 (:declared with)))
-            (is (pos? (get-in with [:refreshed :lines])))
-            (is (not (str/includes? (pr-str (:changed with)) "45")) "no value in the answer"))
-          (testing "the transcript is persisted raw and the plan file (the state's secrets) is not kept"
-            (is (some? (store/raw-get "default" (get-in with [:refreshed :sha]))))
-            (is (empty? (filter #(str/ends-with? (.getName ^java.io.File %) ".tfplan") (file-seq (.toFile (store/path "default" "terraform"))))))))
-        (finally
-          (tf "destroy" "-input=false" "-auto-approve"))))))
+        (let [_ (spit (io/file root "main.tf") main-tf)
+              penv (merge (into {} (System/getenv)) (env/credentials remote)
+                          {"AWS_ENDPOINT_URL" fu/url "AWS_CONFIG_FILE" "/dev/null" "AWS_SHARED_CREDENTIALS_FILE" "/dev/null"
+                           "TF_IN_AUTOMATION" "1"})
+              tf (fn [& args] (shell/with-sh-dir (str root) (shell/with-sh-env penv (apply shell/sh "terraform" (concat args ["-no-color"])))))
+              init (tf "init" "-input=false")
+              apply1 (when (zero? (:exit init)) (tf "apply" "-input=false" "-auto-approve"))]
+          (try
+            (is (zero? (:exit init)) (:err init))
+            (is (zero? (:exit apply1)) (str (:out apply1) (:err apply1)))
+            (let [url (:QueueUrl (aws/invoke! {:ws "default"} local :sqs :GetQueueUrl {:QueueName "dlbtest-b39-q"}))
+                  _ (aws/invoke! {:ws "default"} local :sqs :SetQueueAttributes {:QueueUrl url :Attributes {"VisibilityTimeout" "45"}})
+                  without (call "terraform.drift" {:ws "default" :env "dlbremote" :dir (str root)})
+                  with (call "terraform.drift" {:ws "default" :env "dlbremote" :dir (str root) :refresh true})]
+              (testing "without a refresh the state says nothing about the value"
+                (is (nil? (:changed without))))
+              (testing "with it the attribute that was changed by hand is named, and never its value"
+                (is (= 1 (count (:changed with))) (pr-str (dissoc with :errors)))
+                (is (= ["aws_sqs_queue.q" ["update"]] ((juxt :address :actions) (first (:changed with)))))
+                (is (some #{"visibility_timeout_seconds"} (:attributes (first (:changed with)))))
+                (is (= ["sqs" "dlbtest-b39-q"] ((juxt :kind :aws-name) (first (:changed with)))) "the explorer's row of the changed resource")
+                (is (= 1 (:declared with)))
+                (is (pos? (get-in with [:refreshed :lines])))
+                (is (not (str/includes? (pr-str (:changed with)) "45")) "no value in the answer"))
+              (testing "the transcript is persisted raw and the plan file (the state's secrets) is not kept"
+                (is (some? (store/raw-get "default" (get-in with [:refreshed :sha]))))
+                (is (empty? (filter #(str/ends-with? (.getName ^java.io.File %) ".tfplan") (file-seq (.toFile (store/path "default" "terraform"))))))))
+            (finally
+              (tf "destroy" "-input=false" "-auto-approve"))))
+        (finally (rm-rf root))))))
