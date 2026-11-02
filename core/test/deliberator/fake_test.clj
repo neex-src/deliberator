@@ -92,6 +92,24 @@
   (try (runtime/down! ws) (catch Throwable _ nil))
   (try (podman/remove-network! (runtime/podman-client ws cfg) (:network cfg)) (catch Throwable _ nil)))
 
+(deftest recording-a-fake-does-not-need-the-jars-of-unrelated-services
+  ;; found with the IDE against a real Fargate service A: `fake.record error runtime/missing-jar`. The record reconciled the whole runtime, so an adopted
+  ;; service whose jar was not built stopped it and the fake's container never came up. Only the fake (and the services attached to it) are reconciled.
+  (when-podman
+   (tu/with-temp-home
+     (let [id (sup/rand-id)
+           ws (str "fk" id)
+           cfg (assoc-in (config id false) [:containers :unbuilt] {:image fakes/default-image :jar "/nonexistent/estate/service-x.jar"})]
+       (store/write-edn! (runtime/config-path ws) cfg)
+       (runtime/sync-env! ws)
+       (try
+         (let [rec (fake/record! ws "a" "http://203.0.113.9:8081" {:session "T-1"})]
+           (is (= "record" (:mode rec)))
+           (is (= "record" (:mode (json/read-str (:body (http "GET" (str (:url rec) "/__fake/health"))) :key-fn keyword))) "the fake is up")
+           (let [stopped (fake/stop! ws "a" {})]
+             (is (true? (:stopped stopped)) "stopping it does not need the jar either")))
+         (finally (cleanup! ws cfg)))))))
+
 (deftest record-scrub-commit-replay-and-the-topology-mode
   (when-podman
    (tu/with-temp-home
