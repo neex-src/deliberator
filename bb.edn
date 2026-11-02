@@ -11,6 +11,9 @@
   core:test:known-bugs {:doc "Only the tests of known product bugs (^:known-bug, excluded from core:test); exit 0 when there are none and BUGS.md pins none, or when all of them fail as they must; exit 1 when one passes (fixed: drop the tag) or BUGS.md's pinned list disagrees"
                         :requires ([known-bugs])
                         :task (known-bugs/-main)}
+  claude:settings {:doc "Append the allow rules of .claude/dev-settings.json to <DIR>/.claude/settings.local.json (default: the repo root; name the directory Claude Code starts in, e.g. `bb claude:settings ..`); prints the claude --settings line for its autoMode part (never touches user settings)"
+                   :requires ([claude-settings])
+                   :task (apply claude-settings/-main *command-line-args*)}
   check:arch {:doc "Layering rules: core, cli, ide separation, no employer names (the list is ~/.config/deliberator/forbidden-names.txt; fails when it is missing on a machine marked by ~/.config/deliberator/owner-machine, skips with a message elsewhere)"
               :requires ([check-arch])
               :task (check-arch/-main)}
