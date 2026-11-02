@@ -124,8 +124,8 @@ data class HistoryRow(val runId: String, val status: String?, val started: Strin
     }
 }
 
-/** One confirmation the daemon asked for: step [step] needs [token] to do [summary]. */
-data class Confirmation(val step: Int, val token: String, val summary: String) {
+/** One confirmation the daemon asked for: step [step] needs [token] to do [summary]; [index] of [of] when a run asked for several. */
+data class Confirmation(val step: Int, val token: String, val summary: String, val index: Int = 1, val of: Int = 1) {
     /** The arguments of the repeated `scenario.run`: the same file, only this step, with the token. */
     fun rerunArgs(path: String, env: String?): JsonObject = JsonObject().apply {
         addProperty("path", path)
@@ -144,7 +144,7 @@ data class Confirmation(val step: Int, val token: String, val summary: String) {
                 return Confirmation(step, s("token") ?: return null, s("summary") ?: "")
             }
             val list = (error.get("confirmations") as? JsonArray)?.mapNotNull { (it as? JsonObject)?.let(::one) }.orEmpty()
-            return list.ifEmpty { listOfNotNull(one(error)) }
+            return list.ifEmpty { listOfNotNull(one(error)) }.let { all -> all.mapIndexed { i, c -> c.copy(index = i + 1, of = all.size) } }
         }
     }
 }
