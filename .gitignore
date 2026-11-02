@@ -27,3 +27,6 @@ target/
 
 # ijdev: the in-IDE REPL state of a sandbox (port file, eval log, screenshots)
 .ijdev/
+
+# Claude Code: personal project settings (bb claude:settings writes them)
+.claude/settings.local.json
