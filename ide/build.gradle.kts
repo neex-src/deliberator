@@ -84,13 +84,28 @@ tasks.runIde {
 // unloads and loads the plugin itself). Its own sandbox (suffix _runIdeDev), so it never disturbs `bb ide:run`. The REPL plugin is
 // built in the repls repo; `ijdev` (on the PATH) passes -PijdevPlugin=<its Gradle build dir>. Without the property there is no task
 // (and nothing else in the build asks for it).
+//
+// A second plugin (acme-demo piece 06: the inliner next to Deliberator): `ijdev start -PinlinerPlugin=<inliner checkout>`, or the
+// environment variable INLINER_PLUGIN (what `ijdev reload` sees too: it runs prepareSandbox_runIdeDev without the start arguments, and a
+// sandbox sync without the zip would delete the inliner from the sandbox). The newest build/distributions/inliner-*.zip there (built with
+// `./gradlew buildPlugin` in that checkout) is loaded next to ours; its classes hotswap with
+// `(hs/swap! {:plugin "com.neex.inliner" :dirs [...]})`. Without either, nothing changes.
+val inlinerPluginDir = providers.gradleProperty("inlinerPlugin").orElse(providers.environmentVariable("INLINER_PLUGIN")).orNull
 providers.gradleProperty("ijdevPlugin").orNull?.let { ijdevPlugin ->
     val ijdevBuild = file(ijdevPlugin).resolve("build")
     intellijPlatformTesting.runIde.register("runIdeDev") {
         val replZip = fileTree(ijdevBuild.resolve("distributions")) { include("ijdev-repl-*.zip") }
             .files.maxByOrNull { it.name }
             ?: error("no ijdev-repl-*.zip in $ijdevBuild/distributions: build the REPL plugin first")
-        plugins { localPlugin(replZip) }
+        val inlinerZip = inlinerPluginDir?.let { dir ->
+            fileTree(file(dir).resolve("build/distributions")) { include("inliner-*.zip") }
+                .files.maxByOrNull { it.name }
+                ?: error("no inliner-*.zip in $dir/build/distributions: run ./gradlew buildPlugin in that checkout first")
+        }
+        plugins {
+            localPlugin(replZip)
+            inlinerZip?.let { localPlugin(it) }
+        }
         prepareSandboxTask {
             dependsOn(buildDaemonJar)
             from(daemonJar) { into(pluginName.map { "$it/lib" }) }
@@ -101,7 +116,7 @@ providers.gradleProperty("ijdevPlugin").orNull?.let { ijdevPlugin ->
                 "-javaagent:" + ijdevBuild.resolve("agent/ijdev-agent.jar").absolutePath,
                 "-XX:+AllowEnhancedClassRedefinition",
                 "-Dijdev.dir=" + layout.projectDirectory.dir(".ijdev").asFile.absolutePath,
-                "-Dijdev.plugins=com.neex.deliberator",
+                "-Dijdev.plugins=com.neex.deliberator" + if (inlinerZip != null) ",com.neex.inliner" else "",
                 "-Didea.is.internal=true",
                 "-Didea.trust.all.projects=true",
                 "-Dide.show.tips.on.startup.default.value=false",
