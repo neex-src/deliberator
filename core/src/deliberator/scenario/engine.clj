@@ -11,7 +11,8 @@
   in ctx; `:host` is an opaque value of the caller handed to kinds as `ctx :host` (the daemon passes its
   request context, the `op` kind calls operations with it). A step's `:error` rides on its `:step.finished` event.
 
-  `(plan ws env path & opts)` is the static half and throws before anything is created or sent:
+  `(plan ws env path & opts)` is the static half and throws before anything is created or sent (steps of an `:inert?`
+  kind, the `ai` blocks, are left out; the others keep their numbers in the file):
   parse errors (`:scenario/parse`), undeclared directives and facts, assertion/capture/duration
   syntax, `$` paths on kinds without that root, unknown variables (a capture defines its name for
   the steps after it) and unknown targets, each with the line. `start!` then allocates the run
@@ -212,12 +213,23 @@
         path (.toAbsolutePath (.toPath (java.io.File. (str scenario-path))))
         bs (Files/readAllBytes path)
         parsed (parse/parse bs :path path :kinds (kinds/registry))
-        _ (when (empty? (:steps parsed)) (throw (ex-info "the scenario has no steps" {:type :scenario/parse :line 1 :message "no steps"})))
+        all-steps (:steps parsed)
+        inert? #(:inert? (kinds/get-kind (:kind %)))
+        live (vec (remove inert? all-steps))
+        _ (when (empty? live)
+            (throw (ex-info (if (seq all-steps)
+                              "the scenario has only ai blocks: generate their steps first (dlb scenario generate FILE NAME)"
+                              "the scenario has no steps")
+                            {:type :scenario/parse :line 1 :message "no steps"})))
+        parsed (assoc parsed :steps live :all-count (count all-steps))
         base (set (keys (vars/snapshot (:header parsed) :correlation "plan" :env env :vars vars :builtins builtins :resolve check-target)))
         selected (when steps (set steps))
         _ (doseq [n selected]
-            (when-not (<= 1 n (count (:steps parsed)))
-              (throw (ex-info (str "no step " n) {:type :scenario/no-such-step :step n}))))
+            (when-not (<= 1 n (:all-count parsed))
+              (throw (ex-info (str "no step " n) {:type :scenario/no-such-step :step n})))
+            (when-not (some #(= n (:n %)) live)
+              (throw (ex-info (str "step " n " is an ai block, not a step to run: generate its steps (dlb scenario generate FILE NAME)")
+                              {:type :scenario/no-such-step :step n}))))
         planned
         (loop [ss (:steps parsed) defined (conj base "step.correlation") out []]
           (if-let [s (first ss)]
@@ -232,6 +244,51 @@
     (doseq [s planned :when (:concurrent? (:kind-map s))] (from-n planned s))   ; a `@from` names a sequential step
     {:path path :sha (store/sha256 bs) :bytes bs :header (:header parsed) :selected selected
      :steps planned}))
+
+(defn- bare-target!
+  "A target written bare on the step line (`queue/inbox`) must exist in the environment: the kinds resolve every word with a
+  `/` that is no URL, ARN or template through `:resolve-target`, so a typo only shows when the step runs. Throws like it."
+  [kmap check-target step]
+  (when-let [t (and check-target (not= :none (:target kmap)) (:target step))]
+    (when (and (str/includes? t "/") (not (re-find #"^(https?://|arn:|/)|\{\{" t)))
+      (try (check-target t)
+           (catch clojure.lang.ExceptionInfo e
+             (when-not (= :topology/service-off (:type (ex-data e)))
+               (throw (ex-info (str "line " (:line step) ": " (ex-message e)) (assoc (ex-data e) :line (:line step)) e))))))))
+
+(defn check
+  "The static half of a run over `bs` (the scenario's bytes) like `plan`, but every error is collected instead of the first
+  being thrown, and a target on a step line is checked too (`bare-target!`): -> `{:steps n :errors [{:line :message :type}]}`.
+  `:path` resolves `# @body` files and names the file; `:check-target` is the seam to `env/target`. Used by `scenario.generate`
+  on what a model wrote; `plan` stays what a run needs."
+  [ws env bs & {:keys [path check-target vars builtins]}]
+  (let [one (fn [e] (let [d (ex-data e)]
+                      {:line (:line d) :type (:type d)
+                       :message (str/replace (str (or (:message d) (ex-message e))) #"^line \d+: " "")}))
+        parsed (try (parse/parse bs :path path :kinds (kinds/registry))
+                    (catch clojure.lang.ExceptionInfo e
+                      (if (= :scenario/parse (:type (ex-data e))) {::error (one e)} (throw e))))]
+    (if-let [err (::error parsed)]
+      {:steps 0 :errors [err]}
+      (let [live (vec (remove #(:inert? (kinds/get-kind (:kind %))) (:steps parsed)))
+            base (try (set (keys (vars/snapshot (:header parsed) :correlation "check" :env env :vars vars :builtins builtins
+                                                :resolve check-target)))
+                      (catch clojure.lang.ExceptionInfo e e))]
+        (if (instance? Throwable base)
+          {:steps (count live) :errors [(one base)]}
+          (loop [ss live defined (conj base "step.correlation") errs []]
+            (if-let [s (first ss)]
+              (let [kmap (kinds/for-verb (kinds/get-kind (:kind s)) (:verb s))
+                    e (try (validate-step! kmap s)
+                           (check-vars! s (if (:concurrent? kmap) base defined) check-target)
+                           (bare-target! kmap check-target s)
+                           nil
+                           (catch clojure.lang.ExceptionInfo e (assoc (one e) :line (or (:line (ex-data e)) (:line s)))))
+                    caps (try (map #(:name (with-expr (:line s) (fn [] (expr/parse-capture %)))) (dir-values s "capture"))
+                              (catch clojure.lang.ExceptionInfo _ []))]
+                (recur (rest ss) (if (:concurrent? kmap) defined (into defined caps)) (cond-> errs e (conj e))))
+              {:steps (count live)
+               :errors (cond-> errs (empty? live) (conj {:line 1 :type :scenario/parse :message "no steps"}))})))))))
 
 ;; ---------------------------------------------------------------- helpers
 

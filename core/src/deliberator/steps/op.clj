@@ -5,7 +5,7 @@
   streamed as lines, the arguments are `request.json`, the result (or the error map) is `response.json` and `$`. Facts:
   `ok` (\"true\"/\"false\"), `error.type`, `error.message`. An operation error is a step error unless an
   `@assert`/`@until` names `ok` or `error.type`/`error.message`, then the checks decide (`confirm-required` of
-  `service.start --secrets-from` is walked that way). Not offered: `scenario.run`, `scenario.cancel`, `daemon.stop`.
+  `service.start --secrets-from` is walked that way). Not offered: `scenario.run`, `scenario.cancel`, `scenario.generate`, `daemon.stop`.
   Local only: refused for a `:remote` environment, and refused when the body names one (`env`, `secrets-from`, or `name`
   of an `env.*` operation): a local run reaches no remote environment, not even for a read."
   (:require [clojure.data.json :as json]
@@ -16,7 +16,7 @@
             [deliberator.steps.common :as c]
             [deliberator.steps.shell :as shell]))
 
-(def excluded #{"scenario.run" "scenario.cancel" "daemon.stop"})
+(def excluded #{"scenario.run" "scenario.cancel" "scenario.generate" "daemon.stop"})
 
 (defn- named-envs
   "The environment names an op body may point an operation at: `env`, `secrets-from`, and `name` of an `env.*` op."

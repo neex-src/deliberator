@@ -65,7 +65,9 @@
     scenario.run path* env session steps confirm ws -> {status steps failed checks failed-checks run-id paths}
                                                       [run.started step.started line confirm.required step.finished run.finished]
     scenario.cancel run-id*                        -> {run-id cancelled}
-    scenario.kinds                                 -> [{kind verbs verb-optional target directives facts capture-roots concurrent default-timeout-ms}]
+    scenario.kinds                                 -> [{kind verbs verb-optional target directives facts capture-roots concurrent inert default-timeout-ms}]
+    scenario.generate path* name* env session text write ws -> {status name model attempts usage steps marker region run took-ms wrote paths}   [generate.started generate.attempt generate.checked generate.finished]   (decisions 73-75: the prose of `### ai <name>` becomes steps, written by the workspace's model command; human only)
+    workspace.universal env ws                     -> {path env bytes skills unavailable}   (decision 74: <ws>/universal.json, what the model gets, no model called)
     aws.discover env ws                            -> {env resources{kind [{name ref}]} errors}
     terraform.drift env file dir plan ws           -> {env source region declared matching missing[] undeclared[] errors}
     terraform.local dir* action env vars ws         -> {action dir env ok exit summary sha path output vars [override warnings]}   [tf.line]   (action vars: {action dir env vars} only; override: writes the override file, runs nothing)
@@ -113,6 +115,7 @@
             [deliberator.insights :as insights]
             [deliberator.env :as env]
             [deliberator.fake :as fake]
+            [deliberator.generate :as generate]
             [deliberator.logfetch :as logfetch]
             [deliberator.awsdiscover :as awsdiscover]
             [deliberator.ci :as ci]
@@ -138,6 +141,7 @@
             [deliberator.session :as session]
             [deliberator.store :as store]
             [deliberator.topology :as topology]
+            [deliberator.universal :as universal]
             [deliberator.workspace :as workspace])
   (:import (java.nio.charset CodingErrorAction StandardCharsets)
            (java.nio ByteBuffer)
@@ -283,8 +287,9 @@
 ;; agent interface (brief 4.H, architecture 4) --------------------------------------
 
 (def human-only
-  "Operations an agent never calls, whatever the workspace says: the switch itself."
-  #{"workspace.agent"})
+  "Operations an agent never calls, whatever the workspace says: the switch itself, and the one that spends the subscription
+  on a model (an agent writes steps itself)."
+  #{"workspace.agent" "scenario.generate"})
 
 (defn- connection-client [ctx] (some-> ctx :conn deref :client))
 
@@ -772,6 +777,26 @@
   (if-let [run (get @(:runs (:daemon ctx)) run-id)]
     (do (engine/cancel! run) {:run-id run-id :cancelled true})
     {:run-id run-id :cancelled false :reason "no such running run"}))
+
+(defn- scenario-generate [ctx {:keys [path name env session text write] :as args}]
+  (let [ws (ws-of args)
+        _ (require-workspace! ws)
+        sess (session-key ws args)
+        file (if (and text (.isAbsolute (io/file path))) path (resolve-scenario ws sess path))
+        env-name (or env (:env (:header (parse/describe (or text (slurp (io/file file) :encoding "UTF-8")) :path file :kinds (kinds/registry)))) "local")
+        e (env/load ws env-name)]
+    (generate/generate! ws {:file file :text text :name name :env e :session sess
+                            :operations (describe ctx) :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)
+                            :write? (if (some? write) write (nil? text))})))
+
+(defn- workspace-universal [ctx {:keys [env] :as args}]
+  (let [ws (ws-of args)
+        _ (require-workspace! ws)
+        env-name (or env "local")
+        built (universal/build ws env-name {:operations (describe ctx)})
+        r (universal/write! (store/path ws) built)]
+    {:path (:path r) :env env-name :bytes (.length (io/file ^String (:path r))) :skills (:skills r)
+     :unavailable (:unavailable (:json built))}))
 
 ;; handlers: runs ------------------------------------------------------------------------------
 
@@ -1288,6 +1313,18 @@
                       :args {:run-id {:type :string :required true :doc "run id from the run.started event"}}}
    "scenario.kinds" {:fn scenario-kinds :class :read :args {}
                      :doc "The registered step kinds as data: verbs, target rule, directives (engine-owned ones marked), facts, capture roots, concurrency. Completion and documentation are generated from it."}
+   "scenario.generate" {:fn scenario-generate :class :mutate
+                        :doc "Turns the prose of an `### ai <name>` block into steps: writes the universal JSON (workspace.universal's) and the skill files of the attached repositories into the run's context folder, runs the workspace's model command there (workspace.edn :ai :command, default claude -p --model haiku with read-only access to that folder), checks the answer with the scenario parser and the kinds (unknown kind, verb, directive or target is an error), sends it back once with the errors, and puts the steps under the prose between `#> generated by ...` and `#< end`. Prompt, answer and usage are persisted raw under sessions/<key>/generate/<run>/ first. Without text the file is rewritten; with text (an editor's buffer) it is not, and `region` is what to put in. Human only: an agent client is refused."
+                        :events ["generate.started" "generate.attempt" "generate.checked" "generate.finished"]
+                        :args (ws-schema :path {:type :string :required true :positional true :doc "scenario file; relative paths are looked up like scenario.run"}
+                                         :name {:type :string :required true :positional true :doc "the name of the ai block (### ai <name>)"}
+                                         :env {:type :string :doc "environment the steps are for; default the scenario's @env, else local"}
+                                         :session {:type :string :doc "session key; default the current session"}
+                                         :text {:type :string :doc "scenario text (an unsaved buffer); wins over the file's content and the file is then left alone"}
+                                         :write {:type :bool :doc "rewrite the file with the region (default true unless text is given)"})}
+   "workspace.universal" {:fn workspace-universal :class :mutate
+                          :doc "Writes the universal JSON of the workspace for an environment, no model called: <workspace>/universal.json, what scenario.generate hands the model (operations, step kinds, targets, topology, services, repositories, Terraform resources, what a local environment has, skills of the repositories) plus the skill files under <workspace>/skills/. A source that failed is named in unavailable."
+                          :args (ws-schema :env {:type :string :doc "environment name (default local)"})}
    "aws.discover" {:fn aws-discover :class :read
                    :doc "What exists in an environment (queues, tables, buses, functions, buckets, topics, parameters, secrets, streams, state machines, ECS clusters with their services and task definitions): names for completion. Read calls only; a failing section is listed in errors."
                    :args (ws-schema :env {:type :string :doc "environment name (default local)"})}
