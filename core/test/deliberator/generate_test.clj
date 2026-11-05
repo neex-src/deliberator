@@ -76,6 +76,14 @@
       (testing "the environment: every target, with the environment's own names"
         (is (= "local" (get-in u ["environment" "name"])))
         (is (contains? (get u "targets") "queue/inbox")))
+      (testing "a secret in a target's value never reaches the model"
+        (let [e (deliberator.env/load "default" "local")
+              e* (assoc-in e [:targets :db/secret] "jdbc:postgresql://h:5432/d?user=u&password=hunter2&ssl=true")
+              e** (assoc-in e* [:targets :http/secret] "https://bot:hunter2@example.org/x")
+              t (get (#'universal/environment e**) :targets)]
+          (is (= "jdbc:postgresql://h:5432/d?user=u&password=<redacted>&ssl=true" (get t "db/secret")))
+          (is (= "https://bot:<redacted>@example.org/x" (get t "http/secret")))
+          (is (not (str/includes? (slurp f) "password=deliberator")) "nor the default estate's own")))
       (testing "kinds: the inert ones are not offered, a big verb list is a count and prefixes"
         (let [ks (into {} (map (juxt #(get % "kind") identity)) (get u "step-kinds"))]
           (is (not (contains? ks "ai")))

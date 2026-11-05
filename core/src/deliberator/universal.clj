@@ -46,12 +46,21 @@
 
 (def ^:private secret-key #"(?i)pass(word)?|secret|token|credential|private")
 
+(defn- redact
+  "A target string without the secret in it: `password=...` style parameters and `user:pass@` in a URL. The model needs
+  the key of a target, never its credentials; the daemon resolves the value itself."
+  [s]
+  (-> (str s)
+      (str/replace #"(?i)([?&;\s](?:password|passwd|pwd|secret|token|api[-_]?key|access[-_]?key)=)[^&;\s\"]+" "$1<redacted>")
+      (str/replace #"(://[^/:@\s]+:)[^@/\s]+@" "$1<redacted>@")))
+
 (defn- clean
-  "A target value without secrets: a map keeps its keys unless they look like one."
+  "A target value without secrets: a map keeps its keys unless they look like one, strings are redacted."
   [v]
-  (if (map? v)
-    (into (sorted-map) (for [[k x] v :when (not (re-find secret-key (kw-name k)))] [(kw-name k) x]))
-    v))
+  (cond
+    (map? v) (into (sorted-map) (for [[k x] v :when (not (re-find secret-key (kw-name k)))] [(kw-name k) (if (string? x) (redact x) x)]))
+    (string? v) (redact v)
+    :else v))
 
 (defn- environment [e]
   (let [targets (reduce (fn [ts [k _]]

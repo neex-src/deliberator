@@ -131,7 +131,9 @@ class GenerateRun(val project: Project, val file: VirtualFile, val document: com
                     }
                     val call = svc.start("scenario.generate", args, true)
                     val canceller = ApplicationManager.getApplication().executeOnPooledThread {
-                        while (!call.terminal.isDone) { if (indicator.isCanceled) { call.cancel(); break }; Thread.sleep(100) }
+                        try {
+                            while (!call.terminal.isDone) { if (indicator.isCanceled) { call.cancel(); break }; Thread.sleep(100) }
+                        } catch (_: InterruptedException) { /* the call ended: this watcher is cancelled */ }
                     }
                     val t = try { call.await() } finally { canceller.cancel(true) }
                     if (!t.ok) {
