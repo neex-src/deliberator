@@ -174,7 +174,7 @@ class GenerateRun(val project: Project, val file: VirtualFile, val document: com
         val n = NotificationGroupManager.getInstance().getNotificationGroup("Deliberator")
             .createNotification("Steps written for $name", marker.removePrefix("#> "), NotificationType.INFORMATION)
         paths?.get("universal")?.asString?.let { p -> n.addAction(openAction("Open universal.json", p)) }
-        paths?.get("summary")?.asString?.let { p -> n.addAction(openAction("Open generate.edn", p)) }
+        paths?.get("summary")?.asString?.let { p -> n.addAction(openAction("Open run summary", p)) }
         n.notify(project)
     }
 
