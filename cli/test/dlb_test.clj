@@ -865,7 +865,7 @@
         (testing "and the file runs: the ai block is skipped, three steps"
           (let [run (dlb home "run" scn "--ws" "gen")]
             (is (zero? (:exit run)) (pr-str run))
-            (is (str/includes? (:out run) "steps 3"))))))
+            (is (str/includes? (:out run) "3 steps, 0 failed"))))))
     (testing "a wrong block name is a typed error, exit 2"
       (let [r (dlb home "scenario" "generate" scn "nope" "--ws" "gen")]
         (is (= 2 (:exit r)))

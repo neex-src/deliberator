@@ -22,7 +22,6 @@ import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.neex.deliberator.daemon.DaemonException
-import com.neex.deliberator.scn.ScnFile
 import com.neex.deliberator.scn.ScnStep
 import com.neex.deliberator.ui.Ui
 import com.neex.deliberator.workspace.WorkspaceService
@@ -36,22 +35,36 @@ import com.neex.deliberator.workspace.WorkspaceService
 object AiBlocks {
     const val KIND = "ai"
 
-    /** The `ai` step the caret is in, or in the region of generated steps right under it (between `#>` and `#< end`). */
-    fun at(file: ScnFile, text: CharSequence, offset: Int): ScnStep? {
-        val here = file.stepAt(offset) ?: return null
-        if (here.kind == KIND) return here
+    private val HEAD = Regex("### +([A-Za-z][A-Za-z0-9_-]*)(?:\\s+(.*?))?\\s*")
+
+    class Block(val headLine: Int, val name: String?)
+
+    /**
+     * The ai block the caret is in: its prose, or the steps generated under it (between `#>` and `#< end`). Read from the text
+     * (the PSI may be a commit behind): scanning up, a `#<` means the caret is past a region; a `#>` means it is in one, and the
+     * head above it must be the ai head; heads of other kinds are passed.
+     */
+    fun at(text: CharSequence, offset: Int): Block? {
         val lines = text.toString().split("\n")
-        val caretLine = file.lineOf(offset)
-        var open = -1
-        var i = caretLine
-        while (i >= 0) {   // 0-based; the nearest marker above or at the caret
-            val l = lines.getOrNull(i) ?: ""
-            if (l.startsWith("#<")) return null
-            if (l.startsWith("#>")) { open = i; break }
+        val caretLine = text.subSequence(0, offset.coerceIn(0, text.length)).count { it == '\n' }
+        var open = false
+        var passed = 0
+        var i = minOf(caretLine, lines.size - 1)
+        while (i >= 0) {
+            val l = lines[i].trimEnd('\r')
+            when {
+                l.startsWith("#<") -> return null
+                l.startsWith("#>") -> open = true
+                else -> HEAD.matchEntire(l)?.let { m ->
+                    if (m.groupValues[1] == KIND) {
+                        return if (open || passed == 0) Block(i, m.groupValues[2].trim().split(Regex("\\s+")).firstOrNull()?.takeIf { it.isNotEmpty() }) else null
+                    }
+                    passed++
+                }
+            }
             i--
         }
-        if (open < 0) return null
-        return file.steps.lastOrNull { it.kind == KIND && it.startLine <= open }
+        return null
     }
 
     /** The name of an ai block: the word after `ai` on its head line. */
@@ -95,7 +108,8 @@ object AiBlocks {
 }
 
 /** What the generate call of one block is doing, per file and block name: one at a time. */
-class GenerateRun(val project: Project, val file: VirtualFile, val document: com.intellij.openapi.editor.Document, val name: String) {
+class GenerateRun(val project: Project, val file: VirtualFile, val document: com.intellij.openapi.editor.Document, val name: String,
+                  private val onDone: () -> Unit = {}) {
     private val svc = WorkspaceService.getInstance(project)
 
     fun start() {
@@ -130,6 +144,7 @@ class GenerateRun(val project: Project, val file: VirtualFile, val document: com
                     if (!indicator.isCanceled) Ui.notify(project, "Generate $name", e.toString(), NotificationType.ERROR)
                 } finally {
                     RUNNING.remove(key)
+                    ApplicationManager.getApplication().invokeLater({ onDone() }, ModalityState.nonModal())
                 }
             }
         }.queue()
@@ -175,16 +190,14 @@ class GenerateRun(val project: Project, val file: VirtualFile, val document: com
 class GenerateStepsAction : ScnEditorAction() {
     override fun enabled(e: AnActionEvent): Boolean {
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return false
-        val psi = e.getData(CommonDataKeys.PSI_FILE) as? ScnFile ?: return false
-        return AiBlocks.at(psi, editor.document.charsSequence, editor.caretModel.offset) != null
+        return AiBlocks.at(editor.document.charsSequence, editor.caretModel.offset) != null
     }
 
     override fun actionPerformed(e: AnActionEvent) {
         val v = viewOf(e) ?: return
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
-        val psi = e.getData(CommonDataKeys.PSI_FILE) as? ScnFile ?: return
-        val step = AiBlocks.at(psi, editor.document.charsSequence, editor.caretModel.offset)
-        val name = step?.let { AiBlocks.name(it) }
+        val block = AiBlocks.at(editor.document.charsSequence, editor.caretModel.offset)
+        val name = block?.name
         if (name == null) {
             Ui.notify(v.project, "Generate", "Name the ai block: ### ai <name> and the prose under it.", NotificationType.WARNING)
             return

@@ -353,7 +353,7 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
 
     /** Writes the steps of the ai block [name] with the workspace's model and places them under its prose. */
     fun generate(name: String) {
-        GenerateRun(project, file, editor.document, name).start()
+        GenerateRun(project, file, editor.document, name) { scheduleGutter() }.start()
         scheduleGutter()
     }
 
