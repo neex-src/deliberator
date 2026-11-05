@@ -200,6 +200,13 @@ class LogLinksTest : BasePlatformTestCase() {
         assertEquals(8, selected().caretModel.logicalPosition.column)
     }
 
+    fun testTheOutputOfARunsStepsIsLinkedToo() {
+        estate()
+        val out = fixtureAt(daemon.home.resolve("workspaces/w1/sessions/L-1/runs/r1/steps/001-logs-billing/output.txt"), spring)
+        val ed = openLog(out, 4)
+        assertEquals("a run's output belongs to no service: every holder is offered", listOf("billing-repo", "other-repo"), links.links(ed).first { it.kind == "frame" }.targets.map { it.repo })
+    }
+
     fun testLinksFollowEditsAndAnUnattachedRepositoryGivesNone() {
         estate()
         val ed = openLog(serviceLog("service-billing", spring), 4)

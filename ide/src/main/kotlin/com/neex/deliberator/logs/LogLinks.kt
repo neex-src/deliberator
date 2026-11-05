@@ -126,7 +126,8 @@ class LogLinks(private val project: Project) : Disposable {
 
     override fun dispose() {}
 
-    fun logEditors(): List<Editor> = LogMatcher.getInstance(project).logEditors().filter { it.getUserData(KEY) != null }
+    /** The editors this service links now: logs, and the output of a run's steps. */
+    fun logEditors(): List<Editor> = com.intellij.openapi.editor.EditorFactory.getInstance().allEditors.filter { it.project == project && !it.isDisposed && it.getUserData(KEY) != null }
 
     // lifecycle ---------------------------------------------------------------------------------------
 
@@ -340,6 +341,13 @@ class LogLinks(private val project: Project) : Disposable {
         private const val TIP_MS = 350
         private const val REFRESH_MS = 20_000L
         fun getInstance(project: Project): LogLinks = project.getService(LogLinks::class.java)
+
+        /** Files whose places can name code: a log (see [LogFiles]) and what a scenario run wrote (`runs/<id>/result.txt`, `runs/<id>/steps/...`). */
+        fun wants(file: VirtualFile): Boolean {
+            if (LogFiles.isLog(file)) return true
+            val p = file.path
+            return p.contains("/sessions/") && p.contains("/runs/") && (file.name == "result.txt" || p.contains("/steps/"))
+        }
     }
 }
 

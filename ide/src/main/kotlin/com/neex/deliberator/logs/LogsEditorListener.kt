@@ -13,7 +13,8 @@ class LogsEditorListener : EditorFactoryListener {
         if (!vf.isInLocalFileSystem) return
         MarkerService.getInstance(project).ensureLoaded()
         val matcher = LogMatcher.getInstance(project)
-        if (LogFiles.isLog(vf)) { matcher.annotate(editor); LogLinks.getInstance(project).attach(editor) } else MarkerGutter.attach(editor, project, vf)
+        if (LogFiles.isLog(vf)) { matcher.annotate(editor); LogLinks.getInstance(project).attach(editor) }
+        else { MarkerGutter.attach(editor, project, vf); if (LogLinks.wants(vf)) LogLinks.getInstance(project).attach(editor) }
     }
 
     override fun editorReleased(event: EditorFactoryEvent) {
