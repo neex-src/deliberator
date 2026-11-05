@@ -42,6 +42,7 @@
                               ["repo.list" ["bare" "ws"] "read"]
                               ["logs.fetch" ["target" "env" "since" "for" "follow" "filter" "session" "ws"] "mutate"]
                               ["logs.match" ["path" "markers" "session" "ws"] "read"]
+                              ["logs.refs" ["path" "session" "ws"] "read"]
                               ["marker.add" ["file" "line" "logger" "ws"] "mutate"]
                               ["marker.remove" ["file" "line" "ws"] "mutate"]
                               ["marker.list" ["file" "ws"] "read"]]]

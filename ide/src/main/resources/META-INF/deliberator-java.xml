@@ -13,5 +13,6 @@
     </actions>
     <extensions defaultExtensionNs="com.neex.deliberator">
         <loggerResolver implementation="com.neex.deliberator.logs.JavaLoggerResolver"/>
+        <classLocator implementation="com.neex.deliberator.logs.JavaClassLocator"/>
     </extensions>
 </idea-plugin>
