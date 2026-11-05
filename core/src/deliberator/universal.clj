@@ -168,7 +168,7 @@
 (defn- first-sentence [s]
   (let [s (str/replace (str s) #"\s+" " ")
         m (re-find #"^.{20,}?[.;:](?=\s|$)" s)]
-    (let [t (or m s)] (if (> (count t) 220) (str (subs t 0 217) "...") t))))
+    (let [t (or m s)] (if (> (count t) 150) (str (subs t 0 147) "...") t))))
 
 (defn- ops-rows [rows]
   (let [offered (:verbs (kinds/get-kind "op"))]
@@ -176,7 +176,7 @@
                :when (or (nil? offered) (contains? offered op))]
            {:op op :class class :doc (first-sentence doc)
             :args (into (sorted-map)
-                        (for [n order :let [a (get args n)] :when (and a (not (:ignored a)))]
+                        (for [n order :let [a (get args n)] :when (and a (not (:ignored a)) (not (#{"ws" "session"} n)))]
                           [n (str (:type a) (when (:required a) "!"))]))}))))
 
 ;; build ----------------------------------------------------------------------------------------
