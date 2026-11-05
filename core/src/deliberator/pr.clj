@@ -1,8 +1,12 @@
 (ns deliberator.pr
   "A pull request as a worktree (M5.5): `(open! ws {:repo :n ...})`.
 
-  The git half works on any repository with an `origin` that advertises `refs/pull/<n>/head` (GitHub does; so does a local bare repo
-  that carries the ref, which is how it is tested): it fetches `+refs/pull/<n>/head:refs/pull/<n>/head` into the repository (that
+  The git half works on any repository with a remote that advertises `refs/pull/<n>/head` (GitHub does; so does a local bare repo
+  that carries the ref, which is how it is tested). WHICH remote: the `remote` argument; else the remote whose url is the PR's GitHub
+  repository (`github`, else the clone's recorded url, else the first remote with a GitHub url, origin first), origin when it is one of
+  them; else `origin`. A clone whose origin is a local shared remote and whose GitHub remote is called `github` therefore needs no argument.
+  The urls are read raw (`git config`), not through `remote get-url`, which applies `insteadOf`. It fetches
+  `+refs/pull/<n>/head:refs/pull/<n>/head` from that remote into the repository (that
   namespace is outside `refs/remotes/origin/*`, so the `fetch --prune` of `worktree.start` never prunes it) and attaches a worktree
   `worktrees/<repo>/pr-<n>` on branch `pr-<n>`. Opening the same PR again fetches again and fast-forwards a clean worktree to the new
   head; a dirty one, or one that has commits of its own the new head does not contain, is left as it is (`:moved false`, `:stale` /
@@ -39,12 +43,47 @@
 
 ;; the git half --------------------------------------------------------------------------------------------
 
-(defn- fetch-head! [gd n on-cancel!]
+(defn remotes
+  "The remotes of the repository at `gd` as `[{:name :url :slug}]` in config order, with the RAW url (`insteadOf` not applied) and its
+  GitHub `owner/name` (nil for a path or another host)."
+  [gd]
+  (let [r (git/run gd ["config" "--get-regexp" "^remote\\..+\\.url$"])]
+    (if (zero? (:exit r))
+      (->> (str/split-lines (:out r))
+           (keep (fn [l] (let [[k v] (str/split l #"\s+" 2)
+                               m (when (and k v) (re-matches #"remote\.(.+)\.url" k))]
+                           (when m {:name (second m) :url (str/trim v) :slug (ci/slug-of-url v)}))))
+           (reduce (fn [acc x] (if (some #(= (:name x) (:name %)) acc) acc (conj acc x))) []))
+      [])))
+
+(defn- same-slug? [a b] (and a b (= (str/lower-case a) (str/lower-case b))))
+
+(defn choose-remote
+  "The remote `pr.open` fetches from (see the ns docstring): `remote` when given (`pr/no-such-remote` naming the known ones), else the
+  remote of GitHub repository `slug` (origin when it is one), else `origin`; `pr/no-origin` when none of those exists."
+  [gd {:keys [remote slug]}]
+  (let [rs (remotes gd)
+        names (mapv :name rs)
+        matching (when slug (filter #(same-slug? slug (:slug %)) rs))]
+    (cond
+      remote (if (some #{remote} names)
+               remote
+               (fail :pr/no-such-remote (str "no remote " (pr-str remote) " in this repository") :known names
+                     :hint (if (seq names) (str "its remotes: " (str/join ", " names)) "the repository has no remotes")))
+      (seq matching) (if (some #(= "origin" (:name %)) matching) "origin" (:name (first matching)))
+      (some #{"origin"} names) "origin"
+      :else (fail :pr/no-origin (str "no remote of this repository is the pull request's repository" (when slug (str " " slug)) ", and it has no origin")
+                  :known names :hint (str "pass remote (the remote that has refs/pull/<n>/head), or add one: git remote add github https://github.com/<owner>/<name>.git"
+                                          (when (seq names) (str "; its remotes: " (str/join ", " names))))))))
+
+(defn- fetch-head! [gd n remote on-cancel!]
   (let [ref (pull-ref n)
-        r (git/run gd ["fetch" "--quiet" "--no-tags" "origin" (str "+" ref ":" ref)] {:budget-ms 300000 :on-cancel! on-cancel!})]
+        r (git/run gd ["fetch" "--quiet" "--no-tags" remote (str "+" ref ":" ref)] {:budget-ms 300000 :on-cancel! on-cancel!})]
     (when-not (zero? (:exit r))
-      (fail :pr/fetch-failed (str "git fetch of " ref " failed: " (let [e (str/trim (:err r))] (if (str/blank? e) (str "exit " (:exit r)) e)))
-            :hint "check the number and that origin advertises refs/pull/<n>/head (GitHub does; a private repository needs your git credentials)"))
+      (fail :pr/fetch-failed (str "git fetch of " ref " from " remote " failed: " (let [e (str/trim (:err r))] (if (str/blank? e) (str "exit " (:exit r)) e)))
+            :remote remote
+            :hint (str "check the number and that remote " remote " advertises refs/pull/<n>/head (GitHub does; a private repository needs your git credentials); "
+                       "another remote can be named with remote")))
     (git/out gd "rev-parse" "--verify" (str ref "^{commit}"))))
 
 (defn- attach!
@@ -75,16 +114,16 @@
 
 ;; the GitHub half -----------------------------------------------------------------------------------------
 
-(defn- origin-url [gd]
-  (let [r (git/run gd ["remote" "get-url" "origin"])]
-    (when (zero? (:exit r)) (not-empty (str/trim (:out r))))))
-
 (defn slug-for
-  "`owner/name` of the GitHub repository of recorded repository `entry`: `github` if given, else its url, else origin's url; nil if none."
-  [entry gd github]
-  (or (when (string? github) (some-> (not-empty github) ((fn [g] (or (when (re-matches ci/slug-re g) g) (ci/slug-of-url g))))))
-      (ci/slug-of-url (:url entry))
-      (ci/slug-of-url (origin-url gd))))
+  "`owner/name` of the GitHub repository of recorded repository `entry`: `github` if given, else its url, else the GitHub url of
+  `remote` when named, else of the first remote that has one (origin first); nil if none."
+  ([entry gd github] (slug-for entry gd github nil))
+  ([entry gd github remote]
+   (or (when (string? github) (some-> (not-empty github) ((fn [g] (or (when (re-matches ci/slug-re g) g) (ci/slug-of-url g))))))
+       (ci/slug-of-url (:url entry))
+       (let [rs (remotes gd)]
+         (or (some-> (first (filter #(= remote (:name %)) rs)) :slug)
+             (some :slug (sort-by #(if (= "origin" (:name %)) 0 1) rs)))))))
 
 (defn- pages
   "Every item of a paged list endpoint (100 per page, at most 10 pages), each page a raw blob."
@@ -177,22 +216,21 @@
 ;; open ----------------------------------------------------------------------------------------------------------
 
 (defn open!
-  [ws {:keys [repo n github session on-cancel!]}]
+  [ws {:keys [repo n github remote session on-cancel!]}]
   (let [n (parse-n n)
         entry (repo/find ws repo)
         gd (repo/git-dir entry)
-        _ (when-not (origin-url gd)
-            (fail :pr/no-origin (str repo " has no origin remote") :hint "a pull request is fetched from origin; repo.clone records one"))
-        slug (when-not (false? github) (slug-for entry gd github))
+        slug (when-not (false? github) (slug-for entry gd github remote))
+        remote (choose-remote gd {:remote remote :slug slug})
         _ (when (and slug (nil? session))
             (fail :session/none "no session: the pull request's comments and checks are written into one" :hint "pass session, or start one (session.start)"))
-        head (fetch-head! gd n on-cancel!)
+        head (fetch-head! gd n remote on-cancel!)
         wt (attach! ws (:name entry) n head)
         gh (when slug
              (try (github-half! ws session slug n head)
                   (catch clojure.lang.ExceptionInfo e
                     {:github slug :github-error (ex-message e) :github-error-type (:type (ex-data e)) :hint (:hint (ex-data e))})))]
-    (merge {:repo (:name entry) :n n :ref (pull-ref n) :head-sha head :worktree wt}
+    (merge {:repo (:name entry) :n n :ref (pull-ref n) :remote remote :head-sha head :worktree wt}
            (or gh {:github nil :note (if (false? github)
                                        "github skipped"
                                        "no GitHub repository known for this clone (pass github owner/name): the checks and comments were not fetched")}))))

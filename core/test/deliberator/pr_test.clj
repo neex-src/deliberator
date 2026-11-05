@@ -7,6 +7,7 @@
             [clojure.test :refer [deftest is testing]]
             [deliberator.ops :as ops]
             [deliberator.pr :as pr]
+            [deliberator.store :as store]
             [deliberator.test-util :as tu]))
 
 (defn- git [dir & args]
@@ -42,7 +43,7 @@
 
 (deftest describe-lists-pr-open-and-ci-local
   (let [by (into {} (map (juxt :op identity)) (ops/describe))]
-    (is (= ["repo" "n" "github" "session" "ws"] (:order (by "pr.open"))))
+    (is (= ["repo" "n" "github" "remote" "session" "ws"] (:order (by "pr.open"))))
     (is (= ["repo" "workflow" "job" "worktree" "event" "env" "image" "session" "ws"] (:order (by "ci.local"))))
     (is (= ["logs.line"] (:events (by "ci.local"))))))
 
@@ -144,3 +145,81 @@
         (is (str/includes? thread "    Order matters."))))
     (is (str/includes? t "Does it.\nTwice.") "CRLF as LF")
     (is (str/includes? t "erin  2026-01-03T09:00:00Z  #9"))))
+
+;; --- two remotes: the PR is on the one that is GitHub ---------------------------------------------------------------
+
+(def ^:private gh-url "https://github.com/acme/app.git")
+
+(defn- two-remotes
+  "A checkout `proj` whose origin is a local shared remote WITHOUT `refs/pull/1/head` and whose remote `github` has the raw url of a GitHub repository
+  that `url.<path>.insteadOf` sends to the bare repository that carries it (the stand-in for GitHub). `github.edn :api` is a closed port:
+  the GitHub half fails fast, as `:github-error`, after the worktree is made."
+  [root]
+  (let [{:keys [origin head]} (fixture root)
+        shared remote (str (io/file root "shared remote.git"))
+        proj (str (io/file root "proj"))]
+    (git root "clone" "--quiet" "--bare" origin shared remote)
+    (git root "clone" "--quiet" shared remote proj)
+    (git proj "remote" "add" "github" gh-url)
+    (git proj "config" (str "url." origin ".insteadOf") gh-url)
+    (store/write-edn! (store/path "w" "github.edn") {:api "http://127.0.0.1:9"})
+    (call "repo.attach" {:path proj})
+    (call "session.start" {:key "S1"})
+    {:proj proj :head head :shared remote shared remote :gh origin}))
+
+(deftest the-pull-ref-is-fetched-from-the-remote-that-is-github
+  (tu/with-temp-home
+    (let [{:keys [proj head shared remote]} (two-remotes (tu/temp-home))]
+      (testing "the raw urls, not the insteadOf-expanded ones, tell which remote is GitHub"
+        (is (= [["origin" nil] ["github" "acme/app"]] (mapv (juxt :name :slug) (pr/remotes proj))))
+        (is (= "acme/app" (pr/slug-for {} proj nil))))
+      (testing "origin alone has no such ref"
+        (is (= :pr/fetch-failed (:type (thrown #(call "pr.open" {:repo "proj" :n 1 :remote "origin" :github "none"})))))
+        (is (= "origin" (:remote (thrown #(call "pr.open" {:repo "proj" :n 1 :remote "origin" :github "none"}))))))
+      (testing "no argument: the remote whose url is the PR's GitHub repository"
+        (let [r (call "pr.open" {:repo "proj" :n 1})]
+          (is (= "github" (:remote r)))
+          (is (= head (:head-sha r)))
+          (is (= head (git (get-in r [:worktree :path]) "rev-parse" "HEAD")))
+          (is (= "acme/app" (:github r)))
+          (is (string? (:github-error r)) "the GitHub half failed (closed port) and did not undo the worktree")
+          (is (= head (git proj "rev-parse" "refs/pull/1/head")))))
+      (testing "an explicit remote, with and without the GitHub half"
+        (is (= "github" (:remote (call "pr.open" {:repo "proj" :n 1 :remote "github" :github "none"}))))
+        (let [r (call "pr.open" {:repo "proj" :n 1 :remote "github" :github "none"})]
+          (is (nil? (:github r)))
+          (is (false? (get-in r [:worktree :moved])))))
+      (testing "no such remote: typed, with the known ones"
+        (let [d (thrown #(call "pr.open" {:repo "proj" :n 1 :remote "nope" :github "none"}))]
+          (is (= :pr/no-such-remote (:type d)))
+          (is (= ["origin" "github"] (:known d)))))
+      (testing "the shared remote is untouched: it never had the ref"
+        (is (str/blank? (git shared remote "for-each-ref" "refs/pull")))))))
+
+(deftest origin-wins-when-it-is-github-too
+  (tu/with-temp-home
+    (let [{:keys [origin head]} (fixture (tu/temp-home))
+          dir (str (io/file (tu/temp-home) "both"))]
+      (git (tu/temp-home) "clone" "--quiet" origin dir)
+      (git dir "remote" "set-url" "origin" gh-url)
+      (git dir "remote" "add" "github" gh-url)
+      (git dir "config" (str "url." origin ".insteadOf") gh-url)
+      (store/write-edn! (store/path "w" "github.edn") {:api "http://127.0.0.1:9"})
+      (call "repo.attach" {:path dir})
+      (call "session.start" {:key "S1"})
+      (let [r (call "pr.open" {:repo "both" :n 1})]
+        (is (= "origin" (:remote r)))
+        (is (= head (:head-sha r)))))))
+
+(deftest a-repository-with-no-origin-and-no-github-remote-says-so
+  (tu/with-temp-home
+    (let [{:keys [origin]} (fixture (tu/temp-home))
+          dir (str (io/file (tu/temp-home) "odd"))]
+      (git (tu/temp-home) "clone" "--quiet" "-o" "shared remote" origin dir)
+      (call "repo.attach" {:path dir})
+      (let [d (thrown #(call "pr.open" {:repo "odd" :n 1}))]
+        (is (= :pr/no-origin (:type d)))
+        (is (= ["shared remote"] (:known d)))
+        (is (str/includes? (:hint d) "remote")))
+      (testing "naming the remote is the way out"
+        (is (= "shared remote" (:remote (call "pr.open" {:repo "odd" :n 1 :remote "shared remote"}))))))))

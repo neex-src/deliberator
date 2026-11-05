@@ -90,7 +90,7 @@
     ci.tail run* job repo interval-ms session ws   -> {path lines bytes sha target source follow repo run job}   [logs.line]   (a running job: step transitions, then its log)
     ci.diff run* job repo against normalise session ws -> {path diff equal red green added removed normalised}   (M5.3: the failed job's log against the last green run's, normalised)
     ci.local repo* workflow* job* worktree event env image session ws -> {path lines bytes sha target source follow exit conclusion dir workflow job event image docker-host endpoint}   [logs.line]   (M5.4: one job of a workflow with act on the runtime's Podman, Floci injected; a red job is a result)
-    pr.open repo* n* github session ws             -> {repo n ref head-sha worktree{name path branch head created moved} github pr comments{path inline reviews conversation} checks{path count by-result rows}}   (M5.5: refs/pull/<n>/head into worktrees/<repo>/pr-<n>; reviews and comments as sessions/<k>/pr/*.txt)
+    pr.open repo* n* github remote session ws     -> {repo n ref remote head-sha worktree{name path branch head created moved} github pr comments{path inline reviews conversation} checks{path count by-result rows}}   (M5.5: refs/pull/<n>/head into worktrees/<repo>/pr-<n>; reviews and comments as sessions/<k>/pr/*.txt)
     logs.insights groups* query* env since until name budget-ms limit session ws -> {query-id status bytes-scanned statistics rows path sha query-file raw}   [line]   (M4.3)
     logs.match path* markers ws                    -> {lines [{n marker-id}] path scanned}
     logs.refs path* session ws                     -> {path lines service unresolved refs [{n from to text kind [class method logger line col] targets [{file repo rel}]}]}   (decision 76: the spans of a log that name code, resolved to files of the attached checkouts)
@@ -970,9 +970,9 @@
     (try (cilocal/run! ws {:repo repo :workflow workflow :job job :worktree worktree :event event :env env :image image
                            :session (session-key ws args) :emit! (:emit! ctx) :cancelled? (:cancelled? ctx)})
          (finally (when counter (swap! counter dec))))))
-(defn- pr-open [ctx {:keys [repo n github] :as args}]
+(defn- pr-open [ctx {:keys [repo n github remote] :as args}]
   (let [ws (ws-of args)]
-    (pr/open! ws {:repo repo :n n :github (if (contains? #{"false" "none" "no"} github) false (not-empty github))
+    (pr/open! ws {:repo repo :n n :github (if (contains? #{"false" "none" "no"} github) false (not-empty github)) :remote (not-empty remote)
                     :session (or (:session args) (workspace/current-session ws)) :on-cancel! (:on-cancel! ctx)})))
 
 (defn- logs-insights [ctx {:keys [groups query env since until name budget-ms limit] :as args}]
@@ -1448,10 +1448,11 @@
                                 :image {:type :string :doc "runner image of ubuntu-latest; default catthehacker/ubuntu:act-22.04"}
                                 :session {:type :string :doc "session key; default the current session"})}
    "pr.open" {:fn pr-open :class :mutate
-              :doc "A pull request as a worktree: fetches refs/pull/<n>/head of origin and attaches worktrees/<repo>/pr-<n> (a clean one is fast-forwarded to a new head). With a GitHub repository (github owner/name, else the clone's url) it also writes the PR's description, reviews, inline review comments and conversation as text under sessions/<k>/pr/ and the runs of the head sha as ci.runs does under ci/. GitHub is read-only (GET)."
+              :doc "A pull request as a worktree: fetches refs/pull/<n>/head from the remote named by remote, else the remote whose url is the PR's GitHub repository (github, else the clone's url, else the first remote with a GitHub url), else origin, and attaches worktrees/<repo>/pr-<n> (a clean one is fast-forwarded to a new head). With a GitHub repository (github owner/name, else the clone's url) it also writes the PR's description, reviews, inline review comments and conversation as text under sessions/<k>/pr/ and the runs of the head sha as ci.runs does under ci/. GitHub is read-only (GET)."
               :args (ws-schema :repo {:type :string :required true :doc "repository name from repo.list"}
                                :n {:type :int :required true :doc "the pull request number"}
                                :github {:type :string :doc "owner/name of the GitHub repository when the clone's url does not say; none skips GitHub"}
+                               :remote {:type :string :doc "the remote to fetch refs/pull/<n>/head from; default the remote whose url is the PR's GitHub repository, else origin"}
                                :session {:type :string :doc "session key; default the current session"})}
    "logs.fetch" {:fn logs-fetch :class :mutate
                  :doc "Fetches a log target (container, file or CloudWatch group of the environment) into the session as logs/<target>-<ts>.log, hard-linked from the raw blobs. Without for: one shot; with for: also listens that long, streaming every line as a logs.line event while it arrives. follow (or for until-cancelled) listens until the request is cancelled or the client leaves, with ONE file for the whole follow, written as lines arrive; a container's follow starts at the current end of its log unless since says otherwise (only the lines written from now on). filter keeps whole matching entries."
