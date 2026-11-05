@@ -27,6 +27,9 @@
   are healthy. Service roles are not stored in `runtime.edn`: `effective-containers` derives one per
   service description (`services/<name>.edn`, namespace `deliberator.service.description`) and merges the
   runtime half `:services {\"<name>\" {:ports … :env …}}` over it. Distinct containers on one host port are refused as for every role.
+  A `:container` service is the same role with a plain image: its spec has `:service? true` instead of
+  `:jar`/`:exploded`, `:aliases` (names the container answers to on the network), `:image-hint` (what
+  builds a local image) and `:health {}` for no probe (running counts as healthy).
 
   Contract: `(ensure! ws [opts])` reconciles network, images and containers labelled
   `deliberator.workspace=<ws>`, `deliberator.role=<role>`, `deliberator.spec=<hash>`: idempotent,
@@ -169,7 +172,7 @@
 (defn- rehash
   "`d` with `:hash` over everything that would change the container. `:secret-values` is never part of it."
   [d]
-  (assoc d :hash (subs (store/sha256 (.getBytes ^String (pr-str (sorted-deep (dissoc d :health :service? :secret-values :hash))) StandardCharsets/UTF_8)) 0 16)))
+  (assoc d :hash (subs (store/sha256 (.getBytes ^String (pr-str (sorted-deep (dissoc d :health :service? :image-hint :secret-values :hash))) StandardCharsets/UTF_8)) 0 16)))
 
 (defn- floci-account-env
   "`[[\"FLOCI_DEFAULT_ACCOUNT_ID\" account]]` for the Floci role when the workspace's `local` environment names another account
@@ -218,7 +221,9 @@
         d (cond-> d
             jar (assoc :jar-stamp [(.length jar) (.lastModified jar)] :jar-path (str jar))
             exploded (assoc :exploded exploded :dep-stamp (dep-stamp (:dependency exploded)))
-            (or jar exploded) (assoc :service? true)
+            (or jar exploded (:service? spec)) (assoc :service? true)
+            (seq (:aliases spec)) (assoc :aliases (vec (:aliases spec)))
+            (:image-hint spec) (assoc :image-hint (:image-hint spec))
             (seq (:secrets spec)) (assoc :secrets (into (sorted-map) (for [[k v] (:secrets spec)] [(clojure.core/name k) v]))))]
     (rehash d)))
 
@@ -342,7 +347,7 @@
    "env" (merge (or (:secret-values d) (resolve-secrets ws (:secrets d))) (:env d))
    "command" (:command d)
    "netns" {"nsmode" "bridge"}
-   "Networks" {(:network d) {}}
+   "Networks" {(:network d) (if (seq (:aliases d)) {"aliases" (:aliases d)} {})}
    "log_configuration" {"driver" "k8s-file"}
    "portmappings" (vec (for [[cp hp] (:ports d)]
                          {"container_port" cp "host_port" hp "host_ip" (:host-ip d) "protocol" "tcp"}))
@@ -523,7 +528,7 @@
   "Pins the host ports of every runnable service description that runtime.edn has none for (`:services <name> :ports {cp hp}`),
   writes runtime.edn and points the `local` environment at them when it changed. -> the config in effect."
   [c ws cfg]
-  (let [missing (for [d (description/list ws) :when (description/runnable? d)
+  (let [missing (for [d (description/list ws) :when (and (description/runnable? d) (not (:host-port d)))   ; a pinned host port is the description's word
                       cp (remove nil? [(:port d) (:jdwp d)])
                       :when (nil? (get-in cfg [:services (:name d) :ports cp]))]
                   [(:name d) cp])]
@@ -579,7 +584,8 @@
 (defn- ensure-image! [c d sink]
   (when (and (not (podman/image-exists? c (:image d))) (str/starts-with? (str (:image d)) "localhost/"))
     (throw (ex-info (str (:role d) ": image " (:image d) " is built locally and does not exist (bb estate:build)")
-                    {:type :runtime/image-missing :role (:role d) :image (:image d) :hint "bb estate:build builds it; or give the service description a :image of a registry"})))
+                    {:type :runtime/image-missing :role (:role d) :image (:image d)
+                     :hint (or (:image-hint d) "bb estate:build builds it; or give the service description a :image of a registry")})))
   (when-not (podman/image-exists? c (:image d))
     (emit sink {:event "runtime.pulling" :role (:role d) :image (:image d)})
     (podman/pull! c (:image d)
@@ -652,6 +658,12 @@
              :when missing]
        (throw (ex-info (str (:role d) ": " missing " does not exist (service.build builds it)")
                        {:type :runtime/missing-jar :role (:role d) :path missing :hint "dlb service build <name> (or bb estate:build)"})))
+     ;; a container service mounts directories of its repository: a missing one is said by name, not by Podman's statfs error
+     (doseq [d ds :when (and (:service? d) (not (:jar-path d)) (not (:exploded d)))
+             m (:mounts d)
+             :when (not (.exists (java.io.File. ^String (str (:source m)))))]
+       (throw (ex-info (str (:role d) ": mount source " (:source m) " does not exist")
+                       {:type :runtime/missing-mount :role (:role d) :path (str (:source m)) :hint "the :mounts :from of the service description are relative to its repository; is the repository attached and the path committed?"})))
      (podman/ensure-network! c (:network cfg))
      ;; a service the topology serves elsewhere (or not at all) is not desired: stop it, keep the container
      (when-not infra-only
@@ -779,7 +791,7 @@
             (and (hp :postgres 5432) (string? (get-in e [:targets :db/main])))
             (update-in [:targets :db/main] #(db-url % (hp :postgres 5432) (get-in cfg [:containers :postgres :env]))))
         e (reduce (fn [e [role spec]]
-                    (if (and (= "service" (namespace role)) (or (:jar spec) (:exploded spec)))
+                    (if (and (= "service" (namespace role)) (or (:jar spec) (:exploded spec) (:service? spec)))
                       (let [n (name role)
                             port (:port (service-health spec))
                             host (get (:ports spec) port)]

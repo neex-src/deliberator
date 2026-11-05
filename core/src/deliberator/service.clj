@@ -153,7 +153,8 @@
   else the `runtime.edn :services` override, else nil (the description's ports stand)."
   [ws d rows]
   (let [rp (:ports (when (map? rows) (get rows (role-label (:name d)))))]
-    (if (seq rp) rp (get-in (runtime/read-config ws) [:services (:name d) :ports]))))
+    (if (seq rp) rp (or (get-in (runtime/read-config ws) [:services (:name d) :ports])
+                        (when (:host-port d) {(:port d) (:host-port d)})))))
 
 (defn list
   "`[{:name :kind :repo :module :port :jdwp :image :mode [:url] :status :container [:log-target :log]}]`; `:container` is the
@@ -213,6 +214,9 @@
   -> `{:artifact :bytes :took-ms :log :sha}`; a non-zero exit is `service/build-failed` (data `:log :exit`)."
   [ws name {:keys [sink on-cancel! budget-ms]}]
   (let [d (require-description ws name)
+        _ (when-not (description/buildable? d)
+            (fail :service/not-buildable (str "service " name " is a " (clojure.core/name (:kind d)) ": its image is built elsewhere, there is nothing to build here")
+                  :hint (or (:image-hint d) "build or pull the image, then service.start")))
         b (cond-> (:build d)
             (and (= :hotswap (description/image-kind d)) (= "mvn" (first (get-in d [:build :cmd]))))
             (update :cmd into (:deps-args (description/reload-config d))))   ; target/dependency for the exploded classpath
@@ -332,7 +336,7 @@
     (let [refs (when secrets-from (secrets-gate! ws name secrets-from confirm))]
     (when-not (description/runnable? d)
       (fail :service/not-runnable (str "service " name " is a " (clojure.core/name (:kind d)) ": it runs as a function in the environment, not as a container")
-            :hint "only spring-boot services start here"))
+            :hint "only spring-boot and container services start here"))
     (description/module-dir ws d)
     ;; nothing is fetched before token 2 was consumed (the gate returns the refs only then)
     (let [values (when refs (runtime/fetch-secrets ws secrets-from refs))]
