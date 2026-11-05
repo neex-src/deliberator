@@ -118,7 +118,8 @@ class GenerateFromEditorTest : BasePlatformTestCase() {
         assertTrue(t, t.contains("\n### wait first\n# @for 100ms\n\n### wait second\n# @for 100ms\n#< end\n\n### wait later"))
         val psi = PsiManager.getInstance(project).findFile(vf) as ScnFile
         assertEquals(listOf("ai", "wait", "wait", "wait"), psi.steps.map { it.kind })
-        assertFalse("the end marker is not part of the last generated step", psi.steps[2].text.contains("#<"))
+        assertFalse("the end marker is not part of the last generated step's body", psi.steps[2].body?.text.orEmpty().contains("#<"))
+        assertTrue("it is a token of the step, painted as a marker", psi.steps[2].text.contains("#< end"))
         assertFalse("the marker is not part of the prose", psi.steps[0].body?.text.orEmpty().contains("#>"))
         // run: the ai block is skipped, the three waits run, results sit under their steps
         PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
@@ -153,7 +154,7 @@ class GenerateFromEditorTest : BasePlatformTestCase() {
         caretAt("Wait a little")
         perform("deliberator.scenario.generate")
         // an edit above the block while the model is at work
-        ApplicationManager.getApplication().runWriteAction { myFixture.editor.document.insertString(0, "# a comment\n") }
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) { myFixture.editor.document.insertString(0, "# a comment\n") }
         wait("generate to end") { !GenerateRun.isRunning(myFixture.file.virtualFile, "pause") && text().contains("#> generated") }
         val t = text()
         assertTrue(t, t.startsWith("# a comment\n# @env local\n"))
