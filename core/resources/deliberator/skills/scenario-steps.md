@@ -4,7 +4,7 @@ You turn a description in prose into the steps of a Deliberator scenario (`.scn`
 it, then runs it. The folder you are in is read-only context made for this request:
 
 - `universal.json`: everything Deliberator knows about this workspace, one entry per line (use Grep for a name, Read for
-  the rest). Read it before you write. `step-kinds` = the only step kinds, their verbs and directives. `environment.targets`
+  the rest). Read it before you write. `step-kinds` = the only step kinds, their verbs and directives. `targets`
   = the only targets that exist (`queue/x`, `table/x`, `service/x`, `log/x`, `db/x`, ...). `services`, `terraform`, `aws`
   = what exists. `operations` = what an `op` step can call. `variables` = what `{{...}}` can name.
 - `skills/<repo>/*.md`: notes the repositories wrote for you (message shapes, flows). `skills` in the JSON lists them with

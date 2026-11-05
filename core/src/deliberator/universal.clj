@@ -10,8 +10,8 @@
   `<dir>/skills/<repo>/<name>` (the `:path` of each skill entry is relative to `dir`).
 
   Top level of the JSON: `universal` (format version), `workspace`, `generated` (instant), `environment` {name kind region
-  description targets topology} (every target key is also a `{{variable}}`; a bare `queue/x` on a step line is a target
-  too), `services` (the service descriptions: name kind repo module port health image depends), `repositories` {name path
+  description}, `targets` {key value} (every key is a `{{variable}}`, and a bare `queue/x` on a step line is a target),
+  `topology` {service {mode url}}, `services` (the service descriptions: name kind repo module port health image depends), `repositories` {name path
   kind}, `skills` [{repo file path title bytes}] (`<repo>/deliberator/skills/*.md` of every attached checkout), `terraform`
   [{repo dir kind type name ident file line}] (blocks of the `.tf` files, read by `hcl`, never evaluated), `aws` {resources
   errors} (`aws.discover` of a local environment, at most 200 names per kind), `engine-directives`, `step-kinds` (the
@@ -61,15 +61,14 @@
                                                (if (= :topology/service-off (:type (ex-data x))) "off" (throw x)))))
                             ts))
                         (or (:targets e) {}) (:targets e))]
-    (cond-> {:name (:name e) :kind (name (:kind e))
-             :region (get-in e [:aws :region])
-             :targets (into (sorted-map) (for [[k v] targets] [(kw-name k) (clean v)]))}
-      (:description e) (assoc :description (:description e))
-      (:read-only e) (assoc :read-only true)
-      (seq (:topology e)) (assoc :topology (into (sorted-map)
-                                                 (for [[n t] (:topology e)]
-                                                   [(kw-name n) (cond-> {:mode (kw-name (:mode t))}
-                                                                  (:url t) (assoc :url (:url t)))]))))))
+    {:environment (cond-> {:name (:name e) :kind (name (:kind e)) :region (get-in e [:aws :region])}
+                    (:description e) (assoc :description (:description e))
+                    (:read-only e) (assoc :read-only true))
+     :targets (into (sorted-map) (for [[k v] targets] [(kw-name k) (clean v)]))
+     :topology (into (sorted-map)
+                     (for [[n t] (:topology e)]
+                       [(kw-name n) (cond-> {:mode (kw-name (:mode t))}
+                                      (:url t) (assoc :url (:url t)))]))}))
 
 (defn- services [ws]
   (mapv (fn [d] (cond-> (select-keys d [:name :kind :repo :module :port :health :image])
@@ -124,8 +123,12 @@
 (defn- discovered [ws env-name ms]
   (let [f (future (awsdiscover/discover! ws env-name))
         r (deref f ms ::timeout)]
-    (if (= ::timeout r)
+    (cond
+      (= ::timeout r)
       (do (future-cancel f) {:error (str "aws.discover did not answer within " ms " ms")})
+      (and (empty? (remove empty? (vals (:resources r)))) (seq (:errors r)))
+      {:error (str "aws.discover reached nothing: " (first (distinct (vals (:errors r)))))}
+      :else
       {:value (-> r
                   (update :resources (fn [m] (into (sorted-map)
                                                    (for [[k items] m]
@@ -156,7 +159,10 @@
              (not big?) (assoc :verbs verbs)
              big? (assoc :verbs-count (count verbs)
                          :verb-prefixes (vec (sort (distinct (map #(first (str/split % #"\." 2)) verbs))))
-                         :verb-shape "service.Operation, e.g. the first word of the step line after the kind")
+                         :verb-note (case (:kind k)
+                                      "aws" "the verb is service.Operation (the prefixes are the services), e.g. sqs.ListQueues"
+                                      "op" "the verb is an operation name, listed in `operations`"
+                                      "the verbs are too many to list"))
              (:verb-kinds k) (assoc :verb-kinds (mapv #(assoc (shape %) :verb (:verb %)) (:verb-kinds k))))))))
 
 (defn- first-sentence [s]
@@ -189,6 +195,7 @@
         e (env/load ws env-name)
         local? (= :local (:kind e))
         discover? (if (some? discover?) discover? local?)
+        envs (source unavailable "environment" {:environment {:name env-name}} (environment e))
         repos (source unavailable "repositories" [] (repo/checkouts ws))
         skills (source unavailable "skills" [] (skills-of repos))
         tf (source unavailable "terraform" {:rows []} (terraform repos))
@@ -201,7 +208,9 @@
         json* (cond-> {:universal format-version
                        :workspace (store/ws-name ws)
                        :generated (str (store/now))
-                       :environment (source unavailable "environment" {:name env-name} (environment e))
+                       :environment (:environment envs)
+                       :targets (:targets envs)
+                       :topology (:topology envs)
                        :services (source unavailable "services" [] (services ws))
                        :repositories (mapv #(select-keys % [:name :path :kind]) repos)
                        :skills (mapv #(select-keys % [:repo :file :path :title :bytes]) skills)
@@ -227,11 +236,17 @@
                                             (instance? java.time.temporal.TemporalAccessor v) (str v)
                                             :else v))))
 
+(def ^:private key-order
+  [:universal :workspace :generated :environment :targets :topology :services :repositories :skills :terraform :aws
+   :engine-directives :step-kinds :operations :variables :unavailable])
+
 (defn render
   "The JSON text of `m`: top-level keys on their own lines; an array one element per line, an object one entry per
   line, anything deeper compact, so a Grep returns whole entries."
   [m]
-  (let [entry (fn [[k v]]
+  (let [m (concat (for [k key-order :when (contains? m k)] [k (get m k)])
+                  (for [[k v] m :when (not (some #{k} key-order))] [k v]))
+        entry (fn [[k v]]
                 (str "  " (j (kw-name k)) ": "
                      (cond
                        (and (sequential? v) (seq v)) (str "[\n" (str/join ",\n" (map #(str "    " (j %)) v)) "\n  ]")
