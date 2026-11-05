@@ -6,6 +6,8 @@
       [:class :method :logger] [:line] [:col] :targets [{:file <absolute> :repo <name> :rel <path in the repo>} ...]}`
 
   Only spans that resolve are refs (`:unresolved` counts the others): a frame of a class that no attached checkout holds is not a link.
+  A place that names a line resolves only to a file that HAS that line (logback's `%line` of a framework logging under the application's
+  logger name, `Started ServiceA` from Spring, is a line of the framework).
   The shapes, searched anywhere in a line (a mirrored `logs/services/` line carries `<instant> out ` before the text):
 
     frame      `at pkg.Cls$In.m(File.java:15)`, also `at app//pkg...` and `at java.base/pkg...`; the span is `File.java:15`.
@@ -232,13 +234,24 @@
 
 ;; the scan --------------------------------------------------------------------------------------
 
-(defn- resolve-span [idx roots svc s]
+(defn- line-count [counts ^String file]
+  (or (get @counts file)
+      (let [n (try (with-open [r (io/reader file :encoding "UTF-8")] (count (line-seq r))) (catch Exception _ 0))]
+        (swap! counts assoc file n)
+        n)))
+
+(defn- resolve-span
+  "`s` with its `:targets`. A place that names a line (a frame, `logger:line`, a Node frame) only resolves to a file that HAS that line:
+  logback's `%line` is the line of the logging call, which for a framework logging under the application's logger name
+  (`Started ServiceA` from Spring) is a line of the framework, not of the class; a deployed Lambda that is not the source
+  (a longer file than the source, an older version) is told the same way."
+  [idx roots svc counts s]
   (let [targets (case (:kind s)
                   :frame (rank (frame-entries idx s) svc)
                   :logger (rank (logger-entries idx s) svc)
                   :exception (rank (exception-entries idx s) svc)
                   :node (node-targets roots (:path s)))]
-    (assoc s :targets targets)))
+    (assoc s :targets (if-let [l (:line s)] (filterv #(>= (line-count counts (:file %)) l) targets) targets))))
 
 (defn- ref-of [n ^String line s]
   (-> (select-keys s [:kind :class :method :logger :line :col :from :to :targets])
@@ -251,11 +264,12 @@
   (let [p (str path)
         svc (service-of ws p)
         idx (source-index ws)
-        roots (node-roots ws svc)]
+        roots (node-roots ws svc)
+        counts (atom {})]
     (with-open [^BufferedReader rdr (io/reader p :encoding "UTF-8")]
       (loop [n 1, refs (transient []), unresolved 0]
         (if-let [line (.readLine rdr)]
-          (let [ss (map #(resolve-span idx roots svc %) (spans line))
+          (let [ss (map #(resolve-span idx roots svc counts %) (spans line))
                 ok (filter (comp seq :targets) ss)]
             (recur (inc n)
                    (reduce #(conj! %1 (ref-of n line %2)) refs ok)

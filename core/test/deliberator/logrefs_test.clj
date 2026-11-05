@@ -91,7 +91,7 @@
     (put! billing ".gitignore" "target/\n")
     (git/run billing ["init" "-q"])
     (put! other "src/main/java/com/acme/Pricing.java" pricing)
-    (put! other "src/main/java/com/zeta/Pricing.java" "package com.zeta;\npublic class Pricing {}\n")
+    (put! other "src/main/java/com/zeta/Pricing.java" "package com.zeta;\n\npublic class Pricing {\n}\n")
     (put! lambdas "functions/thrower/index.mjs" "export const handler = async () => { throw new Error('boom'); };\n")
     (put! lambdas "functions/thrower/lib/aws.mjs" "export const x = 1;\n")
     (put! lambdas "functions/other/index.mjs" "export const handler = async () => 1;\n")
@@ -127,6 +127,7 @@
              "2026-11-05T10:00:00.300+01:00 WARN  billing [c1] c.z.Pricing:3 - another package"
              "2026-11-05T10:00:00.400+01:00 WARN  billing [c1] c.y.Pricing:3 - a package nobody has"
              "connected to localhost:5432 - ok"
+             "2026-11-05T10:00:00.500+01:00 INFO  billing [] c.acme.Pricing:654 - Started Billing in 5.1 seconds"
              ""]))
 
 (deftest the-service-repository-is-the-only-target
@@ -137,7 +138,7 @@
           r (call "logs.refs" {:path log})
           rs (:refs r)]
       (is (= "billing" (:service r)))
-      (is (= 11 (:lines r)) "lines read")
+      (is (= 12 (:lines r)) "lines read")
       (testing "a frame: the file of the service's repository, main before test; the other repository's copy is not offered"
         (let [f (by-text rs "Pricing.java:3")]
           (is (= 4 (:n f)))
@@ -163,7 +164,7 @@
       (testing "a class in no attached repository is no ref; the count says how many"
         (is (not-any? #(str/includes? (:text %) "DispatcherServlet") rs))
         (is (not-any? #(str/includes? (:text %) "Thread.java") rs))
-        (is (= 4 (:unresolved r)) "DispatcherServlet, Thread, c.y.Pricing, localhost"))
+        (is (= 5 (:unresolved r)) "DispatcherServlet, Thread, c.y.Pricing, localhost, and Pricing:654 (the file has 4 lines)"))
       (testing "the span is where the text is"
         (doseq [x rs :let [line (nth (str/split spring-log #"\n" -1) (dec (:n x)))]]
           (is (= (:text x) (subs line (:from x) (:to x)))))))))
