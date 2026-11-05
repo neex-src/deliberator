@@ -1238,11 +1238,11 @@
                      :doc "Runtime status (running, unhealthy, starting, stopped, absent, unreachable) of one service or all."
                      :args (ws-schema :name {:type :string :positional true :doc "service name; default all"})}
    "service.build" {:fn service-build :class :mutate
-                    :doc "Runs the service's build command in its module; the output streams as service.build.line events, is appended to logs/build/ as it arrives and is stored raw. Answers the artifact."
+                    :doc "Runs the service's build command in its module; the output streams as service.build.line events, is appended to logs/build/ as it arrives and is stored raw. Answers the artifact. A :container service has no build (service/not-buildable)."
                     :events ["service.build.line"]
                     :args (ws-schema :name {:type :string :required true :doc "service name"})}
    "service.start" {:fn service-start :class :mutate
-                    :doc "Creates, recreates (spec or jar changed) or starts the service's container and waits until healthy. secrets-from asks for real secret values of an environment: two confirm-required answers (token 1: which environment and which secret names; token 2: the values go into the container's environment only), then the values are fetched (never persisted) and the container is recreated with them. A wrong, reused or expired token is service/confirmation-refused."
+                    :doc "Creates, recreates (spec or jar changed) or starts the service's container (a Spring service or a :container image) and waits until healthy. secrets-from asks for real secret values of an environment: two confirm-required answers (token 1: which environment and which secret names; token 2: the values go into the container's environment only), then the values are fetched (never persisted) and the container is recreated with them. A wrong, reused or expired token is service/confirmation-refused."
                     :events ["runtime.pulling" "runtime.starting" "runtime.ready" "service.started"]
                     :args (ws-schema :name {:type :string :required true :doc "service name"}
                                      :secrets-from {:type :string :doc "environment to take real secret values from (gated)"}
@@ -1252,7 +1252,7 @@
                    :events ["service.stopped"]
                    :args (ws-schema :name {:type :string :required true :doc "service name"})}
    "service.reload" {:fn service-reload :class :mutate
-                     :doc "Compiles the service's module (the description's :reload :cmd, derived from its Maven build), brings the changed classes into the RUNNING container and answers what happened: the HotswapAgent image copies only the changed files into the staging dir and waits for the agent's reload line, then health UP and a quiet log (15 s budget); the plain-JRE image pushes them over JDWP (body changes only). A change the JVM cannot take, the budget, an agent error or a changed resource ends in a restart, said in fallback. A compile error is service/compile-failed with the compiler's lines. The container id does not change on an in-place reload."
+                     :doc "Compiles the service's module (the description's :reload :cmd, derived from its Maven build), brings the changed classes into the RUNNING container and answers what happened: the HotswapAgent image copies only the changed files into the staging dir and waits for the agent's reload line, then health UP and a quiet log (15 s budget); the plain-JRE image pushes them over JDWP (body changes only). A change the JVM cannot take, the budget, an agent error or a changed resource ends in a restart, said in fallback. A compile error is service/compile-failed with the compiler's lines. The container id does not change on an in-place reload. A :container service has no JVM to reload (service/not-reloadable); service.restart recreates it."
                      :events ["service.reload.step"]
                      :args (ws-schema :name {:type :string :required true :doc "service name"}
                                       :budget-ms {:type :int :doc "how long to wait for the agent after the copy (default 15000)"})}

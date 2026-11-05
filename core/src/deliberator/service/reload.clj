@@ -177,6 +177,10 @@
                     :known (description/names ws) :hint "service.adopt a module, or dlb service list"))
         _ (when-not (description/runnable? d)
             (fail :service/not-runnable (str "service " name " is a " (clojure.core/name (:kind d)) ": nothing runs in a container to reload")))
+        _ (when-not (description/reloadable? d)
+            (fail :service/not-reloadable
+                  (str "service " name " is a " (clojure.core/name (:kind d)) ": it runs its image as it is, there is no JVM to bring classes into")
+                  :hint "service.restart recreates it after its description or its image changed"))
         role (runtime/role-name (description/role name))
         row (row-of ws role)
         _ (when-not (= :running (:state row))
