@@ -93,6 +93,7 @@
     pr.open repo* n* github session ws             -> {repo n ref head-sha worktree{name path branch head created moved} github pr comments{path inline reviews conversation} checks{path count by-result rows}}   (M5.5: refs/pull/<n>/head into worktrees/<repo>/pr-<n>; reviews and comments as sessions/<k>/pr/*.txt)
     logs.insights groups* query* env since until name budget-ms limit session ws -> {query-id status bytes-scanned statistics rows path sha query-file raw}   [line]   (M4.3)
     logs.match path* markers ws                    -> {lines [{n marker-id}] path scanned}
+    logs.refs path* session ws                     -> {path lines service unresolved refs [{n from to text kind [class method logger line col] targets [{file repo rel}]}]}   (decision 76: the spans of a log that name code, resolved to files of the attached checkouts)
     marker.add file* line* logger ws               -> [{id file line logger}]   (the marker list after the change)
     marker.remove file* line* ws                   -> [{id file line logger}]
     marker.list file ws                            -> [{id file line logger}]
@@ -127,6 +128,7 @@
             [deliberator.tfroot :as tfroot]
             [deliberator.awsmodel :as awsmodel]
             [deliberator.markers :as markers]
+            [deliberator.logrefs :as logrefs]
             [deliberator.pr :as pr]
             [deliberator.provider :as provider]
             [deliberator.repo :as repo]
@@ -1013,16 +1015,26 @@
 (defn- marker-remove [_ {:keys [file line] :as args}] (markers/remove! (ws-of args) file line))
 (defn- marker-list [_ {:keys [file] :as args}] (markers/list (ws-of args) :file file))
 
-(defn- logs-match [_ {:keys [path markers] :as args}]
-  (let [ws (ws-of args)
-        p (if (.isAbsolute (io/file path))
+(defn- log-file
+  "The log file `path` of a request: absolute, else relative to the session's logs/; `logs/not-found` when there is none."
+  [ws {:keys [path] :as args}]
+  (let [p (if (.isAbsolute (io/file path))
             (io/file path)
-            (io/file (str (.resolve (session/dir ws (session-key ws args)) "logs")) path))
-        _ (when-not (.isFile p)
-            (fail :logs/not-found (str "no log file " p) :hint "a fetched log's path from logs.fetch; relative paths are looked up in the session's logs/"))
+            (io/file (str (.resolve (session/dir ws (session-key ws args)) "logs")) path))]
+    (when-not (.isFile p)
+      (fail :logs/not-found (str "no log file " p) :hint "a fetched log's path from logs.fetch; relative paths are looked up in the session's logs/"))
+    p))
+
+(defn- logs-match [_ {:keys [markers] :as args}]
+  (let [ws (ws-of args)
+        p (log-file ws args)
         ms (cond->> (markers/list ws) (seq markers) (clojure.core/filter #(contains? (set markers) (:id %))))
         lines (str/split (slurp p :encoding "UTF-8") #"\r?\n" -1)]
     {:lines (markers/match-lines ms lines) :path (str p) :scanned (count lines)}))
+
+(defn- logs-refs [_ args]
+  (let [ws (ws-of args)]
+    (logrefs/scan ws (log-file ws args))))
 
 (defn- run-paths [^Path dir]
   {:run (str dir) :run-edn (str (.resolve dir "run.edn")) :result (str (.resolve dir "result.txt"))})
@@ -1468,6 +1480,10 @@
                  :args (ws-schema :path {:type :string :required true :doc "log file, absolute or relative to the session's logs/"}
                                   :markers {:type :strings :doc "marker ids to match; default all"}
                                   :session {:type :string :doc "session key for a relative path"})}
+   "logs.refs" {:fn logs-refs :class :read
+                :doc "The places of a log that name source code, as clickable spans resolved to files of the ATTACHED checkouts: stack frames (at pkg.Cls.m(File.java:15), also Caused by: and the exception class itself), the logback logger:line token, and Node frames (at fn (file:///var/task/index.mjs:42:7)) mapped through a :node-lambda description (:repo, :module, :task-root default /var/task). A class that no checkout holds gives no ref. When the log is a service's own (log-service-<n>-<ts>.log, logs/services/service-<n>/) the description's repository is the only target if it holds the file; else every holder is a target. Pure over the file and the checkouts."
+                :args (ws-schema :path {:type :string :required true :doc "log file, absolute or relative to the session's logs/"}
+                                 :session {:type :string :doc "session key for a relative path"})}
    "marker.add" {:fn marker-add :class :mutate
                  :doc "Marks a source line (idempotent per file and line); answers all markers."
                  :args (ws-schema :file {:type :string :required true :doc "source file path"}
