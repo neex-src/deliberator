@@ -286,10 +286,15 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
         val doc = editor.document
         for (s in steps) {
             val here = s.index   // what a click runs: the step's position in the file now
-            val (icon, tip, cancels) = gutterState(here, attach[here], st, snap, running)
             val line = doc.getLineNumber(s.textRange.startOffset)
             val h = editor.markupModel.addLineHighlighter(null, line, HighlighterLayer.ADDITIONAL_SYNTAX)
-            h.gutterIconRenderer = StepGutterIcon(this, here, icon, tip, cancels)
+            if (s.kind == AiBlocks.KIND) {   // an ai block is not a step: its icon generates
+                val name = AiBlocks.name(s)
+                h.gutterIconRenderer = AiGutterIcon(this, here, name, name != null && GenerateRun.isRunning(file, name))
+            } else {
+                val (icon, tip, cancels) = gutterState(here, attach[here], st, snap, running)
+                h.gutterIconRenderer = StepGutterIcon(this, here, icon, tip, cancels)
+            }
             highlighters += h
         }
     }
@@ -346,6 +351,12 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
         return (step..n).toList()
     }
 
+    /** Writes the steps of the ai block [name] with the workspace's model and places them under its prose. */
+    fun generate(name: String) {
+        GenerateRun(project, file, editor.document, name).start()
+        scheduleGutter()
+    }
+
     fun runSteps(steps: List<Int>?) = runner.run(file, steps)
     fun runFrom(step: Int) = runSteps(from(step))
     fun cancel() = runner.cancel(path)
@@ -366,6 +377,9 @@ class RunView(val editor: Editor, val project: Project, val file: VirtualFile) :
     }
 
     fun gutterIcons(): Map<Int, StepGutterIcon> = highlighters.mapNotNull { it.gutterIconRenderer as? StepGutterIcon }.associateBy { it.step }
+
+    /** The Generate icons of the ai blocks, by the step's position in the file. */
+    fun aiGutterIcons(): Map<Int, AiGutterIcon> = highlighters.mapNotNull { it.gutterIconRenderer as? AiGutterIcon }.associateBy { it.step }
 
     override fun dispose() {
         disposed = true

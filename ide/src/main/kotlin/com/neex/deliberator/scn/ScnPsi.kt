@@ -54,10 +54,10 @@ class ScnParser : PsiParser {
             while (!builder.eof() && builder.tokenType != ScnTokens.HEAD_MARK) {
                 when (builder.tokenType) {
                     ScnTokens.DIR_MARK -> directive(builder)
-                    ScnTokens.EOL -> builder.advanceLexer()
+                    ScnTokens.EOL, ScnTokens.MARKER -> builder.advanceLexer()   // a region marker is layout: never in a body
                     else -> {
                         val b = builder.mark()
-                        while (!builder.eof() && builder.tokenType != ScnTokens.HEAD_MARK) builder.advanceLexer()
+                        while (!builder.eof() && builder.tokenType != ScnTokens.HEAD_MARK && builder.tokenType != ScnTokens.MARKER) builder.advanceLexer()
                         b.done(ScnElements.BODY)
                     }
                 }

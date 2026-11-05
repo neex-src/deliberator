@@ -34,6 +34,9 @@ not there, write the nearest steps you can and say so in a `#` comment line unde
 - `# @until <assert> within <duration>` runs the step again every 500 ms until the assert holds (`20s`, `2m`). Use it to wait
   for something to happen. Never use a `wait` step for that: `wait` is a fixed pause.
 - `# @capture name = <fact or $.path>` keeps a value for the steps after it.
+- An `op` step (`### op <operation> <name>`) calls one daemon operation: the body is its arguments as JSON (see `operations`),
+  `$` is its result, so `# @assert $.lines == 1` works. A `logs` step only tails a log for a window from the start of the run
+  (or its `@from`); to read a log after something happened, use `op logs.fetch` when `operations` has it.
 
 ## Answer
 

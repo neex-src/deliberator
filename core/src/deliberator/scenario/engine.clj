@@ -226,10 +226,12 @@
         selected (when steps (set steps))
         _ (doseq [n selected]
             (when-not (<= 1 n (:all-count parsed))
-              (throw (ex-info (str "no step " n) {:type :scenario/no-such-step :step n})))
-            (when-not (some #(= n (:n %)) live)
-              (throw (ex-info (str "step " n " is an ai block, not a step to run: generate its steps (dlb scenario generate FILE NAME)")
-                              {:type :scenario/no-such-step :step n}))))
+              (throw (ex-info (str "no step " n) {:type :scenario/no-such-step :step n}))))
+        _ (when (and selected (not-any? #(contains? selected (:n %)) live))
+            (throw (ex-info (str "step" (when (> (count selected) 1) "s") " " (str/join ", " (sort selected))
+                                 " " (if (> (count selected) 1) "are ai blocks" "is an ai block")
+                                 ", not a step to run: generate the steps (dlb scenario generate FILE NAME)")
+                            {:type :scenario/no-such-step :step (first (sort selected))})))
         planned
         (loop [ss (:steps parsed) defined (conj base "step.correlation") out []]
           (if-let [s (first ss)]
