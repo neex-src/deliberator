@@ -297,13 +297,29 @@ class LogLinks(private val project: Project) : Disposable {
         }
     }
 
-    /** Opens [t] at the line of [ref] (Node: and column); an exception class without a line at its declaration. EDT. */
+    /**
+     * Opens [t] at the line of [ref] (Node: and column); an exception class without a line at its declaration. EDT. A file the virtual
+     * file system has not seen yet is refreshed on a pooled thread first (a refresh on the EDT is a slow operation) and opened when
+     * that is done: the editor is then answered later, null now.
+     */
     fun open(ref: LogRef, t: LogTarget): Editor? {
-        val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(Path.of(t.file))
-        if (vf == null) {
-            Ui.notify(project, "Log link", "${t.file} is gone", com.intellij.notification.NotificationType.WARNING)
+        val fs = LocalFileSystem.getInstance()
+        val known = fs.findFileByNioFile(Path.of(t.file))
+        if (known == null) {
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val vf = fs.refreshAndFindFileByNioFile(Path.of(t.file))
+                ApplicationManager.getApplication().invokeLater({
+                    if (project.isDisposed) return@invokeLater
+                    if (vf == null) Ui.notify(project, "Log link", "${t.file} is gone", com.intellij.notification.NotificationType.WARNING)
+                    else openFile(ref, vf)
+                }, ModalityState.nonModal())
+            }
             return null
         }
+        return openFile(ref, known)
+    }
+
+    private fun openFile(ref: LogRef, vf: VirtualFile): Editor? {
         val offset = if (ref.line == null && ref.cls != null) declarationOffset(vf, ref.cls) else null
         val d = if (offset != null) OpenFileDescriptor(project, vf, offset)
         else OpenFileDescriptor(project, vf, maxOf(0, (ref.line ?: 1) - 1), maxOf(0, (ref.col ?: 1) - 1))
