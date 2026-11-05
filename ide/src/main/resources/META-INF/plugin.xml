@@ -109,6 +109,8 @@
                     text="New Environment..." description="env.create: a remote environment from an AWS profile, an account and a region (the account is checked first)"/>
             <action id="deliberator.audit.open" class="com.neex.deliberator.environments.OpenAuditLogAction"
                     text="Open Audit Log..." description="audit.show: the audit trail of a session as text, the confirmations highlighted"/>
+            <action id="deliberator.universal.open" icon="AllIcons.FileTypes.Json" class="com.neex.deliberator.run.OpenUniversalAction"
+                    text="Open Universal JSON" description="workspace.universal: writes everything the model gets when it writes steps (operations, kinds, targets, services, Terraform, skills) for the selected environment, and opens it"/>
             <action id="deliberator.ops.show" icon="AllIcons.Actions.Edit" class="com.neex.deliberator.actions.OperationsAction"
                     text="Operations..." description="Every daemon operation with a generated form"/>
         </group>
@@ -139,6 +141,8 @@
                     text="Copy Step as aws CLI Command" description="The aws step at the caret as an aws CLI command on the clipboard"/>
             <action id="deliberator.scenario.fillBody" class="com.neex.deliberator.run.FillAwsBodyAction"
                     text="Fill Request Body" description="Put the required members of the aws operation at the caret into the step body"/>
+            <action id="deliberator.scenario.generate" class="com.neex.deliberator.run.GenerateStepsAction" icon="AllIcons.Actions.IntentionBulb"
+                    text="Generate Steps for AI Block" description="The caret is in an ai block (### ai name and prose): a model writes the steps under the prose, Deliberator checks them (scenario.generate)"/>
             <action id="deliberator.scenario.runs" class="com.neex.deliberator.run.RunHistoryAction"
                     text="Runs of This Scenario..." description="History of this scenario: open result.txt, show inline, diff two runs"/>
         </group>

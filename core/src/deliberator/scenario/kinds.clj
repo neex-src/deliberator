@@ -14,6 +14,8 @@
                                                 ;   (:duration) is implicit for every kind
        :capture-roots #{\"$\"}                   ; path roots usable in @assert/@capture/@until ($ = JSON body)
        :concurrent?   false                     ; true: armed before step 1, runs beside the others, joined at the end
+       :inert?        false                     ; true: a block of the document, not a step at run time (`ai`):
+                                                ;   parsed, numbered and listed, skipped by the engine; `:run` is never called
        :default-timeout-ms 30000                ; optional, per attempt; `@timeout` overrides
        :verb-kinds    {\"insights\" {...}}        ; optional: per-verb overrides (`for-verb`): :target :directives :facts
                                                 ;   :capture-roots :concurrent? :default-timeout-ms :run :arm for the steps of that verb
@@ -145,7 +147,7 @@
 
 (defn describe-kinds
   "The registry as data for the IDE and agents (`scenario.kinds`): a vector sorted by kind of
-  `{:kind :verbs :verb-optional :target :directives :facts :capture-roots :concurrent :default-timeout-ms}` (+ `:verb-kinds [{:verb …same shape}]` for a kind whose verb is a different step shape, see `for-verb`).
+  `{:kind :verbs :verb-optional :target :directives :facts :capture-roots :concurrent :inert :default-timeout-ms}` (+ `:verb-kinds [{:verb …same shape}]` for a kind whose verb is a different step shape, see `for-verb`).
   `:verbs` are the words (sorted); `:verb-optional` is true when the verb may be absent. A directive is
   `{:name :hint :type :values :repeatable :doc :engine}` (`:type` repeats the hint: the registry declares
   no other type; `:engine` marks the directives every kind has); a fact is `{:name :type}` with the
@@ -161,6 +163,7 @@
                  :facts (vec (for [f (fact-specs k)] {:name (:name f) :type (name (:type f))}))
                  :capture-roots (vec (sort (:capture-roots k)))
                  :concurrent (boolean (:concurrent? k))
+                 :inert (boolean (:inert? k))
                  :default-timeout-ms (:default-timeout-ms k)})]
     (vec (for [[_ k] (sort-by key (registry))]
            (cond-> (assoc (shape k)

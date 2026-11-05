@@ -46,7 +46,7 @@
 
 (def ^:private path-args
   "Operations whose file or directory arguments are sent absolute when they exist relative to the shell's cwd."
-  {"scenario.run" [:path] "scenario.parse" [:path] "logs.match" [:path] "repo.attach" [:path]
+  {"scenario.run" [:path] "scenario.generate" [:path] "scenario.parse" [:path] "logs.match" [:path] "repo.attach" [:path]
    "marker.add" [:file] "marker.remove" [:file] "marker.list" [:file]
    "terraform.local" [:dir] "terraform.drift" [:dir :file] "terraform.locate" [:root]
    "terraform.graph" [:roots] "terraform.apply-all" [:roots]

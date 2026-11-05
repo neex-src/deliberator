@@ -12,7 +12,7 @@
 
 (defn- fail [msg & {:as data}] (throw (ex-info msg (assoc data :type "bad-args" :cli true))))
 
-(def sugar {"run" "scenario.run"})
+(def sugar {"run" "scenario.run" "universal" "workspace.universal"})
 
 (defn- find-op-at [table words]
   (let [by-name (into {} (map (juxt :op identity)) table)

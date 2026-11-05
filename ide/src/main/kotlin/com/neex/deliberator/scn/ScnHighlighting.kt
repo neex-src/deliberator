@@ -34,6 +34,7 @@ object ScnColors {
     val VARIABLE = createTextAttributesKey("SCN_VARIABLE", D.TEMPLATE_LANGUAGE_COLOR)
     val COMMENT = createTextAttributesKey("SCN_COMMENT", D.LINE_COMMENT)
     val BODY = createTextAttributesKey("SCN_BODY", D.IDENTIFIER)
+    val MARKER = createTextAttributesKey("SCN_REGION_MARKER", D.DOC_COMMENT)
     val BAD = createTextAttributesKey("SCN_BAD", com.intellij.openapi.editor.HighlighterColors.BAD_CHARACTER)
 }
 
@@ -47,6 +48,7 @@ class ScnSyntaxHighlighter : SyntaxHighlighterBase() {
         ScnTokens.TARGET -> pack(ScnColors.TARGET)
         ScnTokens.VARIABLE -> pack(ScnColors.VARIABLE)
         ScnTokens.COMMENT -> pack(ScnColors.COMMENT)
+        ScnTokens.MARKER -> pack(ScnColors.MARKER)
         ScnTokens.DIR_MARK -> pack(ScnColors.DIR_MARK)
         ScnTokens.DIR_NAME -> pack(ScnColors.DIR_NAME)
         ScnTokens.DIR_VALUE -> pack(ScnColors.DIR_VALUE)
@@ -73,6 +75,7 @@ class ScnColorSettingsPage : ColorSettingsPage {
         AttributesDescriptor("Directive value", ScnColors.DIR_VALUE),
         AttributesDescriptor("Variable ({{x}})", ScnColors.VARIABLE),
         AttributesDescriptor("Comment", ScnColors.COMMENT),
+        AttributesDescriptor("Generated-steps marker", ScnColors.MARKER),
         AttributesDescriptor("Body", ScnColors.BODY),
         AttributesDescriptor("Bad text", ScnColors.BAD),
     )

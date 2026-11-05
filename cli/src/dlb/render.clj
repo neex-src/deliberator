@@ -192,10 +192,26 @@
   (println (str "query-id: " query-id "   raw calls: " (count raw)))
   (when-let [s (:statistics r)] (println (str "statistics: " (str/join " " (for [[k v] (sort-by key s)] (str (name k) "=" v)))))))
 
+(defn- print-generate
+  "`dlb scenario generate`: what was generated, by which model, what it cost, where everything is."
+  [{:keys [name model attempts usage steps marker took-ms wrote file run paths session-id]}]
+  (println (str "generated " steps " step" (when (not= 1 steps) "s") " for ai block " name " with " model
+                (when (> attempts 1) (str " (" attempts " attempts)"))))
+  (println (str "usage: " (if usage
+                            (str (:input usage) " tokens in, " (:output usage) " out"
+                                 (when (some? (:cost-usd usage)) (str ", $" (format "%.4f" (double (:cost-usd usage))))))
+                            "not reported by the model command")
+                ", " (format "%.1f" (/ (double took-ms) 1000)) " s"))
+  (println (if wrote (str "wrote the steps into " file) "the file was not changed (the region is in the result)"))
+  (println marker)
+  (println (str "run: " run (when session-id (str "   model session: " session-id))))
+  (print-paths paths))
+
 (defn print-result
   "Prints an ok result generically: run summaries, `diff`, `label: path` lines, scalars and rows."
   [op result]
   (cond
+    (and (= "scenario.generate" op) (map? result) (contains? result :marker)) (print-generate result)
     (and (= "deployed.show" op) (map? result) (contains? result :services)) (print-deployed result)
     (and (= "logs.insights" op) (map? result) (contains? result :bytes-scanned)) (print-insights result)
     (and (sequential? result) (every? map? result))
