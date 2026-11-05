@@ -18,6 +18,7 @@
     <extensionPoints>
         <extensionPoint name="repositoryKind" interface="com.neex.deliberator.repo.RepositoryKind" dynamic="true"/>
         <extensionPoint name="loggerResolver" interface="com.neex.deliberator.logs.LoggerResolver" dynamic="true"/>
+        <extensionPoint name="classLocator" interface="com.neex.deliberator.logs.ClassLocator" dynamic="true"/>
     </extensionPoints>
 
     <extensions defaultExtensionNs="com.intellij">
@@ -57,6 +58,7 @@
         <projectService serviceImplementation="com.neex.deliberator.logs.MarkerService"/>
         <projectService serviceImplementation="com.neex.deliberator.logs.LogMatcher"/>
         <projectService serviceImplementation="com.neex.deliberator.logs.LogService"/>
+        <projectService serviceImplementation="com.neex.deliberator.logs.LogLinks"/>
         <editorFactoryListener implementation="com.neex.deliberator.logs.LogsEditorListener"/>
         <editorNotificationProvider implementation="com.neex.deliberator.logs.TruncatedLogBanner"/>
 
@@ -157,6 +159,10 @@
                     text="Clear Correlation Filter" description="Unfold the entries the filter folded"/>
             <action id="deliberator.logs.match" class="com.neex.deliberator.logs.MatchMarkersAction"
                     text="Match Markers in Open Logs" description="logs.match on every open log file and highlight the matching lines"/>
+            <action id="deliberator.logs.gotoSource" class="com.neex.deliberator.logs.GoToSourceFromLogAction"
+                    text="Go to Source of Log Line" description="The place on this log line that names code of an attached repository (a stack frame, a logger:line, a Node frame) opens its source; the same as Ctrl+click on the underlined text"/>
+            <action id="deliberator.logs.links" class="com.neex.deliberator.logs.UpdateLogLinksAction"
+                    text="Update Source Links in Log" description="logs.refs: ask the daemon again which places of this log name code (after attaching a repository)"/>
             <action id="deliberator.logs.insights" class="com.neex.deliberator.logs.FindInCloudWatchAction"
                     text="Find in CloudWatch Logs..." description="The selection (an exception class or message) searched with Logs Insights in the log groups of the selected environment's service; the result opens as text with the bytes scanned in a banner"/>
             <action id="deliberator.marker.toggle" class="com.neex.deliberator.logs.ToggleMarkerAction"
