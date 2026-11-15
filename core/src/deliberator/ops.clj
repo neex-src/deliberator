@@ -90,9 +90,11 @@
     worktree.remove repo* name* force ws           -> {repo name path branch branch-kept}   (the branch stays)
     logs.fetch target* env since for follow filter session ws -> {path lines bytes sha target source [follow]}   [logs.line]
     ci.runs repo* workflow branch status limit head-sha session ws -> {path count total rows repo workflow auth rate-remaining raw}   (M5.2: GitHub Actions runs as sessions/<k>/ci/runs-*.txt; read-only)
-    ci.log run* job repo session ws                -> {path lines bytes sha repo run job conclusion other-failed raw auth}   (a job's log via the API as text under sessions/<k>/ci/)
+    ci.jobs repo* run* attempt refresh session ws  -> {repo run attempt final source kept-at age-s run-row jobs [{id name status conclusion started-at completed-at duration-s url runner log steps [{number name status conclusion started-at completed-at duration-s log lines exact}]}] path dir raw auth}   (piece 01: a run's jobs and steps; a finished run is kept at workspace level and served with no network)
+    ci.archive repo* limit session ws              -> {repo limit checked new-runs new-logs already failed path}   (keeps the jobs and logs of the newest finished runs that are not kept yet)
+    ci.log run* job step repo session ws           -> {path lines bytes sha repo run job step conclusion other-failed raw auth source kept kept-at age-s}   (a job's log, or one step's lines, as text under sessions/<k>/ci/; a finished run's log is kept)
     ci.tail run* job repo interval-ms session ws   -> {path lines bytes sha target source follow repo run job}   [logs.line]   (a running job: step transitions, then its log)
-    ci.diff run* job repo against normalise session ws -> {path diff equal red green added removed normalised}   (M5.3: the failed job's log against the last green run's, normalised)
+    ci.diff run* job step repo against normalise session ws -> {path diff equal red green added removed normalised}   (M5.3: the failed job's log against the last green run's, normalised)
     ci.local repo* workflow* job* worktree event env image session ws -> {path lines bytes sha target source follow exit conclusion dir workflow job event image docker-host endpoint}   [logs.line]   (M5.4: one job of a workflow with act on the runtime's Podman, Floci injected; a red job is a result)
     pr.open repo* n* github remote session ws     -> {repo n ref remote head-sha worktree{name path branch head created moved} github pr comments{path inline reviews conversation} checks{path count by-result rows}}   (M5.5: refs/pull/<n>/head into worktrees/<repo>/pr-<n>; reviews and comments as sessions/<k>/pr/*.txt)
     logs.insights groups* query* env since until name budget-ms limit session ws -> {query-id status bytes-scanned statistics rows path sha query-file raw}   [line]   (M4.3)
@@ -972,16 +974,20 @@
 (defn- ci-runs [_ {:keys [repo workflow branch status limit head-sha] :as args}]
   (ci/runs! (ws-of args) {:repo repo :workflow workflow :branch branch :status status :limit limit :head-sha head-sha
                           :session (session-key (ws-of args) args)}))
-(defn- ci-log [_ {:keys [run job repo] :as args}]
-  (ci/log! (ws-of args) {:repo repo :run run :job job :session (session-key (ws-of args) args)}))
+(defn- ci-jobs [_ {:keys [run repo attempt refresh] :as args}]
+  (ci/jobs! (ws-of args) {:repo repo :run run :attempt attempt :refresh refresh :session (session-key (ws-of args) args)}))
+(defn- ci-archive [_ {:keys [repo limit] :as args}]
+  (ci/archive! (ws-of args) {:repo repo :limit limit :session (session-key (ws-of args) args)}))
+(defn- ci-log [_ {:keys [run job repo step] :as args}]
+  (ci/log! (ws-of args) {:repo repo :run run :job job :step step :session (session-key (ws-of args) args)}))
 (defn- ci-tail [ctx {:keys [run job repo interval-ms] :as args}]
   (let [ws (ws-of args) counter (:follows (:daemon ctx))]
     (when counter (swap! counter inc))
     (try (ci/tail! ws {:repo repo :run run :job job :interval-ms interval-ms :session (session-key ws args)
                        :emit! (:emit! ctx) :cancelled? (:cancelled? ctx)})
          (finally (when counter (swap! counter dec))))))
-(defn- ci-diff [_ {:keys [run job repo against normalise] :as args}]
-  (ci/diff! (ws-of args) {:repo repo :run run :job job :against against :normalise normalise :session (session-key (ws-of args) args)}))
+(defn- ci-diff [_ {:keys [run job repo against normalise step] :as args}]
+  (ci/diff! (ws-of args) {:repo repo :run run :job job :step step :against against :normalise normalise :session (session-key (ws-of args) args)}))
 (defn- ci-local [ctx {:keys [repo workflow job worktree event env image] :as args}]
   (let [ws (ws-of args) counter (:follows (:daemon ctx))]
     (when counter (swap! counter inc))      ; a running pipeline is work in flight, like a follow
@@ -1477,10 +1483,23 @@
                                :limit {:type :int :default 20 :doc "at most this many runs (max 100)"}
                                :head-sha {:type :string :doc "only runs of this commit"}
                                :session {:type :string :doc "session key; default the current session"})}
+   "ci.jobs" {:fn ci-jobs :class :mutate
+              :doc "The jobs of a CI run and each job's steps (number, name, status, conclusion, started, completed, duration) as data, and as a text view under sessions/<k>/ci/jobs-<repo>-<run>.txt (one line per job and per step). A run in progress answers what is known now and is never kept; a FINISHED run is fetched once and kept under the workspace's ci/ directory, then answered from the kept copy with no network and no token (kept-at and age-s say when it was fetched). refresh asks GitHub again. Read-only against GitHub."
+              :args (ws-schema :repo {:type :string :required true :doc "owner/name, a github url, or a cloned repository's name"}
+                               :run {:type :string :required true :doc "run id, or a run/job url"}
+                               :attempt {:type :string :doc "the run attempt (a rerun is attempt 2); default the newest kept one, else GitHub's latest"}
+                               :refresh {:type :bool :doc "ask GitHub even when the run is kept"}
+                               :session {:type :string :doc "session key; default the current session"})}
+   "ci.archive" {:fn ci-archive :class :mutate
+                 :doc "Keeps what is missing for the newest finished runs of a repository: their jobs, and every job's log cut into its steps, under the workspace's ci/ directory (one listing, then only the runs and logs not kept yet). Runs in progress are skipped. A kept log outlives GitHub's 90 day expiry."
+                 :args (ws-schema :repo {:type :string :required true :doc "owner/name, a github url, or a cloned repository's name"}
+                                  :limit {:type :int :default 10 :doc "the newest this many finished runs (max 100)"}
+                                  :session {:type :string :doc "session key; default the current session"})}
    "ci.log" {:fn ci-log :class :mutate
              :doc "The log of one job of a GitHub Actions run as text (sessions/<k>/ci/<repo>-<run>-<job>-<id>.log), fetched through the API (the job's log endpoint, no zip); the raw response and the log blob are persisted first. Without job: the run's first failed job. A job that has not completed has no log yet (ci.tail follows it)."
              :args (ws-schema :run {:type :string :required true :doc "run id, or a run/job url (which also names the repository and job)"}
                               :job {:type :string :positional true :doc "job id or name; default the first failed job"}
+                              :step {:type :string :doc "only this step's lines: its number or name (a step's log is cut from the job log at its markers; one cut by time says so in its first line)"}
                               :repo {:type :string :doc "owner/name; needed when run is a bare id"}
                               :session {:type :string :doc "session key; default the current session"})}
    "ci.tail" {:fn ci-tail :class :mutate
@@ -1496,6 +1515,7 @@
               :args (ws-schema :run {:type :string :required true :doc "the failed run's id, or a run/job url"}
                                :job {:type :string :positional true :doc "job id or name; default the first failed job"}
                                :repo {:type :string :doc "owner/name; needed when run is a bare id"}
+                               :step {:type :string :doc "compare only this step (number or name) of the failed job with the same step of the last green run"}
                                :against {:type :string :doc "compare with this run id instead of searching for the last green one"}
                                :normalise {:type :bool :default true :doc "remove what changes from run to run (false: compare the lines as they are)"}
                                :session {:type :string :doc "session key; default the current session"})}

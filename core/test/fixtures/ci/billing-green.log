@@ -1,0 +1,266 @@
+﻿2026-11-06T20:36:15.3138422Z Current runner version: '2.338.2'
+2026-11-06T20:36:15.3216104Z ##[group]Runner Image Provisioner
+2026-11-06T20:36:15.3217461Z Hosted Compute Agent
+2026-11-06T20:36:15.3218464Z Version: 20261028.624
+2026-11-06T20:36:15.3219641Z Commit: 54898b74c23fde5556c9b3c3a2290865feef0dfe
+2026-11-06T20:36:15.3220859Z Build Date: 2026-10-28T21:51:42Z
+2026-11-06T20:36:15.3221997Z Worker ID: {c7356156-54f7-4f71-a37b-0b4de51f0ac0}
+2026-11-06T20:36:15.3223175Z Region: eastus3
+2026-11-06T20:36:15.3224162Z Cloud: Azure
+2026-11-06T20:36:15.3224995Z ##[endgroup]
+2026-11-06T20:36:15.3228006Z ##[group]Operating System
+2026-11-06T20:36:15.3249438Z Ubuntu
+2026-11-06T20:36:15.3250430Z 24.04.5
+2026-11-06T20:36:15.3251315Z LTS
+2026-11-06T20:36:15.3252139Z ##[endgroup]
+2026-11-06T20:36:15.3252977Z ##[group]Runner Image
+2026-11-06T20:36:15.3254008Z Image: ubuntu-24.04
+2026-11-06T20:36:15.3254885Z Version: 20261101.360.1
+2026-11-06T20:36:15.3256916Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261101.360/images/ubuntu/Ubuntu2404-Readme.md
+2026-11-06T20:36:15.3259690Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261101.360
+2026-11-06T20:36:15.3261170Z ##[endgroup]
+2026-11-06T20:36:15.3263003Z ##[group]GITHUB_TOKEN Permissions
+2026-11-06T20:36:15.3266415Z Contents: read
+2026-11-06T20:36:15.3267303Z Metadata: read
+2026-11-06T20:36:15.3268241Z Packages: read
+2026-11-06T20:36:15.3289460Z ##[endgroup]
+2026-11-06T20:36:15.3293323Z Secret source: Actions
+2026-11-06T20:36:15.3294800Z Cache mode: write
+2026-11-06T20:36:15.3296271Z Prepare workflow directory
+2026-11-06T20:36:15.4202501Z Prepare all required actions
+2026-11-06T20:36:15.4352160Z Getting action download info
+2026-11-06T20:36:15.7224494Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-06T20:36:15.8427685Z Download action repository 'actions/setup-java@v4' (SHA:cf277c60eb25467037889841efdb72551f06f6c3)
+2026-11-06T20:36:16.3801635Z Complete job name: verify
+2026-11-06T20:36:16.4947106Z ##[group]Run actions/checkout@v4
+2026-11-06T20:36:16.4947908Z with:
+2026-11-06T20:36:16.4948349Z   repository: the-user/acme-billing
+2026-11-06T20:36:16.4952180Z   token: ***
+2026-11-06T20:36:16.4952588Z   ssh-strict: true
+2026-11-06T20:36:16.4952979Z   ssh-user: git
+2026-11-06T20:36:16.4953390Z   persist-credentials: true
+2026-11-06T20:36:16.4953822Z   clean: true
+2026-11-06T20:36:16.4954220Z   sparse-checkout-cone-mode: true
+2026-11-06T20:36:16.4954680Z   fetch-depth: 1
+2026-11-06T20:36:16.4955059Z   fetch-tags: false
+2026-11-06T20:36:16.4955449Z   show-progress: true
+2026-11-06T20:36:16.4955843Z   lfs: false
+2026-11-06T20:36:16.4956209Z   submodules: false
+2026-11-06T20:36:16.4956605Z   set-safe-directory: true
+2026-11-06T20:36:16.4957063Z   allow-unsafe-pr-checkout: false
+2026-11-06T20:36:16.4957819Z ##[endgroup]
+2026-11-06T20:36:16.7240219Z Syncing repository: the-user/acme-billing
+2026-11-06T20:36:16.7243963Z ##[group]Getting Git version info
+2026-11-06T20:36:16.7245885Z Working directory is '~/work/acme-billing/acme-billing'
+2026-11-06T20:36:16.7250504Z [command]/usr/bin/git version
+2026-11-06T20:36:16.7371833Z git version 2.56.0
+2026-11-06T20:36:16.7382156Z ##[endgroup]
+2026-11-06T20:36:16.7392400Z Temporarily overriding HOME='~/work/_temp/1eccce46-fb4c-4306-bf97-a62e2e4202c2' before making global git config changes
+2026-11-06T20:36:16.7395586Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-06T20:36:16.7398723Z [command]/usr/bin/git config --global --add safe.directory ~/work/acme-billing/acme-billing
+2026-11-06T20:36:16.7540250Z Deleting the contents of '~/work/acme-billing/acme-billing'
+2026-11-06T20:36:16.7552793Z ##[group]Initializing the repository
+2026-11-06T20:36:16.7556005Z [command]/usr/bin/git init ~/work/acme-billing/acme-billing
+2026-11-06T20:36:16.7641832Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-06T20:36:16.7655018Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-06T20:36:16.7658021Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-06T20:36:16.7660139Z hint: call:
+2026-11-06T20:36:16.7661503Z hint:
+2026-11-06T20:36:16.7663898Z hint: 	git config --global init.defaultBranch <name>
+2026-11-06T20:36:16.7665526Z hint:
+2026-11-06T20:36:16.7667354Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-06T20:36:16.7669730Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-06T20:36:16.7672060Z hint:
+2026-11-06T20:36:16.7673227Z hint: 	git branch -m <name>
+2026-11-06T20:36:16.7674707Z hint:
+2026-11-06T20:36:16.7676204Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-06T20:36:16.7683015Z Initialized empty Git repository in ~/work/acme-billing/acme-billing/.git/
+2026-11-06T20:36:16.7688229Z [command]/usr/bin/git remote add origin https://github.com/the-user/acme-billing
+2026-11-06T20:36:16.7739931Z ##[endgroup]
+2026-11-06T20:36:16.7741689Z ##[group]Disabling automatic garbage collection
+2026-11-06T20:36:16.7746515Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-06T20:36:16.7834398Z ##[endgroup]
+2026-11-06T20:36:16.7836167Z ##[group]Setting up auth
+2026-11-06T20:36:16.7842224Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-06T20:36:16.7895751Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-06T20:36:16.8330698Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-06T20:36:16.8377384Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-06T20:36:16.8784309Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-06T20:36:16.8857688Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-06T20:36:16.9166092Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-06T20:36:16.9236358Z ##[endgroup]
+2026-11-06T20:36:16.9238181Z ##[group]Fetching the repository
+2026-11-06T20:36:16.9242039Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +605454fb397e2e5e4f5e406d1faab362c1f6b1cc:refs/remotes/pull/4/merge
+2026-11-06T20:36:17.2710988Z From https://github.com/the-user/acme-billing
+2026-11-06T20:36:17.2755458Z  * [new ref]         605454fb397e2e5e4f5e406d1faab362c1f6b1cc -> pull/4/merge
+2026-11-06T20:36:17.2821845Z ##[endgroup]
+2026-11-06T20:36:17.2841413Z ##[group]Determining the checkout info
+2026-11-06T20:36:17.2861041Z ##[endgroup]
+2026-11-06T20:36:17.2880308Z [command]/usr/bin/git sparse-checkout disable
+2026-11-06T20:36:17.2921623Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-06T20:36:17.2928799Z ##[group]Checking out the ref
+2026-11-06T20:36:17.2931962Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/4/merge
+2026-11-06T20:36:17.2936106Z Note: switching to 'refs/remotes/pull/4/merge'.
+2026-11-06T20:36:17.2937994Z 
+2026-11-06T20:36:17.2940005Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-11-06T20:36:17.2944375Z changes and commit them, and you can discard any commits you make in this
+2026-11-06T20:36:17.2948762Z state without impacting any branches by switching back to a branch.
+2026-11-06T20:36:17.2951644Z 
+2026-11-06T20:36:17.2953723Z If you want to create a new branch to retain commits you create, you may
+2026-11-06T20:36:17.2958027Z do so (now or later) by using -c with the switch command. Example:
+2026-11-06T20:36:17.2961111Z 
+2026-11-06T20:36:17.2962439Z   git switch -c <new-branch-name>
+2026-11-06T20:36:17.2964275Z 
+2026-11-06T20:36:17.2965504Z Or undo this operation with:
+2026-11-06T20:36:17.2967484Z 
+2026-11-06T20:36:17.2968600Z   git switch -
+2026-11-06T20:36:17.2970104Z 
+2026-11-06T20:36:17.2971993Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-11-06T20:36:17.2974544Z 
+2026-11-06T20:36:17.2977446Z HEAD is now at 605454f Merge cfbc9efdd7bf292e174600e28a3b2fc192ec6f7d into f9a30221981454833b6a43151bb855d2b81898bc
+2026-11-06T20:36:17.2986083Z ##[endgroup]
+2026-11-06T20:36:17.3022556Z [command]/usr/bin/git log -1 --format=%H
+2026-11-06T20:36:17.3043057Z 605454fb397e2e5e4f5e406d1faab362c1f6b1cc
+2026-11-06T20:36:17.3518784Z ##[group]Run actions/setup-java@v4
+2026-11-06T20:36:17.3520206Z with:
+2026-11-06T20:36:17.3521106Z   distribution: temurin
+2026-11-06T20:36:17.3522089Z   java-version: 21
+2026-11-06T20:36:17.3522985Z   cache: maven
+2026-11-06T20:36:17.3523919Z   java-package: jdk
+2026-11-06T20:36:17.3524843Z   check-latest: false
+2026-11-06T20:36:17.3525799Z   server-id: github
+2026-11-06T20:36:17.3526784Z   server-username: GITHUB_ACTOR
+2026-11-06T20:36:17.3527887Z   server-password: GITHUB_TOKEN
+2026-11-06T20:36:17.3529145Z   overwrite-settings: true
+2026-11-06T20:36:17.3530170Z   job-status: success
+2026-11-06T20:36:17.3538930Z   token: ***
+2026-11-06T20:36:17.3539873Z ##[endgroup]
+2026-11-06T20:36:17.5896506Z ##[warning]setup-java v4 is deprecated and will no longer receive updates. Please migrate to actions/setup-java@v5.
+2026-11-06T20:36:17.5912670Z ##[group]Installed distributions
+2026-11-06T20:36:17.6044701Z Resolved Java 21.0.13+9 from tool-cache
+2026-11-06T20:36:17.6047178Z Setting Java 21.0.13+9 as the default
+2026-11-06T20:36:17.6058064Z (node:2089) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-06T20:36:17.6062266Z Creating toolchains.xml for JDK version 21 from temurin
+2026-11-06T20:36:17.6065679Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-06T20:36:17.6196098Z Writing to ~/.m2/toolchains.xml
+2026-11-06T20:36:17.6197554Z 
+2026-11-06T20:36:17.6259381Z Java configuration:
+2026-11-06T20:36:17.6268653Z   Distribution: temurin
+2026-11-06T20:36:17.6291496Z   Version: 21.0.13+9
+2026-11-06T20:36:17.6305276Z   Path: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-06T20:36:17.6320912Z 
+2026-11-06T20:36:17.6339999Z ##[endgroup]
+2026-11-06T20:36:17.6395985Z Creating settings.xml with server-id: github
+2026-11-06T20:36:17.6412042Z Writing to ~/.m2/settings.xml
+2026-11-06T20:36:17.8190701Z Cache hit for: setup-java-Linux-x64-maven-cb7956b01dba3dec212d3e756ace6384e06d7d9f0c46ab0a156297b5b4f5b101
+2026-11-06T20:36:17.8309990Z (node:2089) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-11-06T20:36:18.5677048Z Received 68551666 of 68551666 (100.0%), 97.3 MBs/sec
+2026-11-06T20:36:18.5680078Z Cache Size: ~65 MB (68551666 B)
+2026-11-06T20:36:18.5751040Z [command]/usr/bin/tar -xf ~/work/_temp/257abb92-0ccd-453f-9dab-75e15bd98bed/cache.tzst -P -C ~/work/acme-billing/acme-billing --use-compress-program unzstd
+2026-11-06T20:36:18.8406940Z Cache restored successfully
+2026-11-06T20:36:18.8412895Z Cache restored from key: setup-java-Linux-x64-maven-cb7956b01dba3dec212d3e756ace6384e06d7d9f0c46ab0a156297b5b4f5b101
+2026-11-06T20:36:18.8649513Z ##[group]Run mvn -B verify
+2026-11-06T20:36:18.8649843Z [36;1mmvn -B verify[0m
+2026-11-06T20:36:18.8668766Z shell: /usr/bin/bash -e {0}
+2026-11-06T20:36:18.8669285Z env:
+2026-11-06T20:36:18.8669598Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-06T20:36:18.8670082Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-06T20:36:18.8670696Z ##[endgroup]
+2026-11-06T20:36:22.3760336Z [INFO] Scanning for projects...
+2026-11-06T20:36:24.0250514Z [INFO] Loaded 24392 auto-discovered prefixes for remote repository central (prefixes-central.txt)
+2026-11-06T20:36:24.5679908Z [INFO] 
+2026-11-06T20:36:24.5699881Z [INFO] ------------------------< com.acme:billing >------------------------
+2026-11-06T20:36:24.5719729Z [INFO] Building billing 0.1.0
+2026-11-06T20:36:24.5739630Z [INFO]   from pom.xml
+2026-11-06T20:36:24.5759814Z [INFO] --------------------------------[ jar ]---------------------------------
+2026-11-06T20:36:25.1732288Z [INFO] Loaded 64 auto-discovered prefixes for remote repository apache.snapshots (prefixes-apache.snapshots.txt)
+2026-11-06T20:36:25.9231349Z [INFO] 
+2026-11-06T20:36:25.9260045Z [INFO] --- resources:3.3.1:resources (default-resources) @ billing ---
+2026-11-06T20:36:26.1440240Z [INFO] Copying 1 resource from src/main/resources to target/classes
+2026-11-06T20:36:26.1626174Z [INFO] Copying 1 resource from src/main/resources to target/classes
+2026-11-06T20:36:26.1680131Z [INFO] 
+2026-11-06T20:36:26.1689990Z [INFO] --- compiler:3.13.0:compile (default-compile) @ billing ---
+2026-11-06T20:36:26.3967447Z [INFO] Recompiling the module because of changed source code.
+2026-11-06T20:36:26.4111291Z [INFO] Compiling 34 source files with javac [debug parameters release 21] to target/classes
+2026-11-06T20:36:28.5280015Z [INFO] 
+2026-11-06T20:36:28.5320284Z [INFO] --- resources:3.3.1:testResources (default-testResources) @ billing ---
+2026-11-06T20:36:28.5360427Z [INFO] skip non existing resourceDirectory ~/work/acme-billing/acme-billing/src/test/resources
+2026-11-06T20:36:28.5399906Z [INFO] 
+2026-11-06T20:36:28.5419927Z [INFO] --- compiler:3.13.0:testCompile (default-testCompile) @ billing ---
+2026-11-06T20:36:28.5439832Z [INFO] Recompiling the module because of changed dependency.
+2026-11-06T20:36:28.5479958Z [INFO] Compiling 4 source files with javac [debug parameters release 21] to target/test-classes
+2026-11-06T20:36:29.3120399Z [INFO] 
+2026-11-06T20:36:29.3121456Z [INFO] --- surefire:3.2.5:test (default-test) @ billing ---
+2026-11-06T20:36:29.6440246Z [INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+2026-11-06T20:36:29.7462698Z [INFO] 
+2026-11-06T20:36:29.7485335Z [INFO] -------------------------------------------------------
+2026-11-06T20:36:29.7529761Z [INFO]  T E S T S
+2026-11-06T20:36:29.7549690Z [INFO] -------------------------------------------------------
+2026-11-06T20:36:30.5976253Z [INFO] Running com.acme.billing.BillerTest
+2026-11-06T20:36:30.9600625Z 20:36:30.942 [main] INFO com.acme.billing.Biller -- SimProvisioned received activationId=act-1 plan=NO-SUCH-PLAN customer=BT-100001
+2026-11-06T20:36:30.9730780Z 20:36:30.961 [main] INFO com.acme.billing.Biller -- SimProvisioned received activationId=act-1 plan=STANDARD-5G customer=BT-100001
+2026-11-06T20:36:30.9770655Z 20:36:30.964 [main] INFO com.acme.billing.invoice.InvoiceService -- invoice BT-INV-1 plan=STANDARD-5G period=2026-11-05..2026-11-30 amountCents=2513 EUR
+2026-11-06T20:36:30.9785881Z 20:36:30.965 [main] INFO com.acme.billing.Biller -- activeLines of u-1 set to 2 in the identity provider
+2026-11-06T20:36:30.9820136Z 20:36:30.966 [main] INFO com.acme.billing.Biller -- BillingActivated put on the bus eventId=evt activationId=act-1
+2026-11-06T20:36:30.9832614Z 20:36:30.966 [main] INFO com.acme.billing.Biller -- SimProvisioned received activationId=act-1 plan=STANDARD-5G customer=BT-100001
+2026-11-06T20:36:30.9901005Z 20:36:30.966 [main] INFO com.acme.billing.invoice.InvoiceService -- invoice BT-INV-1 plan=STANDARD-5G period=2026-11-05..2026-11-30 amountCents=2513 EUR
+2026-11-06T20:36:30.9929237Z 20:36:30.966 [main] INFO com.acme.billing.Biller -- activeLines of u-1 set to 2 in the identity provider
+2026-11-06T20:36:30.9930761Z 20:36:30.966 [main] INFO com.acme.billing.Biller -- BillingActivated put on the bus eventId=evt activationId=act-1
+2026-11-06T20:36:30.9960166Z 20:36:30.973 [main] INFO com.acme.billing.Biller -- SimProvisioned received activationId=act-1 plan=LEGACY-PREPAID-2009 customer=BT-100001
+2026-11-06T20:36:30.9975732Z 20:36:30.973 [main] INFO com.acme.billing.invoice.InvoiceService -- invoice BT-INV-1 plan=LEGACY-PREPAID-2009 period=2026-11-05..2026-11-30 amountCents=1666 EUR
+2026-11-06T20:36:31.0005677Z 20:36:30.973 [main] INFO com.acme.billing.Biller -- activeLines of u-1 set to 1 in the identity provider
+2026-11-06T20:36:31.0009974Z 20:36:30.973 [main] INFO com.acme.billing.Biller -- BillingActivated put on the bus eventId=evt activationId=act-1
+2026-11-06T20:36:31.0029923Z 20:36:30.981 [main] INFO com.acme.billing.Biller -- SimProvisioned received activationId=act-1 plan=STANDARD-5G customer=BT-100001
+2026-11-06T20:36:31.0050118Z 20:36:30.982 [main] INFO com.acme.billing.invoice.InvoiceService -- invoice BT-INV-1 plan=STANDARD-5G period=2026-11-05..2026-11-30 amountCents=2513 EUR
+2026-11-06T20:36:31.0069834Z 20:36:30.982 [main] INFO com.acme.billing.Biller -- activeLines of u-1 set to 2 in the identity provider
+2026-11-06T20:36:31.0071353Z 20:36:30.982 [main] INFO com.acme.billing.Biller -- BillingActivated put on the bus eventId=evt activationId=act-1
+2026-11-06T20:36:31.0760334Z [INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.416 s -- in com.acme.billing.BillerTest
+2026-11-06T20:36:31.0820441Z [INFO] Running com.acme.billing.pricing.PricingTest
+2026-11-06T20:36:31.0850426Z 20:36:31.078 [main] WARN com.acme.billing.pricing.PricingFacade -- pricing.tariff-adapters is off, STANDARD-5G is quoted flat
+2026-11-06T20:36:31.1321990Z [INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.088 s -- in com.acme.billing.pricing.PricingTest
+2026-11-06T20:36:31.1350126Z [INFO] Running com.acme.billing.SnsEnvelopeTest
+2026-11-06T20:36:31.4786122Z Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+2026-11-06T20:36:31.7628284Z 20:36:31.761 [main] INFO com.acme.billing.Inbox -- event BillingActivated is not for billing, ignored
+2026-11-06T20:36:31.8060622Z [INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.670 s -- in com.acme.billing.SnsEnvelopeTest
+2026-11-06T20:36:31.8092037Z [INFO] Running com.acme.billing.invoice.InvoiceServiceTest
+2026-11-06T20:36:31.8121093Z 20:36:31.786 [main] INFO com.acme.billing.invoice.InvoiceService -- invoice BT-INV-1 plan=STANDARD-5G period=2026-11-05..2026-11-30 amountCents=2513 EUR
+2026-11-06T20:36:31.8164419Z [INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.020 s -- in com.acme.billing.invoice.InvoiceServiceTest
+2026-11-06T20:36:31.8428585Z [INFO] 
+2026-11-06T20:36:31.8451499Z [INFO] Results:
+2026-11-06T20:36:31.8460174Z [INFO] 
+2026-11-06T20:36:31.8460771Z [INFO] Tests run: 20, Failures: 0, Errors: 0, Skipped: 0
+2026-11-06T20:36:31.8461456Z [INFO] 
+2026-11-06T20:36:31.8469636Z [INFO] 
+2026-11-06T20:36:31.8470374Z [INFO] --- jar:3.4.2:jar (default-jar) @ billing ---
+2026-11-06T20:36:32.2328226Z [INFO] Building jar: ~/work/acme-billing/acme-billing/target/billing-0.1.0.jar
+2026-11-06T20:36:32.2819880Z [INFO] 
+2026-11-06T20:36:32.2824410Z [INFO] --- spring-boot:3.3.5:repackage (repackage) @ billing ---
+2026-11-06T20:36:32.8990771Z [INFO] Loaded 50 auto-discovered prefixes for remote repository ow2-snapshot (prefixes-ow2-snapshot.txt)
+2026-11-06T20:36:33.2737136Z [INFO] Replacing main artifact ~/work/acme-billing/acme-billing/target/billing-0.1.0.jar with repackaged archive, adding nested dependencies in BOOT-INF/.
+2026-11-06T20:36:33.2750222Z [INFO] The original artifact has been renamed to ~/work/acme-billing/acme-billing/target/billing-0.1.0.jar.original
+2026-11-06T20:36:33.2776068Z [INFO] ------------------------------------------------------------------------
+2026-11-06T20:36:33.2781515Z [INFO] BUILD SUCCESS
+2026-11-06T20:36:33.2799743Z [INFO] ------------------------------------------------------------------------
+2026-11-06T20:36:33.2819763Z [INFO] Total time:  10.963 s
+2026-11-06T20:36:33.2839552Z [INFO] Finished at: 2026-11-06T20:36:33Z
+2026-11-06T20:36:33.2844510Z [INFO] ------------------------------------------------------------------------
+2026-11-06T20:36:33.3275865Z Post job cleanup.
+2026-11-06T20:36:33.4745821Z (node:2234) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-06T20:36:33.4747444Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-06T20:36:33.4753908Z Cache hit occurred on the primary key setup-java-Linux-x64-maven-cb7956b01dba3dec212d3e756ace6384e06d7d9f0c46ab0a156297b5b4f5b101, not saving cache.
+2026-11-06T20:36:33.5028439Z Post job cleanup.
+2026-11-06T20:36:33.6242084Z [command]/usr/bin/git version
+2026-11-06T20:36:33.6300275Z git version 2.56.0
+2026-11-06T20:36:33.6361745Z Temporarily overriding HOME='~/work/_temp/b04fe3a7-9e71-4391-bab9-aaa6da45edb1' before making global git config changes
+2026-11-06T20:36:33.6365350Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-06T20:36:33.6368746Z [command]/usr/bin/git config --global --add safe.directory ~/work/acme-billing/acme-billing
+2026-11-06T20:36:33.6431699Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-06T20:36:33.6551006Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-06T20:36:33.6906914Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-06T20:36:33.6988023Z http.https://github.com/.extraheader
+2026-11-06T20:36:33.7012673Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-06T20:36:33.7086034Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-06T20:36:33.7471838Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-06T20:36:33.7553184Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-06T20:36:33.8208190Z Cleaning up orphan processes
+2026-11-06T20:36:33.8505352Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-java@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

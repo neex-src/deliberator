@@ -1,0 +1,265 @@
+﻿2026-11-05T12:15:52.2139217Z Current runner version: '2.338.2'
+2026-11-05T12:15:52.2217140Z ##[group]Runner Image Provisioner
+2026-11-05T12:15:52.2218282Z Hosted Compute Agent
+2026-11-05T12:15:52.2219299Z Version: 20261028.624
+2026-11-05T12:15:52.2220156Z Commit: 54898b74c23fde5556c9b3c3a2290865feef0dfe
+2026-11-05T12:15:52.2221161Z Build Date: 2026-10-28T21:51:42Z
+2026-11-05T12:15:52.2222113Z Worker ID: {c7440d6e-c88b-4b00-b13f-6a95800bb6a1}
+2026-11-05T12:15:52.2223050Z Region: centralus
+2026-11-05T12:15:52.2236997Z Cloud: Azure
+2026-11-05T12:15:52.2238116Z ##[endgroup]
+2026-11-05T12:15:52.2240197Z ##[group]Operating System
+2026-11-05T12:15:52.2241204Z Ubuntu
+2026-11-05T12:15:52.2241954Z 24.04.5
+2026-11-05T12:15:52.2242769Z LTS
+2026-11-05T12:15:52.2243471Z ##[endgroup]
+2026-11-05T12:15:52.2244563Z ##[group]Runner Image
+2026-11-05T12:15:52.2245449Z Image: ubuntu-24.04
+2026-11-05T12:15:52.2246214Z Version: 20261101.360.1
+2026-11-05T12:15:52.2248283Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261101.360/images/ubuntu/Ubuntu2404-Readme.md
+2026-11-05T12:15:52.2250532Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261101.360
+2026-11-05T12:15:52.2251905Z ##[endgroup]
+2026-11-05T12:15:52.2253652Z ##[group]GITHUB_TOKEN Permissions
+2026-11-05T12:15:52.2257393Z Contents: read
+2026-11-05T12:15:52.2258227Z Metadata: read
+2026-11-05T12:15:52.2259140Z Packages: read
+2026-11-05T12:15:52.2259921Z ##[endgroup]
+2026-11-05T12:15:52.2263845Z Secret source: Actions
+2026-11-05T12:15:52.2265515Z Cache mode: write
+2026-11-05T12:15:52.2267084Z Prepare workflow directory
+2026-11-05T12:15:52.3159083Z Prepare all required actions
+2026-11-05T12:15:52.3319451Z Getting action download info
+2026-11-05T12:15:52.6211429Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-05T12:15:52.8955659Z Download action repository 'actions/setup-java@v4' (SHA:cf277c60eb25467037889841efdb72551f06f6c3)
+2026-11-05T12:15:53.6886722Z Complete job name: verify
+2026-11-05T12:15:53.7737339Z ##[group]Run actions/checkout@v4
+2026-11-05T12:15:53.7738337Z with:
+2026-11-05T12:15:53.7739096Z   repository: the-user/acme-billing
+2026-11-05T12:15:53.7744167Z   token: ***
+2026-11-05T12:15:53.7744822Z   ssh-strict: true
+2026-11-05T12:15:53.7745446Z   ssh-user: git
+2026-11-05T12:15:53.7746091Z   persist-credentials: true
+2026-11-05T12:15:53.7746762Z   clean: true
+2026-11-05T12:15:53.7747384Z   sparse-checkout-cone-mode: true
+2026-11-05T12:15:53.7748055Z   fetch-depth: 1
+2026-11-05T12:15:53.7748642Z   fetch-tags: false
+2026-11-05T12:15:53.7749226Z   show-progress: true
+2026-11-05T12:15:53.7749797Z   lfs: false
+2026-11-05T12:15:53.7750418Z   submodules: false
+2026-11-05T12:15:53.7751021Z   set-safe-directory: true
+2026-11-05T12:15:53.7751679Z   allow-unsafe-pr-checkout: false
+2026-11-05T12:15:53.7752589Z ##[endgroup]
+2026-11-05T12:15:54.1010862Z Syncing repository: the-user/acme-billing
+2026-11-05T12:15:54.1014954Z ##[group]Getting Git version info
+2026-11-05T12:15:54.1016788Z Working directory is '~/work/acme-billing/acme-billing'
+2026-11-05T12:15:54.1024325Z [command]/usr/bin/git version
+2026-11-05T12:15:54.1262874Z git version 2.56.0
+2026-11-05T12:15:54.1310463Z ##[endgroup]
+2026-11-05T12:15:54.1320607Z Temporarily overriding HOME='~/work/_temp/923fc6fb-5c8c-44e5-a0f2-ddea22184aa3' before making global git config changes
+2026-11-05T12:15:54.1322685Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-05T12:15:54.1325052Z [command]/usr/bin/git config --global --add safe.directory ~/work/acme-billing/acme-billing
+2026-11-05T12:15:54.1396756Z Deleting the contents of '~/work/acme-billing/acme-billing'
+2026-11-05T12:15:54.1402883Z ##[group]Initializing the repository
+2026-11-05T12:15:54.1409931Z [command]/usr/bin/git init ~/work/acme-billing/acme-billing
+2026-11-05T12:15:54.1497093Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-05T12:15:54.1501678Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-05T12:15:54.1504527Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-05T12:15:54.1747444Z hint: call:
+2026-11-05T12:15:54.1751610Z hint:
+2026-11-05T12:15:54.1753030Z hint: 	git config --global init.defaultBranch <name>
+2026-11-05T12:15:54.1754398Z hint:
+2026-11-05T12:15:54.1755710Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-05T12:15:54.1757283Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-05T12:15:54.1758615Z hint:
+2026-11-05T12:15:54.1759568Z hint: 	git branch -m <name>
+2026-11-05T12:15:54.1761103Z hint:
+2026-11-05T12:15:54.1762306Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-05T12:15:54.1764579Z Initialized empty Git repository in ~/work/acme-billing/acme-billing/.git/
+2026-11-05T12:15:54.1768743Z [command]/usr/bin/git remote add origin https://github.com/the-user/acme-billing
+2026-11-05T12:15:54.1772808Z ##[endgroup]
+2026-11-05T12:15:54.1774502Z ##[group]Disabling automatic garbage collection
+2026-11-05T12:15:54.1775949Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-05T12:15:54.1785288Z ##[endgroup]
+2026-11-05T12:15:54.1786889Z ##[group]Setting up auth
+2026-11-05T12:15:54.1804181Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-05T12:15:54.1866084Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-05T12:15:54.2498487Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-05T12:15:54.2573754Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-05T12:15:54.2893542Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-05T12:15:54.2951718Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-05T12:15:54.3251657Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-05T12:15:54.3307166Z ##[endgroup]
+2026-11-05T12:15:54.3309619Z ##[group]Fetching the repository
+2026-11-05T12:15:54.3322554Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +853c964dcbd64fc1ffc6fca54a0a5b25a02383dd:refs/remotes/origin/demo/red-build
+2026-11-05T12:15:54.6879153Z From https://github.com/the-user/acme-billing
+2026-11-05T12:15:54.6886022Z  * [new ref]         853c964dcbd64fc1ffc6fca54a0a5b25a02383dd -> origin/demo/red-build
+2026-11-05T12:15:54.6891402Z ##[endgroup]
+2026-11-05T12:15:54.6893578Z ##[group]Determining the checkout info
+2026-11-05T12:15:54.6896166Z ##[endgroup]
+2026-11-05T12:15:54.6897642Z [command]/usr/bin/git sparse-checkout disable
+2026-11-05T12:15:54.6958980Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-05T12:15:54.7008067Z ##[group]Checking out the ref
+2026-11-05T12:15:54.7009259Z [command]/usr/bin/git checkout --progress --force -B demo/red-build refs/remotes/origin/demo/red-build
+2026-11-05T12:15:54.7121670Z Switched to a new branch 'demo/red-build'
+2026-11-05T12:15:54.7129604Z branch 'demo/red-build' set up to track 'origin/demo/red-build'.
+2026-11-05T12:15:54.7133688Z ##[endgroup]
+2026-11-05T12:15:54.7179263Z [command]/usr/bin/git log -1 --format=%H
+2026-11-05T12:15:54.7206746Z 853c964dcbd64fc1ffc6fca54a0a5b25a02383dd
+2026-11-05T12:15:54.7551633Z ##[group]Run actions/setup-java@v4
+2026-11-05T12:15:54.7552382Z with:
+2026-11-05T12:15:54.7552972Z   distribution: temurin
+2026-11-05T12:15:54.7553575Z   java-version: 21
+2026-11-05T12:15:54.7554413Z   cache: maven
+2026-11-05T12:15:54.7555062Z   java-package: jdk
+2026-11-05T12:15:54.7555671Z   check-latest: false
+2026-11-05T12:15:54.7556274Z   server-id: github
+2026-11-05T12:15:54.7556894Z   server-username: GITHUB_ACTOR
+2026-11-05T12:15:54.7557574Z   server-password: GITHUB_TOKEN
+2026-11-05T12:15:54.7558383Z   overwrite-settings: true
+2026-11-05T12:15:54.7559024Z   job-status: success
+2026-11-05T12:15:54.7562955Z   token: ***
+2026-11-05T12:15:54.7563528Z ##[endgroup]
+2026-11-05T12:15:54.9766181Z ##[warning]setup-java v4 is deprecated and will no longer receive updates. Please migrate to actions/setup-java@v5.
+2026-11-05T12:15:54.9781731Z ##[group]Installed distributions
+2026-11-05T12:15:55.0027453Z (node:2078) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-05T12:15:55.0030890Z Resolved Java 21.0.13+9 from tool-cache
+2026-11-05T12:15:55.0034162Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-05T12:15:55.0037089Z Setting Java 21.0.13+9 as the default
+2026-11-05T12:15:55.0040493Z Creating toolchains.xml for JDK version 21 from temurin
+2026-11-05T12:15:55.0143074Z Writing to ~/.m2/toolchains.xml
+2026-11-05T12:15:55.0145269Z 
+2026-11-05T12:15:55.0146341Z Java configuration:
+2026-11-05T12:15:55.0148372Z   Distribution: temurin
+2026-11-05T12:15:55.0151390Z   Version: 21.0.13+9
+2026-11-05T12:15:55.0153319Z   Path: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-05T12:15:55.0155278Z 
+2026-11-05T12:15:55.0176662Z ##[endgroup]
+2026-11-05T12:15:55.0306338Z Creating settings.xml with server-id: github
+2026-11-05T12:15:55.0309416Z Writing to ~/.m2/settings.xml
+2026-11-05T12:15:55.2533624Z Cache hit for: setup-java-Linux-x64-maven-cb7956b01dba3dec212d3e756ace6384e06d7d9f0c46ab0a156297b5b4f5b101
+2026-11-05T12:15:55.2565770Z (node:2078) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-11-05T12:15:56.3901413Z Received 68551666 of 68551666 (100.0%), 67.5 MBs/sec
+2026-11-05T12:15:56.3916817Z Cache Size: ~65 MB (68551666 B)
+2026-11-05T12:15:56.3959194Z [command]/usr/bin/tar -xf ~/work/_temp/7b54ba0d-fbaa-44bc-95bc-83451a165d3a/cache.tzst -P -C ~/work/acme-billing/acme-billing --use-compress-program unzstd
+2026-11-05T12:15:56.5514068Z Cache restored successfully
+2026-11-05T12:15:56.5548950Z Cache restored from key: setup-java-Linux-x64-maven-cb7956b01dba3dec212d3e756ace6384e06d7d9f0c46ab0a156297b5b4f5b101
+2026-11-05T12:15:56.5828828Z ##[group]Run mvn -B verify
+2026-11-05T12:15:56.5830199Z [36;1mmvn -B verify[0m
+2026-11-05T12:15:56.5855033Z shell: /usr/bin/bash -e {0}
+2026-11-05T12:15:56.5856543Z env:
+2026-11-05T12:15:56.5858089Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-05T12:15:56.5860334Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-05T12:15:56.5862204Z ##[endgroup]
+2026-11-05T12:16:03.3987717Z [INFO] Scanning for projects...
+2026-11-05T12:16:03.6515909Z [INFO] Loaded 24375 auto-discovered prefixes for remote repository central (prefixes-central.txt)
+2026-11-05T12:16:04.1545857Z [INFO] 
+2026-11-05T12:16:04.1585569Z [INFO] ------------------------< com.acme:billing >------------------------
+2026-11-05T12:16:04.1630867Z [INFO] Building billing 0.1.0
+2026-11-05T12:16:04.1651578Z [INFO]   from pom.xml
+2026-11-05T12:16:04.1697128Z [INFO] --------------------------------[ jar ]---------------------------------
+2026-11-05T12:16:04.2295833Z [INFO] Loaded 64 auto-discovered prefixes for remote repository apache.snapshots (prefixes-apache.snapshots.txt)
+2026-11-05T12:16:07.7063476Z [INFO] 
+2026-11-05T12:16:07.7105427Z [INFO] --- resources:3.3.1:resources (default-resources) @ billing ---
+2026-11-05T12:16:08.0265684Z [INFO] Copying 1 resource from src/main/resources to target/classes
+2026-11-05T12:16:08.0385616Z [INFO] Copying 1 resource from src/main/resources to target/classes
+2026-11-05T12:16:08.0425029Z [INFO] 
+2026-11-05T12:16:08.0445029Z [INFO] --- compiler:3.13.0:compile (default-compile) @ billing ---
+2026-11-05T12:16:08.5899699Z [INFO] Recompiling the module because of changed source code.
+2026-11-05T12:16:08.6065763Z [INFO] Compiling 22 source files with javac [debug parameters release 21] to target/classes
+2026-11-05T12:16:12.5025690Z [INFO] 
+2026-11-05T12:16:12.5035518Z [INFO] --- resources:3.3.1:testResources (default-testResources) @ billing ---
+2026-11-05T12:16:12.5138396Z [INFO] skip non existing resourceDirectory ~/work/acme-billing/acme-billing/src/test/resources
+2026-11-05T12:16:12.5154973Z [INFO] 
+2026-11-05T12:16:12.5178579Z [INFO] --- compiler:3.13.0:testCompile (default-testCompile) @ billing ---
+2026-11-05T12:16:12.5284417Z [INFO] Recompiling the module because of changed dependency.
+2026-11-05T12:16:12.5305143Z [INFO] Compiling 3 source files with javac [debug parameters release 21] to target/test-classes
+2026-11-05T12:16:13.1305919Z [INFO] 
+2026-11-05T12:16:13.1328700Z [INFO] --- surefire:3.2.5:test (default-test) @ billing ---
+2026-11-05T12:16:13.4520341Z [INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+2026-11-05T12:16:13.6012898Z [INFO] 
+2026-11-05T12:16:13.6025268Z [INFO] -------------------------------------------------------
+2026-11-05T12:16:13.6044798Z [INFO]  T E S T S
+2026-11-05T12:16:13.6054603Z [INFO] -------------------------------------------------------
+2026-11-05T12:16:14.7263628Z [INFO] Running com.acme.billing.BillerTest
+2026-11-05T12:16:15.3076298Z 12:16:15.281 [main] INFO com.acme.billing.Biller -- SimProvisioned received activationId=act-1 plan=NO-SUCH-PLAN customer=BT-100001
+2026-11-05T12:16:15.3209492Z 12:16:15.302 [main] INFO com.acme.billing.Biller -- SimProvisioned received activationId=act-1 plan=STANDARD-5G customer=BT-100001
+2026-11-05T12:16:15.3255513Z 12:16:15.308 [main] INFO com.acme.billing.Biller -- invoice BT-INV-1 plan=STANDARD-5G period=2026-11-05..2026-11-30 amountCents=2513 EUR
+2026-11-05T12:16:15.3300304Z 12:16:15.309 [main] INFO com.acme.billing.Biller -- activeLines of u-1 set to 2 in the identity provider
+2026-11-05T12:16:15.3309559Z 12:16:15.309 [main] INFO com.acme.billing.Biller -- BillingActivated put on the bus eventId=evt activationId=act-1
+2026-11-05T12:16:15.3335281Z 12:16:15.309 [main] INFO com.acme.billing.Biller -- SimProvisioned received activationId=act-1 plan=STANDARD-5G customer=BT-100001
+2026-11-05T12:16:15.3354681Z 12:16:15.309 [main] INFO com.acme.billing.Biller -- invoice BT-INV-1 plan=STANDARD-5G period=2026-11-05..2026-11-30 amountCents=2513 EUR
+2026-11-05T12:16:15.3394357Z 12:16:15.309 [main] INFO com.acme.billing.Biller -- activeLines of u-1 set to 2 in the identity provider
+2026-11-05T12:16:15.3437862Z 12:16:15.310 [main] INFO com.acme.billing.Biller -- BillingActivated put on the bus eventId=evt activationId=act-1
+2026-11-05T12:16:15.3485103Z 12:16:15.316 [main] INFO com.acme.billing.Biller -- SimProvisioned received activationId=act-1 plan=LEGACY-PREPAID-2009 customer=BT-100001
+2026-11-05T12:16:15.3525194Z 12:16:15.317 [main] INFO com.acme.billing.Biller -- invoice BT-INV-1 plan=LEGACY-PREPAID-2009 period=2026-11-05..2026-11-30 amountCents=1666 EUR
+2026-11-05T12:16:15.3555113Z 12:16:15.317 [main] INFO com.acme.billing.Biller -- activeLines of u-1 set to 1 in the identity provider
+2026-11-05T12:16:15.3615028Z 12:16:15.317 [main] INFO com.acme.billing.Biller -- BillingActivated put on the bus eventId=evt activationId=act-1
+2026-11-05T12:16:15.3665179Z 12:16:15.320 [main] INFO com.acme.billing.Biller -- SimProvisioned received activationId=act-1 plan=STANDARD-5G customer=BT-100001
+2026-11-05T12:16:15.3695138Z 12:16:15.322 [main] INFO com.acme.billing.Biller -- invoice BT-INV-1 plan=STANDARD-5G period=2026-11-05..2026-11-30 amountCents=2513 EUR
+2026-11-05T12:16:15.3728272Z 12:16:15.322 [main] INFO com.acme.billing.Biller -- activeLines of u-1 set to 2 in the identity provider
+2026-11-05T12:16:15.3765197Z 12:16:15.322 [main] INFO com.acme.billing.Biller -- BillingActivated put on the bus eventId=evt activationId=act-1
+2026-11-05T12:16:15.4048872Z [INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.614 s -- in com.acme.billing.BillerTest
+2026-11-05T12:16:15.4077286Z [INFO] Running com.acme.billing.SnsEnvelopeTest
+2026-11-05T12:16:15.7577509Z Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+2026-11-05T12:16:16.0967813Z 12:16:16.093 [main] INFO com.acme.billing.Inbox -- event BillingActivated is not for billing, ignored
+2026-11-05T12:16:16.1405526Z [INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.773 s -- in com.acme.billing.SnsEnvelopeTest
+2026-11-05T12:16:16.1434922Z [INFO] Running com.acme.billing.PricingTest
+2026-11-05T12:16:16.1880615Z [ERROR] Tests run: 4, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.043 s <<< FAILURE! -- in com.acme.billing.PricingTest
+2026-11-05T12:16:16.1884177Z [ERROR] com.acme.billing.PricingTest.aLegacyPlanBillsTheSameDaysAsAStandardPlanActivatedTheSameDay -- Time elapsed: 0.022 s <<< FAILURE!
+2026-11-05T12:16:16.1886643Z org.opentest4j.AssertionFailedError: expected: <26> but was: <25>
+2026-11-05T12:16:16.1887945Z 	at org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+2026-11-05T12:16:16.1889351Z 	at org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+2026-11-05T12:16:16.1891193Z 	at org.junit.jupiter.api.AssertEquals.failNotEqual(AssertEquals.java:197)
+2026-11-05T12:16:16.1892374Z 	at org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:150)
+2026-11-05T12:16:16.1893438Z 	at org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:145)
+2026-11-05T12:16:16.1894891Z 	at org.junit.jupiter.api.Assertions.assertEquals(Assertions.java:531)
+2026-11-05T12:16:16.1896366Z 	at com.acme.billing.PricingTest.aLegacyPlanBillsTheSameDaysAsAStandardPlanActivatedTheSameDay(PricingTest.java:48)
+2026-11-05T12:16:16.1897818Z 	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+2026-11-05T12:16:16.1898698Z 	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+2026-11-05T12:16:16.1899678Z 	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+2026-11-05T12:16:16.1900271Z 
+2026-11-05T12:16:16.2094351Z [INFO] 
+2026-11-05T12:16:16.2095053Z [INFO] Results:
+2026-11-05T12:16:16.2095791Z [INFO] 
+2026-11-05T12:16:16.2096585Z [ERROR] Failures: 
+2026-11-05T12:16:16.2097738Z [ERROR]   PricingTest.aLegacyPlanBillsTheSameDaysAsAStandardPlanActivatedTheSameDay:48 expected: <26> but was: <25>
+2026-11-05T12:16:16.2098813Z [INFO] 
+2026-11-05T12:16:16.2099590Z [ERROR] Tests run: 13, Failures: 1, Errors: 0, Skipped: 0
+2026-11-05T12:16:16.2112761Z [INFO] 
+2026-11-05T12:16:16.2141888Z [INFO] ------------------------------------------------------------------------
+2026-11-05T12:16:16.2147799Z [ERROR] BUILD FAILURE
+2026-11-05T12:16:16.2150832Z [INFO] ------------------------------------------------------------------------
+2026-11-05T12:16:16.2151579Z [INFO] Total time:  12.879 s
+2026-11-05T12:16:16.2152267Z [INFO] Finished at: 2026-11-05T12:16:16Z
+2026-11-05T12:16:16.2197858Z [INFO] ------------------------------------------------------------------------
+2026-11-05T12:16:16.2198964Z [ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.2.5:test (default-test) on project billing: There are test failures.
+2026-11-05T12:16:16.2199976Z [ERROR] 
+2026-11-05T12:16:16.2200743Z [ERROR] Please refer to ~/work/acme-billing/acme-billing/target/surefire-reports for the individual test results.
+2026-11-05T12:16:16.2201475Z [ERROR] Please refer to dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+2026-11-05T12:16:16.2201919Z [ERROR] -> [Help 1]
+2026-11-05T12:16:16.2202702Z [ERROR] 
+2026-11-05T12:16:16.2203216Z [ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+2026-11-05T12:16:16.2216794Z [ERROR] Re-run Maven using the -X switch to enable full debug logging.
+2026-11-05T12:16:16.2217485Z [ERROR] 
+2026-11-05T12:16:16.2218091Z [ERROR] For more information about the errors and possible solutions, please read the following articles:
+2026-11-05T12:16:16.2219518Z [ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+2026-11-05T12:16:16.2494804Z ##[error]Process completed with exit code 1.
+2026-11-05T12:16:16.2628662Z Post job cleanup.
+2026-11-05T12:16:16.4077210Z (node:2219) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-05T12:16:16.4078704Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-05T12:16:16.4495902Z Post job cleanup.
+2026-11-05T12:16:16.6520897Z [command]/usr/bin/git version
+2026-11-05T12:16:16.6526686Z git version 2.56.0
+2026-11-05T12:16:16.6624282Z Temporarily overriding HOME='~/work/_temp/70da92f1-c4dc-4e49-a5ea-af06277bae6c' before making global git config changes
+2026-11-05T12:16:16.6625997Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-05T12:16:16.6627382Z [command]/usr/bin/git config --global --add safe.directory ~/work/acme-billing/acme-billing
+2026-11-05T12:16:16.6643145Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-05T12:16:16.6647019Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-05T12:16:16.7059596Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-05T12:16:16.7069909Z http.https://github.com/.extraheader
+2026-11-05T12:16:16.7101505Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-05T12:16:16.7177066Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-05T12:16:16.7555351Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-05T12:16:16.7584182Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-05T12:16:16.8000558Z Cleaning up orphan processes
+2026-11-05T12:16:16.8258367Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-java@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
