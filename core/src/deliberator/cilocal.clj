@@ -45,6 +45,8 @@
 
 (def default-image "docker.io/catthehacker/ubuntu:act-22.04")
 
+(def run-label "The label every job container of a local run carries: act's containers of two runs (or of someone else's act) are told apart by it." "deliberator.ci-run")
+
 (def default-budget-ms "Thirty minutes: a first run pulls images and downloads Maven dependencies." 1800000)
 
 ;; arguments -------------------------------------------------------------------------------------------
@@ -136,12 +138,13 @@
 (defn act-argv
   "The `act` command line as data: `{:event :workflow :job :image :env :pull? :inputs :secrets :vars :eventpath :offline?}` -> argv. `pull?` false adds
   `--pull=false`; `--rm` removes the job containers; `--json` is the structure the run record is made from."
-  [{:keys [event workflow job image env pull? inputs secrets vars eventpath offline?]}]
+  [{:keys [event workflow job image env pull? inputs secrets vars eventpath offline? label]}]
   (vec (concat ["act" event "-W" workflow]
                (when job ["-j" job])
                ["-P" (str "ubuntu-latest=" image) "-P" (str "ubuntu-22.04=" image) "--rm" "--json"]
                (when-not pull? ["--pull=false"])
                (when offline? ["--action-offline-mode"])
+               (when label ["--container-options" (str "--label=" run-label "=" label)])
                (when eventpath ["--eventpath" eventpath])
                (mapcat (fn [[k v]] ["--env" (str k "=" v)]) (sort-by key env))
                (mapcat (fn [[k v]] ["--input" (str k "=" v)]) (sort-by key inputs))
@@ -180,12 +183,15 @@
 ;; run --------------------------------------------------------------------------------------------------------
 
 (defn- act-containers
-  "Ids and names of the containers act made (`act-*`)."
-  [pc]
-  (into {} (for [c (podman/list-containers pc :all true)
-                 :let [n (some-> (first (:Names c)) (str/replace #"^/" ""))]
-                 :when (and n (str/starts-with? n "act-"))]
-             [(:Id c) n])))
+  "Ids and names of the containers act made (`act-*`), or, with `label`, only those of that run."
+  ([pc] (act-containers pc nil))
+  ([pc label]
+   (into {} (for [c (podman/list-containers pc :all true)
+                  :let [n (some-> (first (:Names c)) (str/replace #"^/" ""))
+                        ls (:Labels c)]
+                  :when (and n (str/starts-with? n "act-")
+                             (or (nil? label) (= label (or (get ls run-label) (get ls (keyword run-label)))))) ]
+              [(:Id c) n]))))
 
 (defn selected-jobs
   "`job` and the jobs it needs, transitively (act runs those first); every job when `job` is nil."
@@ -277,8 +283,7 @@
         job* (when-not (str/blank? (str job)) job)
         argv (act-argv {:event event :workflow wf-path :job job* :image image :env (injected-env e)
                         :pull? (not (podman/image-exists? pc image)) :inputs inputs :secrets secrets :vars vars
-                        :eventpath (str event-file) :offline? (.isDirectory (io/file (System/getProperty "user.home") ".cache" "act"))})
-        before (act-containers pc)
+                        :eventpath (str event-file) :label (str (store/ws-name ws) "/" key "/" n) :offline? (.isDirectory (io/file (System/getProperty "user.home") ".cache" "act"))})
         revisions-before (snapshot-revisions ws)
         started (store/now)
         secs (fn [t] (str (.truncatedTo ^java.time.Instant t ChronoUnit/SECONDS)))
@@ -354,5 +359,5 @@
       (finally
         (.close jsonl)
         (.close runlog)
-        (doseq [[id _] (apply dissoc (act-containers pc) (keys before))]
+        (doseq [[id _] (act-containers pc (str (store/ws-name ws) "/" key "/" n))]
           (try (podman/remove! pc id :force true) (catch Exception _ nil)))))))

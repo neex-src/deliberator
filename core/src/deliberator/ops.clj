@@ -97,7 +97,7 @@
     ci.log run* job step repo session ws           -> {path lines bytes sha repo run job step conclusion other-failed raw auth source kept kept-at age-s}   (a job's log, or one step's lines, as text under sessions/<k>/ci/; a finished run's log is kept)
     ci.tail run* job repo interval-ms session ws   -> {path lines bytes sha target source follow repo run job}   [logs.line]   (a running job: step transitions, then its log)
     ci.diff run* job step repo against normalise session ws -> {path diff equal red green added removed normalised}   (M5.3: the failed job's log against the last green run's, normalised)
-    ci.local repo* workflow* job all worktree event inputs env image session ws -> {run number repo conclusion exit jobs summary record path lines dir workflow job event image docker-host endpoint}   [logs.line ci.run ci.step]   (piece 03: a workflow (all jobs) or one job with act on the runtime's Podman, Floci injected, recorded as the run local-<n>; a red run is a result)
+    ci.local repo* workflow* job all worktree event input env image session ws -> {run number repo conclusion exit jobs summary record path lines dir workflow job event image docker-host endpoint}   [logs.line ci.run ci.step]   (piece 03: a workflow (all jobs) or one job with act on the runtime's Podman, Floci injected, recorded as the run local-<n>; a red run is a result)
     pr.open repo* n* github remote session ws     -> {repo n ref remote head-sha worktree{name path branch head created moved} github pr comments{path inline reviews conversation} checks{path count by-result rows}}   (M5.5: refs/pull/<n>/head into worktrees/<repo>/pr-<n>; reviews and comments as sessions/<k>/pr/*.txt)
     logs.insights groups* query* env since until name budget-ms limit session ws -> {query-id status bytes-scanned statistics rows path sha query-file raw}   [line]   (M4.3)
     logs.linkable path* ws                         -> {path linkable kind}   (is this file one whose places can name code: a CI log or diff, a kept CI log, a run's output; the IDE asks, it does not guess from the path)
@@ -1003,10 +1003,10 @@
 (defn- ci-workflows [_ {:keys [repo worktree] :as args}]
   (let [ws (ws-of args) dir (cilocal/resolve-dir ws repo worktree)]
     {:dir dir :repo (cilocalrun/repo-key-of-dir ws repo dir) :workflows (cilocal/workflows dir)}))
-(defn- ci-local [ctx {:keys [repo workflow job all worktree event env image inputs] :as args}]
+(defn- ci-local [ctx {:keys [repo workflow job all worktree event env image input] :as args}]
   (let [ws (ws-of args) counter (:follows (:daemon ctx))]
     (when counter (swap! counter inc))      ; a running pipeline is work in flight, like a follow
-    (try (cilocal/run! ws {:repo repo :workflow workflow :job (when-not all job) :worktree worktree :event event :env env :image image :inputs (parse-inputs inputs)
+    (try (cilocal/run! ws {:repo repo :workflow workflow :job (when-not all job) :worktree worktree :event event :env env :image image :inputs (parse-inputs input)
                            :session (session-key ws args) :emit! (:emit! ctx) :cancelled? (:cancelled? ctx)})
          (finally (when counter (swap! counter dec))))))
 (defn- pr-open [ctx {:keys [repo n github remote] :as args}]
@@ -1564,7 +1564,7 @@
                                 :all {:type :bool :doc "the whole workflow, whatever job says"}
                                 :worktree {:type :string :doc "a worktree of the repository (worktree.list) to run in"}
                                 :event {:type :string :doc "workflow_dispatch (default when the workflow listens to it), push or pull_request; the payload is built from the checkout's branch and head"}
-                                :inputs {:type :strings :doc "workflow_dispatch inputs as name=value (repeat the flag or comma separate)"}
+                                :input {:type :strings :doc "workflow_dispatch inputs as name=value (the flag may repeat)"}
                                 :env {:type :string :default "local" :doc "a local environment; any other kind is refused"}
                                 :image {:type :string :doc "runner image of ubuntu-latest; default catthehacker/ubuntu:act-22.04"}
                                 :session {:type :string :doc "session key; default the current session"})}
