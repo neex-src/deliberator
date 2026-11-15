@@ -154,6 +154,27 @@ class WorkspaceService(private val project: Project) : PersistentStateComponent<
         return publish(m.copy(selectedEnv = selectedEnv, error = error, fetchedAt = Instant.now()))
     }
 
+    /**
+     * Only what a container change touches: the runtime's containers and the service rows (`runtime.status`, `service.list`, `service.status`), not the sessions, the
+     * environments and the runs. The Services tab's ear on `service.events` uses it, so a stop or start the daemon's watch made shows in well under a second after
+     * the event (the whole [refreshNow] asks the daemon about ten things). Falls back to [refreshNow] when there is no model of this workspace yet.
+     */
+    @Synchronized
+    fun refreshServicesNow(): WorkspaceModel {
+        val name = ws ?: return model
+        var m = model.takeIf { it.ws == name && it.path != null } ?: return refreshNow()
+        var error: String? = null
+        fun <T> part(f: () -> T): T? = try { f() } catch (e: DaemonException) { if (error == null) error = describe(e); null }
+        // the three reads probe containers and each takes a few hundred ms in the daemon: asked together
+        val rt = java.util.concurrent.CompletableFuture.supplyAsync { part { obj("runtime.status") } }
+        val list = java.util.concurrent.CompletableFuture.supplyAsync { part { call("service.list", JsonObject().apply { addProperty("env", selectedEnv) }).result } }
+        val st = java.util.concurrent.CompletableFuture.supplyAsync { part { call("service.status").result } }
+        rt.get()?.let { o -> val (r, h, c) = WorkspaceModel.parseRuntime(o); m = m.copy(engineReachable = r, engineHint = h, containers = c) }
+        val l = list.get()
+        if (l != null) m = m.copy(services = WorkspaceModel.parseServices(l, st.get(), m.containers))
+        return publish(m.copy(error = error ?: m.error, fetchedAt = Instant.now()))
+    }
+
     /** Re-reads the model on a pooled thread; the listeners hear about it on the EDT. */
     fun refresh() {
         ApplicationManager.getApplication().executeOnPooledThread { refreshNow() }

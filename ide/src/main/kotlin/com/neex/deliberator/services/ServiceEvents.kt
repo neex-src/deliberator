@@ -66,7 +66,7 @@ class ServiceEvents(private val project: Project, @Suppress("unused") parent: co
         if (!refreshing.compareAndSet(false, true)) { again.set(true); return }
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                do { again.set(false); WorkspaceService.getInstance(project).refreshNow() } while (again.get() && !stopped.get())
+                do { again.set(false); WorkspaceService.getInstance(project).refreshServicesNow() } while (again.get() && !stopped.get())
             } finally { refreshing.set(false) }
         }
     }

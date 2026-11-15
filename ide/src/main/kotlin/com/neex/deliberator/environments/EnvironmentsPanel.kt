@@ -107,7 +107,7 @@ class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), 
             add(OnePixelSplitter(true, 0.5f).apply { firstComponent = JBScrollPane(depTable); secondComponent = deploysPane }, BorderLayout.CENTER)
         }
         EnvironmentsPanelHolder.register(project, this)
-        add(OnePixelSplitter(true, 0.4f).apply { firstComponent = JBScrollPane(envTable); secondComponent = lower }, BorderLayout.CENTER)
+        add(OnePixelSplitter(true, 0.2f).apply { firstComponent = JBScrollPane(envTable); secondComponent = lower }, BorderLayout.CENTER)
         envTable.selectionModel.addListSelectionListener { if (!it.valueIsAdjusting) selected()?.let(::showDeployed) }
         envTable.addMouseListener(object : java.awt.event.MouseAdapter() {
             override fun mouseClicked(e: java.awt.event.MouseEvent) { if (e.clickCount == 2) useSelected() }
@@ -310,8 +310,8 @@ class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), 
 
     /** Reconciles the table with [l] by deployment id: the same ids in the same order only change the cells that differ, selection survives either way. EDT. */
     internal fun renderDeployments(l: DeploymentList?, empty: String) {
+        val keep = selectedDeployment()?.id   // by id, from the list that is still shown
         deployments = l
-        val keep = selectedDeployment()?.id
         val rows = l?.rows ?: emptyList()
         val same = rows.size == deploysModel.rowCount && rows.indices.all { deploysModel.getValueAt(it, 7) == rows[it].id }
         filling = true

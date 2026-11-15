@@ -546,7 +546,7 @@
 (defn render-lambda
   "The text of a Lambda's versions (pure)."
   [{:keys [env function rows latest fetched-at notes]}]
-  (str/join "\n"
+  (str (str/join "\n"
             (concat [(header-line "lambda" function) (header-line "env" (str env "   fetched " (t-str fetched-at)))
                      (header-line "latest" (str (:State latest) "  update " (:LastUpdateStatus latest) (when (:LastUpdateStatusReason latest) (str ": " (:LastUpdateStatusReason latest)))
                                                 "  code " (:CodeSha256 latest) "  modified " (:LastModified latest)))]
@@ -554,7 +554,7 @@
                     ["" "== versions (newest first)"]
                     (for [r rows] (str (format "%-8s" (:version r)) (t-str (:started r)) "  " (:status r) "  update " (:rollout-state r)
                                        "  code " (:code-sha256 r) (when (:rollout-reason r) (str "  " (:rollout-reason r)))
-                                       (when (:description r) (str "  \"" (:description r) "\"")))))
+                                       (when (:description r) (str "  \"" (:description r) "\""))))))
             "\n"))
 
 (defn render-list
@@ -628,14 +628,15 @@
       (let [{:keys [rows latest notes]} (lambda-rows! ctx (:function target) (:config target))
             d {:env env-name :function (:function target) :rows rows :latest latest :notes notes :fetched-at now}
             p (.resolve (store/path ws "cache" (store/safe-name env-name) "deploy" "lambda" (slug (:function target))) "list.txt")
-            tbl (render-lambda d)]
+            tbl (render-lambda d)
+            lat {:state (:State latest) :update-status (:LastUpdateStatus latest) :reason (or (:LastUpdateStatusReason latest) (:StateReason latest))
+                 :code-sha256 (:CodeSha256 latest) :modified (:LastModified latest)}]
         (write-text! p tbl)
         (store/write-edn! (.resolveSibling p "list.edn")
                           {:env env-name :function (:function target) :kind :lambda :source :lambda :fetched-at now
                            :rows (mapv #(keep-row env-name nil (:function target) %) rows) :notes (vec notes)
-                           :latest {:state (:State latest) :update-status (:LastUpdateStatus latest) :reason (or (:LastUpdateStatusReason latest) (:StateReason latest))
-                                    :code-sha256 (:CodeSha256 latest) :modified (:LastModified latest)}})
-        {:env env-name :service (:function target) :kind :lambda :source :lambda :count (count rows) :rows (vec (take limit rows))
+                           :latest lat})
+        {:env env-name :service (:function target) :kind :lambda :latest lat :source :lambda :count (count rows) :rows (vec (take limit rows))
          :path (str p) :text (str p) :table tbl :notes (vec notes) :raw (count @(:refs ctx))})
       (let [{:keys [cluster service]} target
             listing (list-rows! ctx target limit)

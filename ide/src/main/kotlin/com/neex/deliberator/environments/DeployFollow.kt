@@ -84,7 +84,8 @@ class DeployFollowHandler(private val project: Project, val env: String, val spe
         val now = System.currentTimeMillis()
         if (now - lastRefresh < 1000) return
         lastRefresh = now
-        f.refresh(true, false)
+        // synchronous, on a pooled thread: an asynchronous refresh of a file that is replaced under the editor (write beside, rename) was not seen by the editor
+        ApplicationManager.getApplication().executeOnPooledThread { f.refresh(false, false) }
     }
 
     private fun work() {
@@ -102,7 +103,7 @@ class DeployFollowHandler(private val project: Project, val env: String, val spe
                 path = r.get("path")?.takeIf { it.isJsonPrimitive }?.asString ?: path
                 print("-- ${r.get("ended")?.asString ?: "ended"}: ${r.get("deployment")?.asString ?: ""} ${r.get("status")?.asString ?: ""}")
                 path?.let { print("-- text: $it") }
-                vf?.refresh(true, false)
+                vf?.let { f -> ApplicationManager.getApplication().executeOnPooledThread { f.refresh(false, false) } }
                 finish(0)
             } else {
                 val e = DaemonException(t.errorMessage ?: "deploy.follow failed", t.errorType ?: "daemon/error", t.error?.get("hint")?.takeIf { it.isJsonPrimitive }?.asString, null, t.error)

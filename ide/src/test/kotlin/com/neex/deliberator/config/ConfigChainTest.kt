@@ -309,8 +309,10 @@ class ConfigChainTest : BasePlatformTestCase() {
         val f = wsDir!!.resolve("environments/local.edn")
         assertTrue("service.adopt wrote the local environment", Files.isRegularFile(f))
         val t = Files.readString(f)
-        assertTrue(t, t.contains("http://localhost:4566"))
-        Files.writeString(f, t.replace("http://localhost:4566", "http://localhost:19"))
+        // the port is whatever this test home's runtime gave the emulator (4566, or the next free one when an estate holds it): the home says, the test does not assume
+        val endpoint = Regex("""http://localhost:\d+""")
+        assertTrue(t, endpoint.containsMatchIn(t))
+        Files.writeString(f, endpoint.replace(t, "http://localhost:19"))
     }
 
     fun testRefreshWithoutAnEndpointFailsCleanlyAndInvalidates() {
