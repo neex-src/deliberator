@@ -239,7 +239,7 @@
          (str "/repository-" (:repo desc) "-not-attached/" from))))
 
 (defn- container-spec
-  [ws {:keys [image port host-port cmd env mounts health aliases image-hint] :as desc}]
+  [ws {:keys [image port host-port cmd env mounts health aliases image-hint secrets entrypoint image-id] :as desc}]
   (cond-> {:image image
            :ports (sorted-map port (or host-port port))
            :env (into (sorted-map) env)
@@ -248,6 +248,9 @@
     (seq cmd) (assoc :command (vec cmd))
     (seq mounts) (assoc :mounts (vec (for [{:keys [from to rw]} mounts]
                                        {:source (mount-source ws desc from) :destination to :options [(if rw "rw" "ro") "z"]})))
+    (seq secrets) (assoc :secrets (into (sorted-map) secrets))   ; only a deployed revision (deliberator.ecsrecord) carries these three
+    (seq entrypoint) (assoc :entrypoint (vec entrypoint))
+    image-id (assoc :image-id image-id)
     (seq aliases) (assoc :aliases (vec aliases))
     image-hint (assoc :image-hint image-hint)))
 

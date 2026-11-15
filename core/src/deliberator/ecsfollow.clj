@@ -87,7 +87,7 @@
     (when (aws/error? r) (throw (ex-info (str "DescribeTaskDefinition " arn ": " (or (:message r) (:category r))) {:type :ecs/describe-failed})))
     (let [cds (get-in r [:taskDefinition :containerDefinitions])
           cd (or (some #(when (= (get-in d [:taskdef :container]) (:name %)) %) cds) (first cds))]
-      {:image (:image cd)
+      {:image (:image cd) :command (vec (:command cd)) :entrypoint (vec (:entryPoint cd))
        :environment (into (sorted-map) (map (fn [x] [(:name x) (:value x)])) (:environment cd))
        :secrets (into (sorted-map) (map (fn [x] [(:name x) (:valueFrom x)])) (:secrets cd))})))
 
@@ -105,7 +105,10 @@
     (when (> now (get @retry-at key 0))
       (try
         (let [r1 (cond-> (assoc old :cluster (:cluster b) :service (:service b) :desired desired)
-                   rev? (-> (merge (fetch-revision ws d td)) (assoc :taskdef td :revision (revision-of td))))
+                   rev? (-> (merge (let [r (fetch-revision ws d td)
+                                  id (runtime/image-id ws (:image r))]   ; is the revision's image in the runtime's store?
+                              (assoc r :image-id id :deployed (some? id))))
+                   (assoc :taskdef td :revision (revision-of td) :held false)))
               _ (when (not= r1 old) (rec/write-record! ws n r1))
               ctr (runtime/role-container ws role)
               running? (= "running" (:State ctr))
@@ -118,7 +121,7 @@
                                       "stopped: ecs desired 0")
                     (or up? rev-act?)
                     (let [why (if up? (str "ecs desired " desired) (str "ecs revision " (revision-of td)))]
-                      (runtime/ensure! ws {:only [role] :sink #(emit! ws %)})
+                      (runtime/ensure! ws {:only [role] :sink #(emit! ws %) :timeout-ms 30000})
                       (emit! ws {:event "service.started" :name n :container (some-> (runtime/role-container ws role) :Names first) :reason why})
                       (str "started: " why)))
               r2 (cond-> (assoc r1 :applied {:desired desired :taskdef td} :error nil)
@@ -129,7 +132,15 @@
         (catch Throwable t
           (swap! retry-at assoc key (+ now retry-ms))
           (log "ecs follow failed" (store/ws-name ws) n (ex-message t))
-          (try (rec/write-record! ws n (assoc (or (rec/read-record ws n) old) :error (ex-message t))) (catch Throwable _ nil)))))))
+          (try (let [cur (or (rec/read-record ws n) old)
+                     unhealthy? (= :runtime/unhealthy (:type (ex-data t)))]
+                 (rec/write-record! ws n (cond-> (assoc cur :error
+                                                        (if (and unhealthy? (rec/deployed? cur))
+                                                          (str "the deployed image is up but does not answer: the image must listen on " (:port d) " (the description's port)")
+                                                          (ex-message t)))
+                                           ;; up but not answering is a state, not a reason to start again every 10 s (and to hold the watch for 30 s each time)
+                                           unhealthy? (assoc :applied {:desired desired :taskdef td}))))
+                (catch Throwable _ nil)))))))
 
 ;; the watch -----------------------------------------------------------------------------------
 

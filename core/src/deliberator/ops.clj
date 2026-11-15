@@ -52,6 +52,7 @@
     service.build name* ws                         -> {artifact bytes took-ms log sha}   [service.build.line]
     service.start name* secrets-from confirm ws    -> {name status container port jdwp}   [runtime.* service.started]
     service.stop name* ws                          -> {name status container}   [service.stopped]
+    service.dev name* ws                           -> {name status container mode}   [runtime.* service.started]   (back to the dev container, held until the next revision)
     service.restart name* secrets-from confirm ws  -> as start   [service.stopped runtime.* service.started]
     service.reload name* budget-ms ws              -> {name mechanism changed redefined took-ms log reload-count [fallback]}   [service.reload.step]
     config.chain name* env ws                      -> {service env module snapshot files entries extra broken unresolved hint}   (offline)
@@ -641,6 +642,7 @@
   (when secrets-from (verify-remote! ctx (ws-of args) secrets-from))
   (service/start! (ws-of args) name {:sink (:emit! ctx) :secrets-from secrets-from :confirm confirm}))
 (defn- service-stop [ctx {:keys [name] :as args}] (service/stop! (ws-of args) name {:sink (:emit! ctx)}))
+(defn- service-dev [ctx {:keys [name] :as args}] (service/dev! (ws-of args) name {:sink (:emit! ctx)}))
 (defn- service-reload [ctx {:keys [name budget-ms] :as args}]
   (reload/reload! (ws-of args) name (cond-> {:sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)} budget-ms (assoc :budget-ms budget-ms))))
 (defn- service-restart [ctx {:keys [name secrets-from confirm] :as args}]
@@ -1357,6 +1359,10 @@
                     :args (ws-schema :name {:type :string :required true :doc "service name"}
                                      :secrets-from {:type :string :doc "environment to take real secret values from (gated)"}
                                      :confirm {:type :string :doc "confirmation token from a confirm-required error"})}
+   "service.dev" {:fn service-dev :class :mutate
+                 :doc "Back to the dev container: a service bound to an ECS service whose container runs its task definition revision's image (it is in the runtime's store) runs the developer's build again, recreated now, and holds there until the next revision arrives; polls never flip it back. A service that is not bound is service/not-bound. At desired 0 only the hold is written."
+                 :events ["runtime.pulling" "runtime.starting" "runtime.ready" "service.started"]
+                 :args (ws-schema :name {:type :string :required true :doc "service name"})}
    "service.stop" {:fn service-stop :class :mutate
                    :doc "Stops the service's container and keeps it; start reuses it."
                    :events ["service.stopped"]

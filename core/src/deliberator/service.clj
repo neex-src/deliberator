@@ -133,9 +133,10 @@
   `:text` is `revision N · image (not used: ...)`, `:note` says one container runs whatever the count."
   [desc rec]
   (let [b (ecsrecord/binding-of desc)]
-    (cond-> (merge b (select-keys rec [:desired :revision :image :action :error]))
+    (cond-> (merge b (select-keys rec [:desired :revision :image :action :error]) (when (ecsrecord/deployed? rec) {:mode "deployed"}))
       (ecsrecord/revision-text rec (:kind desc)) (assoc :text (ecsrecord/revision-text rec (:kind desc)))
-      (and (:desired rec) (> (:desired rec) 1)) (assoc :note "one container runs whatever the desired count"))))
+      (and (:desired rec) (> (:desired rec) 1)) (assoc :note "one container runs whatever the desired count")
+      (ecsrecord/hint rec (:name desc)) (assoc :hint (ecsrecord/hint rec (:name desc))))))
 
 (defn- status-row [ws desc rows]
   (let [ecs-rec (when (ecsrecord/binding-of desc) (ecsrecord/read-record ws (:name desc)))
@@ -159,6 +160,8 @@
       (:since row) (assoc :since (str (:since row)))
       (and (some? (:drift? row)) (= :local mode)) (assoc :drift (boolean (:drift? row)))
       (:count (reload-state ws desc row)) (assoc :reload-count (:count (reload-state ws desc row)))
+      (and (ecsrecord/deployed? ecs-rec) (= "unhealthy" st))
+      (assoc :detail (str "the image must listen on " (:port desc) " (the description's port): " (:detail row)))
       (ecsrecord/binding-of desc) (assoc :ecs (ecs-view desc ecs-rec)))))
 
 (defn status
@@ -178,6 +181,17 @@
     (if (seq rp) rp (or (get-in (runtime/read-config ws) [:services (:name d) :ports])
                         (when (:host-port d) {(:port d) (:host-port d)})))))
 
+(def debug-refused
+  "Why a deployed container cannot be debugged or reloaded."
+  "the container runs the deployed image of the task definition revision: no hot-swap agent, no JDWP port; service.dev returns to the dev container")
+
+(defn- deployed-view
+  "A `service.list` row of a service that runs its revision's image: no JDWP ports, and why."
+  [ws row]
+  (if (ecsrecord/deployed? (ecsrecord/read-record ws (:name row)))
+    (-> row (dissoc :jdwp :container-jdwp) (assoc :debug-refused debug-refused))
+    row))
+
 (defn list
   "`[{:name :kind :repo :module :port :jdwp :image :mode [:url] :status :container [:log-target :log]}]`; `:container` is the
   service's runtime container (the runtime's row, else the name it would get), `:log-target` the `log/` target of `env-name`
@@ -192,7 +206,8 @@
          rows (rt-rows ws nil)
          e (if (= "local" env-name) (topology/local-env ws) (env/load ws env-name))
          targets (env/read-targets ws env-name)]
-     (mapv (fn [d] (let [ent (env/service-entry e (:name d))]
+     (mapv #(deployed-view ws %)
+      (mapv (fn [d] (let [ent (env/service-entry e (:name d))]
                      (cond-> (merge (let [hp (host-ports ws d rows)]
                                       (cond-> (select-keys d [:name :kind :repo :module :port :jdwp])
                                         (:port d) (assoc :port (host-port hp (:port d)) :container-port (:port d))
@@ -209,7 +224,7 @@
                        (get targets (keyword "log" (role-label (:name d))))
                        (assoc :log-target (str "log/" (role-label (:name d)))
                               :log (get targets (keyword "log" (role-label (:name d))))))))
-           descs))))
+           descs)))))
 
 (defn show
   "The description, its `:taskdef` entries, and `:status` / `:container` (the status row)."
@@ -272,7 +287,9 @@
             :log (str logf) :exit exit :hint "the log has the build output"))
     (let [a (description/artifact ws d)]
       (cond-> {:took-ms (quot (- (System/nanoTime) t0) 1000000) :log (str logf) :sha (:sha raw)}
-        a (assoc :artifact (str a) :bytes (.length a))))))
+        a (assoc :artifact (str a) :bytes (.length a))
+        (ecsrecord/deployed? (ecsrecord/read-record ws name))
+        (assoc :note "built the jar; the deployed image of the task definition revision keeps running until service.dev")))))
 
 ;; the secrets gate --------------------------------------------------
 
@@ -343,7 +360,7 @@
         ports (:ports (when (map? rows) (get rows (role-label (:name d)))))]
     (cond-> (select-keys row [:name :status :container])
       (:port d) (assoc :port (host-port ports (:port d)))
-      (:jdwp d) (assoc :jdwp (host-port ports (:jdwp d))))))
+      (and (:jdwp d) (not (ecsrecord/deployed? (ecsrecord/read-record ws (:name d))))) (assoc :jdwp (host-port ports (:jdwp d))))))
 
 (defn start!
   "Reconciles the service's container (created, recreated when its spec or jar changed, or started when
@@ -402,3 +419,22 @@
     (do (let [c (runtime/stop-role! ws (role-label name))]   ; the container only: the record stays
           (when (and c (:sink opts)) ((:sink opts) {:event "service.stopped" :name name :container c})))
         (start! ws name opts))))
+
+(defn dev!
+  "Back to the dev container: a service bound to an ECS service whose container runs its revision's image runs the
+  developer's build again, recreated now, and HOLDS there until the next task definition revision arrives (the watch decides again then;
+  polls never touch the hold). At desired 0 the hold is written and nothing starts. -> `{:name :status :container :mode \"dev\"}`."
+  [ws name {:keys [sink timeout-ms]}]
+  (let [d (require-description ws name)]
+    (when-not (ecsrecord/binding-of d)
+      (fail :service/not-bound (str "service " name " is not bound to an ECS service: it always runs as the dev container")
+            :hint "dlb service adopt PATH --ecs cluster/service"))
+    (locking (ecsrecord/lock-of ws)
+      (let [rec (ecsrecord/read-record ws name)]
+        (when (ecsrecord/deployed? rec)
+          (ecsrecord/write-record! ws name (assoc rec :held true :action "by hand: back to the dev container, held until the next revision"
+                                                  :acted-at (str (store/now))))
+          (when-not (= 0 (:desired rec))
+            (runtime/ensure! ws (cond-> {:sink sink :only [(role-label name)]} timeout-ms (assoc :timeout-ms timeout-ms)))
+            (when sink (sink {:event "service.started" :name name :container (store/container-name ws (role-label name)) :reason "back to the dev container"}))))))
+    (assoc (select-keys (first (status ws name)) [:name :status :container]) :mode "dev")))

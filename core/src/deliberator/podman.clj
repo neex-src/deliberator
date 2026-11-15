@@ -360,6 +360,12 @@
 (defn image-exists? [c image]
   (= 204 (:status (call c "GET" (str "/images/" image "/exists") {:ok #{204 404}}))))
 
+(defn image-id
+  "The id of local image `image` (name:tag or id), nil when the store has none."
+  [c image]
+  (let [r (call c "GET" (str "/images/" image "/json") {:ok #{200 404}})]
+    (when (= 200 (:status r)) (:Id (:json r)))))
+
 (defn pull!
   "Pulls `image`, streaming Podman's JSON progress objects (`:status`, `:stream`, `:id`, `:images`,
   `:error`) to `:on-event`. The whole stream is persisted when it ends. Throws `:podman/pull-failed`
