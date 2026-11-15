@@ -30,7 +30,9 @@
 
 (defn key-of-slug [slug] (cikept/repo-key slug))
 
-(defn- remote-slug [dir]
+(defn remote-slug
+  "The GitHub slug of the checkout `dir`: its remotes' raw urls (not `insteadOf`-rewritten), nil when none is a GitHub one."
+  [dir]
   (let [r (try (git/run dir ["config" "--get-regexp" "^remote\\..*\\.url$"]) (catch Exception _ nil))]
     (when (and r (zero? (:exit r)))
       (some #(slug-of-url (second (str/split % #"\s+" 2))) (str/split-lines (:out r))))))

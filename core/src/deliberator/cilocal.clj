@@ -52,8 +52,14 @@
 
 ;; arguments -------------------------------------------------------------------------------------------
 
+(defn- by-slug
+  "The attached checkout whose GitHub remote is `owner/name` (so a tree row that is a GitHub repository can run its workflows locally), nil otherwise."
+  [ws target]
+  (when (re-matches #"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+" (str target))
+    (first (filter #(and (not (:bare %)) (:path %) (= (str target) (lr/remote-slug (:path %)))) (repo/list ws)))))
+
 (defn resolve-dir
-  "The directory to run in: an absolute path; else the recorded repository `target` (its checkout, or the worktree `worktree` of it)."
+  "The directory to run in: an absolute path; else the recorded repository `target` (its checkout, or the worktree `worktree` of it), or `owner/name` of an attached checkout's GitHub remote."
   [ws target worktree]
   (let [f (io/file (str target))]
     (cond
@@ -64,7 +70,7 @@
       (str/blank? (str target))
       (fail :ci/no-dir "which repository or directory?" :hint "dlb ci local <repo-or-dir> <workflow> [job]")
       :else
-      (let [e (repo/find ws target)]
+      (let [e (or (by-slug ws target) (repo/find ws target))]
         (if worktree
           (let [d (io/file (str (worktree/dir ws (:name e))) (str worktree))]
             (if (.isDirectory d)

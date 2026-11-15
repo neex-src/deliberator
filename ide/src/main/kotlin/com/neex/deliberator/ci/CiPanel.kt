@@ -309,7 +309,7 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         baseNote = if (runs != null) runsNote(repo, runs) else "$repo: $error"
         status.text = statusLine()
         revealRun?.let { (r, id) -> if (r == repo) findRun(repo, id)?.let { node -> revealRun = null; tree.expandPath(TreePath(node.path)); tree.scrollPathToVisible(TreePath(node.path)) } }
-        if (runs != null && user && final) archive(repo)
+        if (runs != null && user && final && runs.source != "local") archive(repo)
     }
 
     /** The status line of a listing: how many, where they came from (a kept listing says how old it is), what went wrong, the rate limit when it is low. */
@@ -389,21 +389,21 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         val expanded = tree.isExpanded(TreePath(node.path))
         val firstOpen = expanded && !ro.opened
         if (expanded) ro.opened = true
-        if (wasRunning && !ro.run.running) archive(repo)
+        if (wasRunning && !ro.run.running && !ro.run.local) archive(repo)
         val jobs = d.jobs
         if (jobs.isEmpty()) { reconcile(node, listOf(NoteNode("no jobs", false))); return }
         val firstRedJob = jobs.firstOrNull { it.state == CiState.RED }?.id
         reconcile(node, jobs.map { JobNode(repo, ro.run, it, d) })
-        // a job that runs (or the first red one) is opened once, when the run is open: the running step is in view; a run row the user has not opened is not unfolded
-        if (expanded) for (j in children(node)) {
-            val jo = j.userObject as JobNode
-            if ((jo.job.state == CiState.RUNNING || jo.job.id == firstRedJob) && ro.autoOpened.add(jo.job.id)) tree.expandPath(TreePath(j.path))
-        }
         var firstRed: DefaultMutableTreeNode? = null
         for (j in children(node)) {
             val jo = j.userObject as JobNode
             reconcile(j, jo.job.steps.map { StepNode(repo, ro.run, jo.job, it, d) })
             if (firstRed == null && jo.job.state == CiState.RED) firstRed = children(j).firstOrNull { (it.userObject as StepNode).step.state == CiState.RED }
+        }
+        // (after its steps are there: a node with no children cannot expand) a job that runs (or the first red one) is opened once, when the run is open: the running step is in view; a run row the user has not opened is not unfolded
+        if (expanded) for (j in children(node)) {
+            val jo = j.userObject as JobNode
+            if ((jo.job.state == CiState.RUNNING || jo.job.id == firstRedJob) && ro.autoOpened.add(jo.job.id)) tree.expandPath(TreePath(j.path))
         }
         // a red run opens down to its first failed step, once: the user's own expansion is never undone
         if (firstOpen) firstRed?.let { s -> tree.expandPath(TreePath((s.parent as DefaultMutableTreeNode).path)); tree.scrollPathToVisible(TreePath(s.path)) }
@@ -481,6 +481,12 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
     fun isVisible(repo: String, runId: String, vararg rest: String): Boolean = pathTo(repo, runId, *rest)?.let { tree.isVisible(it) } ?: false
 
     fun select(repo: String, runId: String, vararg rest: String) { pathTo(repo, runId, *rest)?.let { tree.selectionPath = it } }
+
+    /** Selects the workflow row [name] of [repo] (tests and the driving of the IDE). */
+    fun selectWorkflow(repo: String, name: String) {
+        val r = repoNode(repo) ?: return
+        children(r).firstOrNull { (it.userObject as? WorkflowNode)?.name == name }?.let { tree.selectionPath = TreePath(it.path) }
+    }
 
     private fun pathTo(repo: String, runId: String, vararg rest: String): TreePath? {
         var n = findRun(repo, runId) ?: return null

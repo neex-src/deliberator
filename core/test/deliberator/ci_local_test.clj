@@ -82,6 +82,9 @@ jobs:
         (is (= dir (cl/resolve-dir "w" dir nil)))
         (ops/call! "repo.attach" {} {:ws "w" :path dir})
         (is (= dir (cl/resolve-dir "w" "proj" nil)))
+        (git dir "remote" "add" "github" "https://github.com/acme/proj.git")
+        (is (= dir (cl/resolve-dir "w" "acme/proj" nil)) "a tree row that is a GitHub repository finds the attached checkout of that remote")
+        (is (= "acme/proj" (deliberator.cilocalrun/repo-key-of-dir "w" "proj" dir)) "local runs of this checkout sit with the GitHub ones")
         (is (= :ci/no-dir (:type (thrown #(cl/resolve-dir "w" "/nowhere/at/all" nil)))))
         (is (= :repo/not-found (:type (thrown #(cl/resolve-dir "w" "nope" nil)))))
         (let [origin (io/file (tu/temp-home) "o.git")]
