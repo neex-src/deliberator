@@ -24,6 +24,8 @@
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [deliberator.cikept :as cikept]
+            [deliberator.cilocalrun :as cilocalrun]
+            [deliberator.deploy :as deploy]
             [deliberator.cisteps :as cisteps]
             [deliberator.github :as gh]
             [deliberator.logfetch :as logfetch]
@@ -68,7 +70,7 @@
   (let [s (str/trim (str s))]
     (if-let [[_ o r run job] (re-find #"github\.com/([^/]+)/([^/]+)/actions/runs/(\d+)(?:/jobs?/(\d+))?" s)]
       {:run run :job job :repo (str o "/" r)}
-      (if (re-matches #"\d+" s)
+      (if (or (re-matches #"\d+" s) (re-matches #"local-\d+" s))
         {:run s}
         (fail :ci/bad-run (str "not a run id or run url: " (pr-str s)) :hint "a number, or https://github.com/o/r/actions/runs/123")))))
 
@@ -76,7 +78,9 @@
   (let [u (parse-run run)
         slug (or repo (:repo u))
         _ (when-not slug (fail :ci/bad-repo "which repository? the run is a bare id" :hint "pass repo (owner/name), or a run url"))]
-    (assoc (parse-repo ws slug) :run (:run u) :job (or job (:job u)))))
+    (if (cilocalrun/id->n (:run u))
+      {:slug (cilocalrun/key-of-repo ws slug) :run (:run u) :job (or job (:job u)) :local true}      ; a local run: its key, no GitHub
+      (assoc (parse-repo ws slug) :run (:run u) :job (or job (:job u))))))
 
 (defn ctx [ws session]
   (let [{:keys [token source]} (gh/resolve-token ws)]
@@ -134,27 +138,78 @@
   (format "%-12s #%-6s %-12s %-24s %s %s  %s" id number (or conclusion status) (or branch "") (subs (str sha) 0 (min 7 (count (str sha))))
           (or created-at "") (or title "")))
 
-(defn runs!
-  [ws {:keys [repo workflow branch status limit session head-sha]}]
-  (let [t (parse-repo ws repo)
-        c (ctx ws session)
+(declare age-s)
+
+(defn- row-notes
+  "What piece 04 knows of a commit (`deploy/commit-notes`): lines like \"deployed to aws: acme-billing revision 12\"; no AWS call, never an error here."
+  [ws sha]
+  (try (if (seq sha) (deploy/commit-notes ws sha) []) (catch Exception _ [])))
+
+(defn- with-notes [ws rows]
+  (let [m (into {} (map (fn [sha] [sha (row-notes ws sha)])) (distinct (keep :sha rows)))]
+    (mapv #(assoc % :notes (get m (:sha %) [])) rows)))
+
+(defn- net-error? [e] (contains? #{:ci/unreachable :ci/rate-limited :ci/auth-required :ci/forbidden :ci/http-error} (:type (ex-data e))))
+
+(defn- listing-file [ws slug] (store/path ws "ci" "github" (cikept/repo-key slug) "runs.edn"))
+
+(defn- fetch-runs!
+  "GitHub's runs of the repository (the raw response persisted first): `{:rows :total :auth :rate-remaining :raw}`."
+  [ws {:keys [workflow branch status limit session head-sha]} t]
+  (let [c (ctx ws session)
         wf (when (seq workflow) (workflow-id c t workflow))
         path (str "/repos/" (:owner t) "/" (:name t) "/actions" (when wf (str "/workflows/" wf)) "/runs")
         resp (api! c path {:per_page (min 100 (max 1 (or limit 20))) :branch (not-empty branch) :status (not-empty status) :head_sha (not-empty head-sha)})
-        doc (json-of resp)
-        rows (mapv run-row (get doc "workflow_runs"))
-        total (get doc "total_count")
-        text (str "# runs of " (:slug t) (when wf (str ", workflow " workflow)) (when branch (str ", branch " branch))
-                  (when status (str ", status " status))
+        doc (json-of resp)]
+    {:rows (mapv run-row (get doc "workflow_runs")) :total (get doc "total_count") :auth (:auth c) :rate-remaining (:rate-remaining resp) :raw (:sha resp)}))
+
+(defn- keep-row? [{:keys [workflow branch status head-sha]} r]
+  (and (or (str/blank? workflow) (= (str/lower-case workflow) (str/lower-case (str (:workflow r)))))
+       (or (str/blank? branch) (= branch (:branch r)))
+       (or (str/blank? status) (= status (:status r)) (= status (:conclusion r)))
+       (or (str/blank? head-sha) (str/starts-with? (str (:sha r)) head-sha))))
+
+(defn runs!
+  "The runs of a repository: GitHub's (kept on disk each time: `runs.edn`, 01a) and the LOCAL ones (piece 03), newest first. `cached` answers what is kept
+  at once (no request, `:age-s`); GitHub unreachable answers the kept listing too (`:stale`, `:error`). `poll` keeps one overwritten text view instead of
+  a stamped file per call."
+  [ws {:keys [repo workflow branch status limit head-sha session cached poll] :as args}]
+  (let [t (try (parse-repo ws repo) (catch clojure.lang.ExceptionInfo e (when (not= :ci/bad-repo (:type (ex-data e))) (throw e)) nil))
+        lkey (cilocalrun/key-of-repo ws repo)
+        locals (filterv #(keep-row? args %) (cilocalrun/run-rows ws lkey))
+        _ (when (and (nil? t) (empty? (cilocalrun/run-rows ws lkey)))
+            (parse-repo ws repo))                                   ; neither a GitHub repository nor one with local runs: the typed error
+        kept (when t (store/read-edn (listing-file ws (:slug t))))
+        gh (when (and t (not cached))
+             (try (fetch-runs! ws args t) (catch clojure.lang.ExceptionInfo e (if (net-error? e) {:error (ex-message e) :type (:type (ex-data e)) :hint (:hint (ex-data e)) :ex e} (throw e)))))
+        _ (when (and gh (:error gh) (nil? kept) (empty? locals)) (throw (:ex gh)))      ; nothing to fall back on: the typed error
+        fetched? (and gh (nil? (:error gh)))
+        _ (when (and fetched? (not (seq workflow)) (not (seq branch)) (not (seq status)) (not (seq head-sha)))
+            (store/write-edn! (listing-file ws (:slug t)) {:fetched-at (store/now) :total (:total gh) :rows (:rows gh)}))
+        gh-rows (cond fetched? (:rows gh) kept (filterv #(keep-row? args %) (:rows kept)) :else [])
+        rows (with-notes ws (->> (concat gh-rows locals) (sort-by #(str (:created-at %))) reverse vec))
+        source (cond fetched? :fetched kept :kept :else :local)
+        age (when (and (not fetched?) kept) (age-s (:fetched-at kept)))
+        total (if fetched? (+ (:total gh) (count locals)) (+ (count rows)))
+        label (or (:slug t) lkey)
+        text (str "# runs of " label (when (seq workflow) (str ", workflow " workflow)) (when (seq branch) (str ", branch " branch))
+                  (when (seq status) (str ", status " status))
                   (when (seq head-sha) (str ", head " (subs head-sha 0 (min 12 (count head-sha))))) ": " (count rows) " of " total
-                  ", fetched " (store/now) ", auth " (:auth c) "\n"
+                  (case source :fetched (str ", fetched " (store/now) ", auth " (:auth gh))
+                    :kept (str ", KEPT listing from " (:fetched-at kept) (when (:error gh) (str ", GitHub did not answer: " (:error gh))))
+                    :local ", local runs only")
+                  (when (seq locals) (str ", " (count locals) " local")) "\n"
                   "# id #number result branch sha created title\n"
-                  (str/join "\n" (map row-line rows)) (when (seq rows) "\n"))
-        p (write-view! (ci-dir ws session) (str "runs-" (safe (:slug t)) (when workflow (str "-" (safe workflow)))
-                                                     (when (seq head-sha) (str "-" (subs head-sha 0 (min 12 (count head-sha))))) "-" (.format stamp (store/now)))
-                       ".txt" (.getBytes ^String text StandardCharsets/UTF_8))]
-    {:path (str p) :count (count rows) :total total :rows rows :repo (:slug t) :workflow workflow :auth (:auth c)
-     :rate-remaining (:rate-remaining resp) :raw (:sha resp)}))
+                  (str/join "\n" (map (fn [r] (str (row-line r) (when (seq (:notes r)) (str "  [" (str/join "; " (:notes r)) "]")))) rows)) (when (seq rows) "\n"))
+        p (let [dir (ci-dir ws session) base (str "runs-" (safe label) (when (seq workflow) (str "-" (safe workflow)))
+                                                  (when (seq head-sha) (str "-" (subs head-sha 0 (min 12 (count head-sha)))))
+                                                  (if poll "-latest" (str "-" (.format stamp (store/now)))))]
+            (if poll
+              (let [f (.resolve dir (str base ".txt"))] (store/write-bytes-atomic! f (.getBytes ^String text StandardCharsets/UTF_8)) f)
+              (write-view! dir base ".txt" (.getBytes ^String text StandardCharsets/UTF_8))))]
+    {:path (str p) :count (count rows) :total total :rows rows :repo label :workflow workflow :auth (:auth gh)
+     :rate-remaining (:rate-remaining gh) :raw (:raw gh) :source source :age-s age :stale (boolean (and gh (:error gh))) :error (:error gh)
+     :local-count (count locals)}))
 
 ;; jobs and logs -----------------------------------------------------------------------------------------------
 
@@ -231,7 +286,7 @@
   (let [rr (api! c (str "/repos/" (:owner t) "/" (:name t) "/actions/runs/" run))]
     (fetch-jobs-doc c t (run-row (json-of rr)) (:sha rr))))
 
-(defn- age-s [kept-at] (when kept-at (max 0 (- (.getEpochSecond (store/now)) (.getEpochSecond ^Instant kept-at)))))
+(defn age-s [kept-at] (when kept-at (max 0 (- (.getEpochSecond (store/now)) (.getEpochSecond ^Instant kept-at)))))
 
 (defn- doc-result
   "The `ci.jobs` answer (see the ns docs) of a kept manifest `m` and/or a fetched `doc`; writes the session's text view."
@@ -240,9 +295,10 @@
         run-row (:run-row (or doc m))
         jobs (cikept/enrich (or m {:jobs (:jobs doc)}))
         attempt (or (:attempt m) (:attempt doc))
-        res {:repo (:slug t) :run (str (:id run-row)) :attempt attempt :origin origin :final (boolean m)
+        res {:repo (:slug t) :run (str (:id run-row)) :attempt attempt :origin (or (:origin m) origin)
+             :final (if (= cilocalrun/origin (:origin m)) (boolean (:final m)) (boolean m))
              :source (if (and m (nil? doc)) :kept :fetched) :kept-at (:kept-at m) :age-s (age-s (:kept-at m))
-             :run-row run-row :jobs jobs :dir (:dir m) :raw (or (:raw doc) (:raw m)) :auth (:auth c)}
+             :run-row (assoc run-row :notes (row-notes ws (:sha run-row))) :jobs jobs :dir (:dir m) :raw (or (:raw doc) (:raw m)) :auth (:auth c)}
         text (cisteps/jobs-text (assoc res :fetched-at (store/now)))
         p (.resolve (ci-dir ws session) (str "jobs-" (safe (:slug t)) "-" (:run res) ".txt"))]
     (store/write-bytes-atomic! p (.getBytes ^String text StandardCharsets/UTF_8))
@@ -260,10 +316,14 @@
   "A kept run when there is one (no network, no token) unless `refresh`; else GitHub's answer, kept when the run is finished.
   -> `{:kept m}` or `{:doc :c :kept m-or-nil}`."
   [ws session t {:keys [attempt refresh]}]
+  (if (:local t)
+    (if-let [m (cikept/find-run ws cilocalrun/origin (:slug t) (cilocalrun/id->n (:run t)) nil)]
+      {:kept m}
+      (fail :ci/not-found (str "no local run " (:run t) " of " (:slug t)) :hint "ci.runs lists the local runs of a repository"))
   (or (when-not refresh
         (some->> (cikept/find-run ws origin (:slug t) (:run t) attempt) (hash-map :kept)))
       (let [c (ctx ws session) doc (fetch-doc! c t (:run t))]
-        {:c c :doc doc :kept (keep-doc! ws t doc)})))
+        {:c c :doc doc :kept (keep-doc! ws t doc)}))))
 
 (defn jobs!
   [ws {:keys [session] :as args}]
@@ -280,6 +340,8 @@
   [ws session t src m job]
   (if (cikept/log-state m (:id job))
     m
+    (if (= cilocalrun/origin (:origin m))
+      (fail :ci/log-not-available (str "job " (:name job) " of a local run has no log yet") :hint "its steps' logs open as they end")
     (if (or (= "skipped" (:conclusion job)) (nil? (:started-at job)) (empty? (:steps job)))
       (cikept/mark-log! m (:id job) :none)
       (try
@@ -289,7 +351,7 @@
         (catch clojure.lang.ExceptionInfo e
           (if (and (#{:ci/log-not-available :ci/not-found} (:type (ex-data e))) (old-job? job))
             (cikept/mark-log! m (:id job) :gone)
-            (throw e)))))))
+            (throw e))))))))
 
 (defn- the-step [job step]
   (let [s (cisteps/select-step (:steps job) step)]
@@ -478,16 +540,42 @@
 (defn- jobs-of
   "The jobs of run `id`: the kept ones, else fetched (and kept when the run is finished)."
   [ws c t id]
-  (if-let [m (cikept/find-run ws origin (:slug t) (str id) nil)]
+  (if-let [m (if (cilocalrun/id->n id)
+               (cikept/find-run ws cilocalrun/origin (:slug t) (cilocalrun/id->n id) nil)
+               (cikept/find-run ws origin (:slug t) (str id) nil))]
     (cikept/enrich m)
     (let [doc (fetch-doc! c t (str id))]
       (keep-doc! ws t doc)
       (:jobs doc))))
 
+(defn- find-green-local
+  "The last green LOCAL run before `red` of the same workflow whose job (and step) succeeded (decision 111: a local run is compared with a local one: the
+  runner, the image and the logs differ from GitHub's). `against` names a local run (`local-3`)."
+  [ws t red job-name against step-name]
+  (let [n (parse-long (cilocalrun/id->n (:run t)))
+        good (fn [jobs]
+               (let [j (first (filter #(= job-name (:name %)) jobs))]
+                 (when (and j (= "success" (:conclusion j))
+                            (or (nil? step-name) (some #(and (= step-name (:name %)) (= "success" (:conclusion %))) (:steps j))))
+                   j)))
+        rows (cilocalrun/run-rows ws (:slug t))
+        cands (if against
+                (filter #(= (str against) (:id %)) rows)
+                (filter #(and (< (parse-long (:number %)) n) (= (:workflow red) (:workflow %)) (= "success" (:conclusion %)) (:final %)) rows))
+        scanned (volatile! 0)]
+    (or (some (fn [r] (vswap! scanned inc)
+                (when-let [j (good (jobs-of ws nil t (:id r)))] {:run (:id r) :job j :scanned @scanned}))
+              cands)
+        (fail :ci/no-green-run (str "no earlier successful local run of the workflow has a green job " (pr-str job-name)
+                                    (when step-name (str " with a green step " (pr-str step-name))))
+              :hint "a red local run is compared with the last green LOCAL run; pass against (local-<n>) to name one"))))
+
 (defn- find-green
   "The latest run before `red` of its workflow in which the job named `job-name` succeeded (and, with `step`, whose job has that step
   succeeded): -> {:run id :job job-row :scanned n}. Same branch first, then any; `against` forces a run."
   [ws c t red job-name against step-name]
+  (if (:local t)
+    (find-green-local ws t red job-name against step-name)
   (let [wf (:workflow-id red)
         before (str "<" (:created-at red))
         runs (fn [branch]
@@ -510,13 +598,13 @@
                 (remove #(= (str (:id %)) (str (:id red))) cands)))
         (fail :ci/no-green-run (str "no earlier successful run of the workflow has a green job " (pr-str job-name)
                                     (when step-name (str " with a green step " (pr-str step-name))))
-              :hint "pass against (a run id) to compare with a particular run"))))
+              :hint "pass against (a run id) to compare with a particular run")))))
 
 (defn diff!
   [ws {:keys [session normalise against step] :or {normalise true} :as args}]
   (let [t (target ws args)
         src (run-source ws session t {})
-        c (or (:c src) (ctx ws session))
+        c (or (:c src) (when-not (:local t) (ctx ws session)))
         red-run (:run-row (or (:doc src) (:kept src)))
         jobs (if (:kept src) (cikept/enrich (:kept src)) (:jobs (:doc src)))
         job (pick-job jobs (:job t) (:run t))

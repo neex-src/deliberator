@@ -1,0 +1,33 @@
+name: t
+on:
+  workflow_dispatch:
+    inputs:
+      tag: {description: t, default: "x"}
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      img: ${{ steps.i.outputs.img }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: i
+        run: echo "img=foo:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+      - name: Say hi
+        run: |
+          echo hello
+          echo "##[group]inner"
+          echo inside
+          echo "##[endgroup]"
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: use output
+        run: echo "${{ needs.build.outputs.img }}"
+      - name: boom
+        run: exit 3
+      - name: after
+        if: always()
+        run: echo after
