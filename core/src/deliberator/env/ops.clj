@@ -54,7 +54,8 @@
                      "DeleteLogStream"))
      :sts (r "GetCallerIdentity")
      :ecs (merge (r "DescribeServices" "DescribeTaskDefinition" "ListServices" "ListTasks"
-                    "DescribeTasks" "DescribeClusters" "ListClusters" "ListTaskDefinitions")
+                    "DescribeTasks" "DescribeClusters" "ListClusters" "ListTaskDefinitions"
+                    "ListServiceDeployments" "DescribeServiceDeployments" "DescribeServiceRevisions")
                  (m "UpdateService" "RegisterTaskDefinition" "CreateService" "DeleteService"
                     "CreateCluster" "RunTask" "StopTask"))
      :ec2 (r "DescribeNetworkInterfaces")

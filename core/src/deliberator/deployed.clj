@@ -5,7 +5,7 @@
   raw-persisted before anything is read from it):
 
     ECS         ListClusters -> ListServices per cluster -> DescribeServices (10 per call) -> DescribeTaskDefinition (once per
-                task definition ARN)
+                task definition ARN, with its tags: `git-sha` and `run-id` land on the service row, `deploy/by-commit` reads them)
     Lambda      ListFunctions -> GetFunctionConfiguration per function (at most `lambda-cap`; past it the ListFunctions row stands)
     CodeDeploy  ListDeployments -> GetDeployment of the newest `deployment-cap` (where present: a service that is not there,
                 or not allowed, is an entry in `:errors`, not a failure)
@@ -98,7 +98,8 @@
              :containers (mapv #(merge {:name (:name %)} (image-parts (:image %))) (:containerDefinitions td))}
       (:cpu td) (assoc :cpu (:cpu td))
       (:memory td) (assoc :memory (:memory td))
-      (:registeredAt td) (assoc :registered-at (->inst (:registeredAt td))))))
+      (:registeredAt td) (assoc :registered-at (->inst (:registeredAt td)))
+      (seq (:tags r)) (assoc :tags (into {} (map (juxt :key :value)) (:tags r))))))
 
 (defn task-set-row
   "A task set of DescribeServices (CODE_DEPLOY and EXTERNAL services have them): the CodeDeploy-owned `PRIMARY` one runs the revision
@@ -125,6 +126,8 @@
       (:launchType s) (assoc :launch-type (:launchType s))
       (:createdAt s) (assoc :created-at (->inst (:createdAt s)))
       (:family td) (assoc :family (:family td))
+      (get-in td [:tags "git-sha"]) (assoc :git-sha (get-in td [:tags "git-sha"]))   ; where a revision came from (the pile's contract)
+      (get-in td [:tags "run-id"]) (assoc :run-id (get-in td [:tags "run-id"]))
       (seq (:containers td)) (assoc :containers (:containers td))
       (:deploymentController s) (assoc :controller (get-in s [:deploymentController :type]))
       (seq (:taskSets s)) (assoc :task-sets (mapv task-set-row (:taskSets s))))))
@@ -177,7 +180,7 @@
            [cname (apply concat described)]))
         arns (into (sorted-set) (for [[_ ss] per-cluster, s ss :when (:taskDefinition s)] (:taskDefinition s)))
         tds (into {} (for [arn arns
-                           :let [d (call! inv :DescribeTaskDefinition :ecs {:taskDefinition arn} {:task-definition arn})]]
+                           :let [d (call! inv :DescribeTaskDefinition :ecs {:taskDefinition arn :include ["TAGS"]} {:task-definition arn})]]
                        (do (vswap! refs conj (:ref d))
                            (when (:error d) (vswap! errors conj (:error d)))
                            [arn (when (:r d) (task-definition-row (:r d)))])))]

@@ -3,7 +3,7 @@
 
   `ctx` keys: `:ws` (workspace name or map, required), `:session` (session key; default the
   workspace's current session; with none, the audit goes to the workspace-level `audit.log`),
-  `:confirm` (a confirmation token), `:persist-secrets` (true keeps secret values in the persisted
+  `:poll` (`{:state atom :key k}`: a read made again and again persists its request and answer only when the answer differs from the last persisted under `k`, `deploy.follow`), `:confirm` (a confirmation token), `:persist-secrets` (true keeps secret values in the persisted
   blobs of a remote call), `:redact-secrets` (true redacts the persisted blobs of secret-bearing calls
   on ANY environment, local included: how `secrets-from` fetches real values). `service` is aws-api's keyword (`:eventbridge` accepted for `:events`),
   `op` a keyword or string, `request` the aws-api request map.
@@ -507,11 +507,15 @@
         class (ops/op-class api op-name)
         remote? (= :remote (:kind env))
         redact? (or (:redact-secrets ctx) (and remote? (not (:persist-secrets ctx))))
-        req-ref (put! ws env
-                      (->bytes (pr-edn {:service api :op op-name :env (:name env)
-                                        :request (if redact? (redact-request api op-name request) request)}))
-                      {:op op-name :service api :role :request :class class
-                       :content-type "application/edn"})
+        put-request! #(put! ws env
+                            (->bytes (pr-edn {:service api :op op-name :env (:name env)
+                                              :request (if redact? (redact-request api op-name request) request)}))
+                            {:op op-name :service api :role :request :class class
+                             :content-type "application/edn"})
+        ;; a quiet poll (ctx `:poll {:state atom :key k}`, a read only): the request and the answer are persisted when the
+        ;; answer's bytes differ from the last one persisted under `k` (or the call failed), like the runtime's health probes
+        quiet? (and (:poll ctx) (= class :read))
+        req-ref (when-not quiet? (put-request!))
         fp (fingerprint ws env api op-name request)
         line (fn [m] (when remote?
                        (audit! ctx (merge {:at (store/now) :env (:name env) :account (get-in env [:aws :account])
@@ -529,12 +533,21 @@
                     anomaly? (some? (:cognitect.anomalies/category r))
                     http (some-> r meta :http-response)
                     body (body-bytes r)
-                    resp-ref (if (and (some? http) (:status http))
-                               (put! ws env (if redact? (redact-body api op-name request body) body)
-                                     {:op op-name :service api :role :response :class class
-                                      :status (:status http)
-                                      :content-type (or (get-in http [:headers "content-type"])
-                                                        "application/octet-stream")})
+                    persisted (if redact? (redact-body api op-name request body) body)
+                    same? (and quiet? (some? http) (:status http) (not anomaly?)
+                               (= (store/sha256 persisted) (get @(:state (:poll ctx)) (:key (:poll ctx)))))
+                    req-ref (or req-ref (when-not same? (put-request!)))
+                    resp-ref (cond
+                               same? (let [sha (store/sha256 persisted)] {:sha sha :path (store/raw-path ws sha) :bytes (alength persisted)})
+                               (and (some? http) (:status http))
+                               (let [ref (put! ws env persisted
+                                               {:op op-name :service api :role :response :class class
+                                                :status (:status http)
+                                                :content-type (or (get-in http [:headers "content-type"])
+                                                                  "application/octet-stream")})]
+                                 (when (and quiet? (not anomaly?)) (swap! (:state (:poll ctx)) assoc (:key (:poll ctx)) (:sha ref)))
+                                 ref)
+                               :else
                                (put! ws env (->bytes (pr-edn (dissoc r :cognitect.aws.client.impl/throwable :cognitect.aws/throwable)))
                                      {:op op-name :service api :role :anomaly :class class
                                       :content-type "application/edn"}))

@@ -102,6 +102,7 @@
     "run.finished" nil
     "service.build.line" (:text ev)
     "logs.line" (:text ev)
+    "deploy.line" (:text ev)
     "service.reload.step" (str "reload " (:name ev) ": " (or (:detail ev) (:step ev)))
     "service.started" (str "service started " (:name ev) " " (:container ev))
     "service.stopped" (str "service stopped " (:name ev) " " (:container ev))
@@ -214,6 +215,9 @@
     (and (= "scenario.generate" op) (map? result) (contains? result :marker)) (print-generate result)
     (and (= "deployed.show" op) (map? result) (contains? result :services)) (print-deployed result)
     (and (= "logs.insights" op) (map? result) (contains? result :bytes-scanned)) (print-insights result)
+    (and (= "deploy.list" op) (map? result) (:table result)) (do (print (:table result)) (println (str "path: " (:path result))))
+    (and (= "deploy.show" op) (map? result) (:body result)) (do (print (:body result)) (println (str "path: " (:path result) (when (:age result) (str "   (cached, " (:age result) " old)")))))
+    (and (= "deploy.follow" op) (map? result) (:follow result)) (do (println (str (:ended result) "  " (:deployment result) "  " (:status result))) (println (str "path: " (:path result))))
     (and (sequential? result) (every? map? result))
     (do (println (str (count result) (if (= 1 (count result)) " row" " rows")))
         (doseq [row result] (println (str "  " (compact row)))))
