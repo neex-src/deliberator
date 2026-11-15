@@ -24,7 +24,12 @@ import javax.swing.table.DefaultTableModel
 class ServicesPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProvider, Disposable {
     private val svc = WorkspaceService.getInstance(project)
     private val tableModel = object : DefaultTableModel(COLUMNS, 0) { override fun isCellEditable(row: Int, column: Int) = false }
-    val table = JBTable(tableModel).apply { setShowGrid(false); setSelectionMode(ListSelectionModel.SINGLE_SELECTION) }
+    val table = object : JBTable(tableModel) {
+        /** The daemon's hint of the ECS state (what the row means, how to get back) as the row's tooltip. */
+        override fun getToolTipText(e: java.awt.event.MouseEvent): String? =
+            rowAtPoint(e.point).takeIf { it >= 0 }?.let { rows.getOrNull(it) }?.let { r -> listOfNotNull(r.ecsHint, r.debugRefused).joinToString("\n").ifEmpty { null } }
+    }.apply { setShowGrid(false); setSelectionMode(ListSelectionModel.SINGLE_SELECTION) }
+    internal val events = ServiceEvents(project, this)
     private val hint = JBLabel()
     private var rows: List<ServiceRow> = emptyList()
     /** The fakes below the services (M6.6): `fake.list` and the recordings of the selected fake. */
@@ -46,6 +51,7 @@ class ServicesPanel(private val project: Project) : JPanel(BorderLayout()), UiDa
         var ticks = 0
         val timer = javax.swing.Timer(5000) { if (isShowing && ++ticks % 3 == 0) svc.refresh() }
         timer.start()
+        events.start()   // the watch's service.started / service.stopped refresh the rows at once (piece 02c)
         com.intellij.openapi.util.Disposer.register(this) { timer.stop() }
     }
 
@@ -63,6 +69,9 @@ class ServicesPanel(private val project: Project) : JPanel(BorderLayout()), UiDa
         }
     }
 
+    /** Cell text of the table (tests). */
+    internal fun cellText(row: Int, col: Int): String = tableModel.getValueAt(row, col).toString()
+
     fun render(m: WorkspaceModel) {
         val keep = selected()?.name
         rows = m.services
@@ -73,13 +82,13 @@ class ServicesPanel(private val project: Project) : JPanel(BorderLayout()), UiDa
         else if (rows.isEmpty()) "No services in ${m.ws}: adopt one (Adopt Service...)" else "environment ${m.selectedEnv}"
     }
 
-    override fun dispose() { if (this::fakes.isInitialized) Disposer.dispose(fakes) }
+    override fun dispose() { events.stop(); if (this::fakes.isInitialized) Disposer.dispose(fakes) }
 
     companion object {
         val SERVICE: DataKey<ServiceRow> = DataKey.create("deliberator.service.row")
         val FAKE: DataKey<FakeRow> = DataKey.create("deliberator.service.fake")
         val RECORDING: DataKey<String> = DataKey.create("deliberator.service.recording")
-        val COLUMNS = arrayOf("Name", "Mode", "Status", "Port", "JDWP", "Reloads")
+        val COLUMNS = arrayOf("Name", "Mode", "Status", "Port", "JDWP", "Reloads", "ECS")
 
         /** One table row: host ports shown as `host:container` where the container publishes them. */
         fun cells(r: ServiceRow): Array<Any> = arrayOf(
@@ -93,6 +102,7 @@ class ServicesPanel(private val project: Project) : JPanel(BorderLayout()), UiDa
             port(r.hostPort, r.port),
             port(r.hostJdwp, r.jdwp),
             r.reloadCount?.toString() ?: "",
+            r.ecsText ?: "",
         )
 
         private fun port(host: String?, container: Int?) = when {

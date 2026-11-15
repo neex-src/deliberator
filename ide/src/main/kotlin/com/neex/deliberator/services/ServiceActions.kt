@@ -188,6 +188,8 @@ class ServiceBuildAction : ServiceAction("Build Service") {
 /** Debug = the "Deliberator Service" configuration of the row (created on first use) started with the Debug executor. */
 class ServiceDebugAction : ServiceAction("Debug Service") {
     override fun perform(project: Project, row: ServiceRow) {
+        // a container that runs a deployed revision's image has no debugger to attach (piece 02b): the daemon's own words, no run configuration started
+        row.debugRefused?.let { Ui.notify(project, "Debug ${row.name}", it, NotificationType.WARNING); return }
         ApplicationManager.getApplication().invokeLater {
             ProgramRunnerUtil.executeConfiguration(ServiceActions.configurationFor(project, row.name), DefaultDebugExecutor.getDebugExecutorInstance())
         }
@@ -225,5 +227,14 @@ class TopologySetAction : ServiceAction("Topology") {
                     }
                 }.createPopup().showCenteredInCurrentWindow(project)
         }
+    }
+}
+
+/** Back to Dev Container: a service bound to an ECS service runs the developer's build again (`service.dev`), held until the next revision arrives. */
+class ServiceDevAction : ServiceAction("Back to Dev Container") {
+    override fun enabledFor(row: ServiceRow?) = row == null || row.bound
+    override fun perform(project: Project, row: ServiceRow) = run(project, "back to the dev container of ${row.name}") {
+        val r = ServiceOps.getInstance(project).dev(row.name)
+        ServiceActions.info(project, "Dev container ${row.name}", (r.get("status")?.takeIf { it.isJsonPrimitive }?.asString ?: "running the dev build") + " (held until the next revision)")
     }
 }

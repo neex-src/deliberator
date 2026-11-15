@@ -43,6 +43,12 @@ data class ServiceRow(
     val logGroup: String? = null,
     /** In mode `fake`: the HTTP fake that serves it. */
     val fake: String? = null,
+    /** Bound to an ECS service (piece 02): the daemon's one-line state (`revision 4 · image (deployed)`, `desired 0`), its hint, and whether it is bound at all. */
+    val bound: Boolean = false,
+    val ecsText: String? = null,
+    val ecsHint: String? = null,
+    /** Set by the daemon when Debug does not apply (a container that runs a deployed revision's image): its reason, shown as it is. */
+    val debugRefused: String? = null,
 )
 
 data class EnvRow(val name: String, val kind: String?, val error: String?)
@@ -103,6 +109,7 @@ data class WorkspaceModel(
             return list.objects().map { d ->
                 val name = d.str("name") ?: "?"
                 val s = st[name]
+                val ecs = d.getAsJsonObject("ecs") ?: s?.getAsJsonObject("ecs")
                 val rt = containers.firstOrNull { it.role == "service-$name" || it.role == "service/$name" }
                 // service.list's port/jdwp are host ports since B5; the container ports key the runtime row's port map
                 val port = d.int("container-port") ?: d.int("port")
@@ -110,7 +117,8 @@ data class WorkspaceModel(
                 ServiceRow(name, d.str("kind"), d.str("mode") ?: "local", d.str("url"), s?.str("status") ?: d.str("status") ?: "?", port, jdwp,
                     port?.let { rt?.portMap?.get(it.toString()) }, jdwp?.let { rt?.portMap?.get(it.toString()) },
                     s?.int("reload-count"), s?.get("drift")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false, s?.str("detail"),
-                    d.str("container"), d.str("log-target"), d.getAsJsonObject("log")?.str("container"), d.getAsJsonObject("log")?.str("cloudwatch"), d.str("fake"))
+                    d.str("container"), d.str("log-target"), d.getAsJsonObject("log")?.str("container"), d.getAsJsonObject("log")?.str("cloudwatch"), d.str("fake"),
+                    ecs != null, ecs?.str("text") ?: ecs?.int("desired")?.let { "desired $it" }, ecs?.str("hint"), d.str("debug-refused") ?: s?.str("debug-refused"))
             }
         }
 
