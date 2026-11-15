@@ -43,14 +43,16 @@
   (or (false? (:ok result))
       (and (= "terraform.drift" op) (boolean (some seq [(:missing result) (:undeclared result) (:errors result)])))))
 
-(defn- exit-code [op {:keys [ok result error]}]
-  (cond
+(defn- exit-code
+  ([terminal] (exit-code nil terminal))
+  ([op {:keys [ok result error]}]
+   (cond
     (and ok (map? result) (contains? result :status) (contains? result :steps)) (if (= "ok" (:status result)) 0 1)
     (and ok (map? result) (false? (:equal result))) 1
     (and ok (map? result) (failed-check? op result)) 1
     ok 0
     (= "confirm-required" (:type error)) 1
-    :else 2))
+    :else 2)))
 
 (def ^:private path-args
   "Operations whose file or directory arguments are sent absolute when they exist relative to the shell's cwd."
