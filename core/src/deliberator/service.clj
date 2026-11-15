@@ -183,7 +183,7 @@
 
 (def debug-refused
   "Why a deployed container cannot be debugged or reloaded."
-  "the container runs the deployed image of the task definition revision: no hot-swap agent, no JDWP port; service.dev returns to the dev container")
+  "no hot-swap agent and no JDWP port in it; service.dev returns to the dev container")
 
 (defn- deployed-view
   "A `service.list` row of a service that runs its revision's image: no JDWP ports, and why."
