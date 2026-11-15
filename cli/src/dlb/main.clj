@@ -36,13 +36,23 @@
         (when hint (println (str "hint: " hint)))))
     2))
 
-(defn- exit-code [{:keys [ok result error]}]
-  (cond
+(defn- failed-check?
+  "A successful answer that says the check failed: `{:ok false}` (terraform.apply-all, terraform.local, env.check), or the findings of
+  `terraform.drift` (a declared resource missing, an undeclared one, an environment that did not answer): exit 1 like a failed run."
+  [op result]
+  (or (false? (:ok result))
+      (and (= "terraform.drift" op) (boolean (some seq [(:missing result) (:undeclared result) (:errors result)])))))
+
+(defn- exit-code
+  ([terminal] (exit-code nil terminal))
+  ([op {:keys [ok result error]}]
+   (cond
     (and ok (map? result) (contains? result :status) (contains? result :steps)) (if (= "ok" (:status result)) 0 1)
     (and ok (map? result) (false? (:equal result))) 1
+    (and ok (map? result) (failed-check? op result)) 1
     ok 0
     (= "confirm-required" (:type error)) 1
-    :else 2))
+    :else 2)))
 
 (def ^:private path-args
   "Operations whose file or directory arguments are sent absolute when they exist relative to the shell's cwd."
@@ -163,7 +173,7 @@
                         (if (:ok terminal)
                           (render/print-result (:op op) (:result terminal))
                           (render/print-error (:op op) (:error terminal) argv))))
-                      (exit-code terminal)))))))))
+                      (exit-code (:op op) terminal)))))))))
       (finally (client/close! channel)))))
 
 (defn -main

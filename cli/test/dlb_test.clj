@@ -881,3 +881,42 @@
                         :extra-env {"DELIBERATOR_LOCAL_ENDPOINT" "http://localhost:19" "DELIBERATOR_HOME" home "DLB_DAEMON_ARGS" "--idle-minutes 0.2" "DELIBERATOR_CLIENT" "agent"}}
                        dlb-bin "scenario" "generate" scn "pause" "--ws" "gen")]
         (is (= 2 (:exit r)))))))
+
+;; an answer that says ok: false (or a check's findings) is exit 1, never 0 (cicd-aws piece 06a) ------------------------------
+
+(defn- bad-root!
+  "A Terraform root that cannot even be parsed: init fails, offline, in well under a second."
+  []
+  (let [d (fs/path root "cli" "target" "th" (str "bad-" (Long/toString (mod (System/nanoTime) 1679616) 36)))]
+    (fs/create-dirs d)
+    (spit (fs/file d "main.tf") "this is { not terraform\n")
+    (str d)))
+
+(deftest a-failed-root-is-exit-1-in-every-terraform-command
+  (let [bad (bad-root!)
+        ws ["--ws" "w"]]
+    (is (zero? (:exit (apply dlb *home* "workspace" "open" "w" ws))))
+    (testing "terraform apply-all: the root that failed, the others skipped, exit 1"
+      (let [r (apply dlb *home* "terraform" "apply-all" bad ws)]
+        (is (= 1 (:exit r)) (:out r))
+        (is (str/includes? (:out r) "ok: false"))
+        (is (= 1 (:exit (apply dlb *home* "terraform" "apply-all" bad "--json" ws))) "--json: the same code")))
+    (testing "terraform local: the same"
+      (let [r (apply dlb *home* "terraform" "local" bad ws)]
+        (is (= 1 (:exit r)) (:out r))
+        (is (str/includes? (:out r) "ok: false"))))))
+
+(deftest a-failed-environment-check-is-exit-1
+  (let [ws ["--ws" "w"]]
+    (is (zero? (:exit (apply dlb *home* "workspace" "open" "w" ws))))
+    (let [r (apply dlb *home* "env" "check" "local" ws)]   ; the test home's local endpoint is a closed port
+      (is (= 1 (:exit r)) (:out r))
+      (is (str/includes? (:out r) "ok: false")))))
+
+(deftest drift-found-is-exit-1
+  (let [ws ["--ws" "w"]
+        plan (str (fs/path root "cli" "target" "th" (str "plan-" (Long/toString (mod (System/nanoTime) 1679616) 36) ".json")))]
+    (is (zero? (:exit (apply dlb *home* "workspace" "open" "w" ws))))
+    (spit plan "{\"format_version\":\"1.0\",\"values\":{\"root_module\":{\"resources\":[{\"address\":\"aws_sqs_queue.q\",\"type\":\"aws_sqs_queue\",\"name\":\"q\",\"values\":{\"name\":\"q\"}}]}}}")
+    (let [r (apply dlb *home* "terraform" "drift" "--env" "local" "--file" plan ws)]   ; no emulator behind the endpoint: the environment did not answer
+      (is (= 1 (:exit r)) (:out r)))))
