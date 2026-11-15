@@ -23,10 +23,13 @@ class GithubStandIn : AutoCloseable {
     /** Polls of job 2101 (the running one) answered "in progress" before it completes. */
     @Volatile var runningPolls = 2
     private val polled = ConcurrentHashMap<Int, Int>()
+    /** Run 210 and its job are done (success) from now on: the run "moves from running to done". */
+    @Volatile var runningFinished = false
+    fun finishRunning() { runningFinished = true }
 
     private class Run(val id: Int, val number: Int, val branch: String, val status: String, val conclusion: String?, val created: String, val title: String)
-    private val runs = listOf(
-        Run(210, 21, "feat", "in_progress", null, "2026-10-10T11:00:00Z", "wip 3"),
+    private val allRuns get() = listOf(
+        if (runningFinished) Run(210, 21, "feat", "completed", "success", "2026-10-10T11:00:00Z", "wip 3") else Run(210, 21, "feat", "in_progress", null, "2026-10-10T11:00:00Z", "wip 3"),
         Run(200, 20, "feat", "completed", "failure", "2026-10-10T10:00:00Z", "wip"),
         Run(195, 19, "feat", "completed", "success", "2026-10-10T09:00:00Z", "wip 2"),
         Run(190, 18, "main", "completed", "success", "2026-10-09T09:00:00Z", "release"),
@@ -63,15 +66,19 @@ class GithubStandIn : AutoCloseable {
         addProperty("display_title", r.title); addProperty("head_branch", r.branch); addProperty("head_sha", "a".repeat(40)); addProperty("event", "push")
         addProperty("status", r.status); addProperty("conclusion", r.conclusion); addProperty("created_at", r.created)
         addProperty("html_url", "https://github.com/acme/widgets/actions/runs/${r.id}")
+        addProperty("run_started_at", r.created); addProperty("updated_at", if (r.status == "completed") r.created.replace(":00:00Z", ":09:00Z") else r.created)
     }
 
     private fun jobJson(id: Int, name: String, status: String, conclusion: String?) = JsonObject().apply {
         addProperty("id", id); addProperty("name", name); addProperty("status", status); addProperty("conclusion", if (status == "completed") conclusion else null)
         addProperty("started_at", "2026-10-10T10:00:00Z"); addProperty("completed_at", if (status == "completed") "2026-10-10T10:09:00Z" else null)
         addProperty("run_id", 1); addProperty("run_attempt", 1)
+        addProperty("html_url", "https://github.com/acme/widgets/actions/runs/1/job/$id")
         add("steps", JsonArray().apply {
-            add(JsonObject().apply { addProperty("number", 1); addProperty("name", "Set up job"); addProperty("status", "completed"); addProperty("conclusion", "success") })
-            add(JsonObject().apply { addProperty("number", 2); addProperty("name", "make test"); addProperty("status", status); addProperty("conclusion", if (status == "completed") conclusion else null) })
+            add(JsonObject().apply { addProperty("number", 1); addProperty("name", "Set up job"); addProperty("status", "completed"); addProperty("conclusion", "success")
+                addProperty("started_at", "2026-10-10T10:00:01Z"); addProperty("completed_at", "2026-10-10T10:00:03Z") })
+            add(JsonObject().apply { addProperty("number", 2); addProperty("name", "make test"); addProperty("status", status); addProperty("conclusion", if (status == "completed") conclusion else null)
+                addProperty("started_at", "2026-10-10T10:00:03Z"); addProperty("completed_at", if (status == "completed") "2026-10-10T10:00:08Z" else null) })
         })
     }
 
@@ -88,11 +95,11 @@ class GithubStandIn : AutoCloseable {
             path.startsWith("/blob/") -> reply(ex, 200, logOf(path.substringAfterLast('/').toInt()), "text/plain")
             path == "$base/actions/workflows" -> json(JsonObject().apply { add("workflows", JsonArray().apply { add(JsonObject().apply { addProperty("id", 7); addProperty("name", "ci"); addProperty("path", ".github/workflows/ci.yml") }) }) })
             Regex("$base/actions/workflows/[^/]+/runs").matches(path) || path == "$base/actions/runs" ->
-                json(JsonObject().apply { addProperty("total_count", runs.size); add("workflow_runs", JsonArray().apply { runs.forEach { add(runJson(it)) } }) })
-            Regex("$base/actions/runs/\\d+").matches(path) -> runs.firstOrNull { it.id == path.substringAfterLast('/').toInt() }?.let { json(runJson(it)) } ?: notFound(ex)
+                json(JsonObject().apply { addProperty("total_count", allRuns.size); add("workflow_runs", JsonArray().apply { allRuns.forEach { add(runJson(it)) } }) })
+            Regex("$base/actions/runs/\\d+").matches(path) -> allRuns.firstOrNull { it.id == path.substringAfterLast('/').toInt() }?.let { json(runJson(it)) } ?: notFound(ex)
             Regex("$base/actions/runs/\\d+/jobs").matches(path) -> {
                 val run = path.removePrefix("$base/actions/runs/").substringBefore('/').toInt()
-                val r = runs.firstOrNull { it.id == run } ?: return notFound(ex)
+                val r = allRuns.firstOrNull { it.id == run } ?: return notFound(ex)
                 json(JsonObject().apply { add("jobs", JsonArray().apply { jobs[run]!!.forEach { (id, name) -> add(jobJson(id, name, r.status, conclusionOf(id))) } }) })
             }
             Regex("$base/actions/jobs/\\d+").matches(path) -> {

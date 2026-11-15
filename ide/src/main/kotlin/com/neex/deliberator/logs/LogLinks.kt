@@ -342,10 +342,14 @@ class LogLinks(private val project: Project) : Disposable {
         private const val REFRESH_MS = 20_000L
         fun getInstance(project: Project): LogLinks = project.getService(LogLinks::class.java)
 
-        /** Files whose places can name code: a log (see [LogFiles]) and what a scenario run wrote (`runs/<id>/result.txt`, `runs/<id>/steps/...`). */
+        /**
+         * Files whose places can name code: a log (see [LogFiles], which holds a CI job's and a CI step's `.log`), a CI diff (`.diff` under a `ci/` directory: the
+         * log's lines behind a `+`, `-` or space) and what a scenario run wrote (`runs/<id>/result.txt`, `runs/<id>/steps/...`).
+         */
         fun wants(file: VirtualFile): Boolean {
             if (LogFiles.isLog(file)) return true
             val p = file.path
+            if (file.extension.equals("diff", ignoreCase = true) && p.contains("/ci/")) return true
             return p.contains("/sessions/") && p.contains("/runs/") && (file.name == "result.txt" || p.contains("/steps/"))
         }
     }

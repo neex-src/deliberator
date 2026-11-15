@@ -49,6 +49,7 @@ class CiTest : BasePlatformTestCase() {
 
     private fun <T> bg(f: () -> T): T = ApplicationManager.getApplication().executeOnPooledThread<T> { f() }.get(180, TimeUnit.SECONDS)
     private fun wait(what: String, secs: Int = 60, cond: () -> Boolean) = PlatformTestUtil.waitWithEventsDispatching("timed out: $what", cond, secs)
+    private fun waitTree(panel: CiPanel, what: String, cond: () -> Boolean) = try { wait(what, 60, cond) } catch (e: AssertionError) { throw AssertionError(e.message + "\n" + panel.lines().joinToString("\n"), e) }
     /** The platform logs an exception of a pooled task as an error (which fails the task); the daemon's own is in its cause chain. */
     private fun typed(f: () -> Any?): DaemonException? = try { bg(f); null } catch (x: Throwable) {
         generateSequence(x) { it.cause }.filterIsInstance<DaemonException>().firstOrNull() ?: throw x
@@ -137,7 +138,7 @@ class CiTest : BasePlatformTestCase() {
             panel.addRepo(repo)
             wait("the runs are shown") { panel.lines().any { it.contains("#20") } }
             assertEquals(listOf(repo, "  ci (4)"), panel.lines().take(2))
-            assertTrue(panel.lines().toString(), panel.lines().any { it.trim().startsWith("#20  failure  feat") })
+            assertTrue(panel.lines().toString(), panel.lines().any { it.trim().startsWith("#20  failure  push feat") })
             assertTrue(panel.statusText(), panel.statusText().startsWith("$repo: 4 of 4 runs"))
             assertEquals(listOf(repo), panel.typedRepos())
             // a repository that cannot be read shows why, in the tree
@@ -145,6 +146,85 @@ class CiTest : BasePlatformTestCase() {
             wait("the error is shown") { panel.lines().indexOf("nobody/nothing").let { i -> i >= 0 && panel.lines().getOrNull(i + 1)?.contains("expand to load") == false } }
             panel.removeRepo("nobody/nothing")
             assertEquals(listOf(repo), panel.typedRepos())
+        } finally {
+            com.intellij.openapi.util.Disposer.dispose(panel)
+            com.intellij.ide.util.PropertiesComponent.getInstance(project).unsetValue(CiPanel.KEY)
+        }
+    }
+
+    fun testJobsAreStepsWithDurationsAndAFinishedRunIsAnsweredFromTheKeptCopy() {
+        val d = bg { ops.jobs(repo, "200") }
+        assertEquals("fetched", d.source)
+        assertTrue(d.final)
+        assertEquals(listOf("test (ubuntu)", "lint"), d.jobs.map { it.name })
+        val steps = d.jobs[0].steps
+        assertEquals(listOf("Set up job", "make test"), steps.map { it.name })
+        assertEquals(2L, steps[0].durationS)
+        assertEquals(5L, steps[1].durationS)
+        assertEquals(CiState.RED, steps[1].state)
+        assertEquals(CiState.RED, d.jobs[0].state)
+        assertEquals("push", d.run.event)
+        val before = github.requests.size
+        val again = bg { ops.jobs(repo, "200") }
+        assertEquals("kept", again.source)
+        assertNotNull(again.keptAt)
+        assertEquals(before, github.requests.size)
+        assertTrue(d.path!!, "/ci/jobs-" in d.path!!)
+    }
+
+    fun testAStepLogIsThatStepsLinesOnlyAndTheWholeJobLogStaysAsItIs() {
+        val step = bg { ops.log(repo, "200", "2001", "2") }
+        val text = Files.readString(Path.of(step.path))
+        assertTrue(step.what, step.what.contains("step 2 make test"))
+        assertTrue(text, text.contains("FAIL in (match-test)"))
+        assertFalse("the setup lines are not in the step", text.contains("Current runner version"))
+        val job = Files.readString(Path.of(bg { ops.log(repo, "200", "2001") }.path))
+        assertTrue(job.contains("Current runner version") && job.contains("FAIL in (match-test)"))
+        assertEquals("ci/no-step", typed { ops.log(repo, "200", "2001", "9") }!!.type)
+    }
+
+    fun testARedRunOpensDownToItsFirstFailedStepAndARefreshKeepsExpansionAndSelection() {
+        val panel = CiPanel(project)
+        try {
+            panel.addRepo(repo)
+            wait("the runs are shown") { panel.lines().any { it.contains("#20") } }
+            panel.expandRun(repo, "200")
+            waitTree(panel, "the jobs are shown") { panel.lines().any { it.trim().startsWith("2  make test  failure") } }
+            val lines = panel.lines()
+            assertTrue(lines.toString(), lines.any { it.trim() == "test (ubuntu)  failure  9m 00s" })
+            assertTrue(panel.expandedKeys().toString(), panel.expandedKeys().any { it.endsWith("u:200/j:2001") })
+            assertTrue("the first failed step is visible", panel.isVisible(repo, "200", "s:2"))
+            panel.select(repo, "200", "s:2")
+            val sel = panel.selection()!!
+            assertEquals("make test", sel.step!!.name)
+            assertEquals("test (ubuntu)", sel.job!!.name)
+            val expanded = panel.expandedKeys()
+            panel.load(repo)
+            waitTree(panel, "the refresh is done") { !panel.busy() }
+            assertEquals(expanded, panel.expandedKeys())
+            assertEquals("make test", panel.selection()!!.step!!.name)
+            assertTrue(panel.statusText(), panel.statusText().contains("kept"))
+        } finally {
+            com.intellij.openapi.util.Disposer.dispose(panel)
+            com.intellij.ide.util.PropertiesComponent.getInstance(project).unsetValue(CiPanel.KEY)
+        }
+    }
+
+    fun testARunningRunMovesToDoneInPlaceWithoutFoldingTheTree() {
+        val panel = CiPanel(project)
+        try {
+            panel.addRepo(repo)
+            wait("the runs are shown") { panel.lines().any { it.contains("#21") } }
+            panel.expandRun(repo, "210")
+            waitTree(panel, "the running step is shown") { panel.lines().any { it.trim().startsWith("2  make test  in_progress") } }
+            assertTrue(panel.lines().toString(), panel.lines().any { it.trim().startsWith("#21  in_progress") })
+            panel.select(repo, "210", "s:2")
+            val expanded = panel.expandedKeys()
+            assertTrue(expanded.toString(), expanded.any { it.endsWith("u:210/j:2101") })
+            github.finishRunning()
+            waitTree(panel, "the poll shows it done") { panel.tick(true); panel.lines().any { it.trim().startsWith("#21  success") } && panel.lines().any { it.trim().startsWith("2  make test  success") } }
+            assertTrue(panel.expandedKeys().containsAll(expanded))
+            assertEquals("make test", panel.selection()!!.step!!.name)
         } finally {
             com.intellij.openapi.util.Disposer.dispose(panel)
             com.intellij.ide.util.PropertiesComponent.getInstance(project).unsetValue(CiPanel.KEY)

@@ -12,6 +12,8 @@ import com.intellij.openapi.components.Storage
 class DeliberatorSettings : PersistentStateComponent<DeliberatorSettings.State> {
     class State {
         var home: String = ""
+        /** The CI tab keeps the jobs and logs of this many newest finished runs per repository after a refresh (0: none). */
+        var ciArchiveLimit: Int = 10
     }
 
     private var state = State()

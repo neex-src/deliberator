@@ -223,13 +223,17 @@
         <group id="deliberator.ci" text="Deliberator CI" popup="true">
             <add-to-group group-id="deliberator.menu" anchor="last"/>
             <action id="deliberator.ci.open" icon="AllIcons.Actions.Show" class="com.neex.deliberator.ci.CiOpenAction"
-                    text="Open Run" description="The default action of the run: a red run opens ci.diff against the last green run, a running one is followed (ci.tail), others open their log (ci.log)"/>
+                    text="Open" description="Enter: a step or a job opens its log; a run its default action (red: ci.diff against the last green run, running: followed, others: their log)"/>
             <action id="deliberator.ci.jobLog" icon="AllIcons.Actions.ListFiles" class="com.neex.deliberator.ci.CiJobLogAction"
-                    text="Open Job Log..." description="ci.log of a job of the run (a job that still runs is followed)"/>
+                    text="Open Log" description="ci.log of the step (its lines only), of the job, or of a job of the run to choose; a job that still runs is followed"/>
             <action id="deliberator.ci.diff" icon="AllIcons.Actions.Diff" class="com.neex.deliberator.ci.CiDiffAction"
-                    text="Diff Against Last Green Run" description="ci.diff: the failed job's log against the last green run of the same job, normalised"/>
+                    text="Diff Against Last Green" description="ci.diff: the failed step (or job) against the same of the last green run, normalised"/>
             <action id="deliberator.ci.follow" icon="AllIcons.Actions.Execute" class="com.neex.deliberator.ci.CiFollowAction"
-                    text="Follow Job" description="ci.tail: a running job's lines in a console tab, then its whole log"/>
+                    text="Follow" description="ci.tail: a running job's lines in a console tab, then its whole log"/>
+            <action id="deliberator.ci.browser" icon="AllIcons.General.Web" class="com.neex.deliberator.ci.CiBrowserAction"
+                    text="Open in Browser" description="The run, job or step on the page of the CI system"/>
+            <action id="deliberator.ci.copy" icon="AllIcons.Actions.Copy" class="com.neex.deliberator.ci.CiCopyAction"
+                    text="Copy as Text" description="The row as text; a run with its jobs and steps"/>
             <action id="deliberator.ci.runsText" icon="AllIcons.FileTypes.Text" class="com.neex.deliberator.ci.CiRunsTextAction"
                     text="Open Runs Text" description="The text file ci.runs wrote for the repository (one line per run)"/>
             <action id="deliberator.ci.refresh" icon="AllIcons.Actions.Refresh" class="com.neex.deliberator.ci.CiRefreshAction"
