@@ -791,11 +791,17 @@
 
 (deftest ci-help-and-typed-errors
   (is (str/includes? (:out (dlb *home* "help" "ci")) "dlb ci runs <repo>"))
-  (is (str/includes? (:out (dlb *home* "help" "ci")) "dlb ci local <repo> <workflow> <job>"))
+  (is (str/includes? (:out (dlb *home* "help" "ci")) "dlb ci local <repo> <workflow>"))
   (is (str/includes? (:out (dlb *home* "help" "pr")) "dlb pr open <repo> <n>"))
   (let [h (:out (dlb *home* "help" "ci" "local"))]
     (is (str/includes? h "events: logs.line"))
-    (is (str/includes? h "--worktree")))
+    (is (str/includes? h "ci.run"))
+    (is (str/includes? h "--worktree"))
+    (is (str/includes? h "--all"))
+    (is (str/includes? h "--event"))
+    (is (str/includes? h "--input")))
+  (is (str/includes? (:out (dlb *home* "help" "ci")) "dlb ci workflows <repo>"))
+  (is (str/includes? (:out (dlb *home* "help" "ci" "runs")) "--cached"))
   (is (str/includes? (:out (dlb *home* "help" "ci" "diff")) "dlb ci diff <run>"))
   (testing "piece 01: jobs, a step's log, archive"
     (is (str/includes? (:out (dlb *home* "help" "ci")) "dlb ci jobs <repo> <run>"))

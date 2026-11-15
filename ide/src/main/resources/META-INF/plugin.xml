@@ -230,6 +230,10 @@
                     text="Open Log" description="ci.log of the step (its lines only), of the job, or of a job of the run to choose; a job that still runs is followed"/>
             <action id="deliberator.ci.diff" icon="AllIcons.Actions.Diff" class="com.neex.deliberator.ci.CiDiffAction"
                     text="Diff Against Last Green" description="ci.diff: the failed step (or job) against the same of the last green run, normalised"/>
+            <action id="deliberator.ci.runLocally" icon="AllIcons.Actions.Lightning" class="com.neex.deliberator.ci.RunLocallyAction"
+                    text="Run Locally..." description="The selected workflow runs on this machine with act: the event, one job or all, the dispatch inputs; the run appears on top of its workflow as local #n"/>
+            <action id="deliberator.ci.cancelLocal" icon="AllIcons.Actions.Suspend" class="com.neex.deliberator.ci.CiCancelLocalAction"
+                    text="Cancel Local Run" description="Stops the local run (act and its containers); the run ends cancelled"/>
             <action id="deliberator.ci.follow" icon="AllIcons.Actions.Execute" class="com.neex.deliberator.ci.CiFollowAction"
                     text="Follow" description="ci.tail: a running job's lines in a console tab, then its whole log"/>
             <action id="deliberator.ci.browser" icon="AllIcons.General.Web" class="com.neex.deliberator.ci.CiBrowserAction"
@@ -245,6 +249,10 @@
             <action id="deliberator.ci.removeRepo" icon="AllIcons.General.Remove" class="com.neex.deliberator.ci.CiRemoveRepoAction"
                     text="Remove Repository" description="Forget a repository added to this view"/>
             <separator/>
+            <action id="deliberator.ci.localWorkflow" icon="AllIcons.Actions.Lightning" class="com.neex.deliberator.ci.RunWorkflowLocallyAction"
+                    text="Run Workflow Locally" description="ci.local: every job of the workflow in the editor in needs order with act on the runtime's container engine; the dialog asks for the event and the inputs">
+                <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            </action>
             <action id="deliberator.ci.local" icon="AllIcons.Actions.Lightning" class="com.neex.deliberator.ci.RunJobLocallyAction"
                     text="Run Job Locally" description="ci.local: the workflow job at the caret runs with act on the runtime's container engine against the local endpoint; live output in a console tab">
                 <add-to-group group-id="EditorPopupMenu" anchor="last"/>

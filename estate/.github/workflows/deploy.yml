@@ -1,3 +1,6 @@
+# Locally (`dlb ci local`, decision 110-115) this whole workflow runs as a local run, jobs `build` and `deploy`: act mounts the runtime's Podman socket, so the
+# image built here is in the runtime's own image store and no push is needed (Floci's ECR cannot take one, decision 113). A login or push step of a real
+# registry would carry `if: ${{ !env.ACT }}` and one comment line saying why.
 # The estate's deploy pipeline: build service A's image, register a task definition revision that uses it, deploy it through CodeDeploy.
 # On GitHub it is started by hand (workflow_dispatch) against real AWS; locally `dlb ci local` runs it with `act` on the runtime's Podman
 # and points the aws CLI at its Floci (AWS_ENDPOINT_URL, fake keys, region), where the CodeDeploy application and group come from

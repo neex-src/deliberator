@@ -51,7 +51,7 @@
    "audit.show" "config.chain" "config.refresh" "deployed.refresh" "deployed.show" "deploy.list" "deploy.show" "deploy.follow" "deploy.where" "logs.insights"
    "env.list" "env.describe" "env.check" "env.save" "env.create" "env.remove" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
    "aws.describe" "aws.discover" "terraform.drift" "terraform.local" "terraform.graph" "terraform.apply-all" "terraform.locate"
-   "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "scenario.generate" "workspace.universal" "repo.attach" "repo.detach" "repo.list" "repo.clone" "worktree.start" "worktree.list" "worktree.remove" "ci.runs" "ci.jobs" "ci.archive" "ci.log" "ci.tail" "ci.diff" "ci.local" "pr.open" "logs.fetch" "logs.match" "logs.refs" "logs.linkable" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
+   "scenario.run" "scenario.cancel" "scenario.kinds" "scenario.parse" "scenario.generate" "workspace.universal" "repo.attach" "repo.detach" "repo.list" "repo.clone" "worktree.start" "worktree.list" "worktree.remove" "ci.runs" "ci.workflows" "ci.jobs" "ci.archive" "ci.log" "ci.tail" "ci.diff" "ci.local" "pr.open" "logs.fetch" "logs.match" "logs.refs" "logs.linkable" "marker.add" "marker.remove" "marker.list" "runs.list" "runs.show" "runs.render" "runs.diff" "raw.meta" "raw.get"])
 
 ;; --- lifecycle ----------------------------------------------------------------------------------
 

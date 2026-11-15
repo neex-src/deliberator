@@ -44,8 +44,8 @@
 (deftest describe-lists-pr-open-and-ci-local
   (let [by (into {} (map (juxt :op identity)) (ops/describe))]
     (is (= ["repo" "n" "github" "remote" "session" "ws"] (:order (by "pr.open"))))
-    (is (= ["repo" "workflow" "job" "worktree" "event" "env" "image" "session" "ws"] (:order (by "ci.local"))))
-    (is (= ["logs.line"] (:events (by "ci.local"))))))
+    (is (= ["repo" "workflow" "job" "all" "worktree" "event" "input" "env" "image" "session" "ws"] (:order (by "ci.local"))))
+    (is (= ["logs.line" "ci.run" "ci.step"] (:events (by "ci.local"))))))
 
 (deftest open-fetches-the-pull-head-into-a-worktree
   (tu/with-temp-home

@@ -32,18 +32,26 @@ class CiOps(private val project: Project) {
     private val svc get() = WorkspaceService.getInstance(project)
 
     private fun args(vararg kv: Pair<String, Any?>) = JsonObject().apply {
-        kv.forEach { (k, v) -> when (v) { null -> {}; is Boolean -> addProperty(k, v); is Number -> addProperty(k, v); else -> addProperty(k, v.toString()) } }
+        kv.forEach { (k, v) -> when (v) { null -> {}; is Boolean -> addProperty(k, v); is Number -> addProperty(k, v); is List<*> -> add(k, com.google.gson.JsonArray().also { a -> v.forEach { a.add(it.toString()) } }); else -> addProperty(k, v.toString()) } }
     }
 
     /** The ops below write into the current session; one is offered when there is none. */
     private fun session() = ScnRunner.getInstance(project).ensureSession(svc)
 
-    /** `ci.runs`: the runs of [repo] (all workflows, or the [workflow] given), newest first; the text file of them is [CiRuns.path]. */
-    fun runs(repo: String, workflow: String? = null, limit: Int = 40, branch: String? = null): CiRuns {
+    /**
+     * `ci.runs`: the runs of [repo] (all workflows, or the [workflow] given) and its LOCAL runs, newest first; the text file of them is [CiRuns.path].
+     * [cached] answers the last known listing at once (no request, [CiRuns.ageS]); [poll] is the 30 s poll (one overwritten text view).
+     */
+    fun runs(repo: String, workflow: String? = null, limit: Int = 40, branch: String? = null, cached: Boolean = false, poll: Boolean = false): CiRuns {
         session()
         return Ci.parseRuns(svc.call("ci.runs", args("repo" to repo, "workflow" to workflow?.takeIf { it.isNotBlank() }, "limit" to limit,
-            "branch" to branch?.takeIf { it.isNotBlank() })).resultObject())
+            "branch" to branch?.takeIf { it.isNotBlank() }, "cached" to (if (cached) true else null), "poll" to (if (poll) true else null))).resultObject())
     }
+
+    /** `ci.workflows`: the workflow files of the checkout [repo] names (empty for a repository with no checkout here). */
+    fun workflows(repo: String): List<CiWorkflow> = try {
+        Ci.parseWorkflows(svc.call("ci.workflows", args("repo" to repo)).resultObject())
+    } catch (e: DaemonException) { emptyList() }
 
     /** `ci.jobs`: the jobs of [run] with their steps. A finished run is answered from the kept copy (no network); [attempt] keeps a rerun apart from its first attempt. */
     fun jobs(repo: String, run: String, attempt: Int? = null, refresh: Boolean = false): CiRunDetail {
@@ -128,12 +136,15 @@ class CiOps(private val project: Project) {
     }
 
     /**
-     * M5.4: `ci.local` of one job of a workflow of the checkout [dir] (an absolute directory: act runs in it) as a process; the console is act's output
-     * (`logs.line` events), the end line is the conclusion and the text file the daemon kept. [image] is the runner image of `ubuntu-latest` (default: the daemon's).
+     * `ci.local` of [workflow] of the checkout [repo] (a repository name or an absolute directory) as a process: the console is act's output (`logs.line`
+     * events), the end line is the conclusion. [job] null runs every job; [event] and [inputs] as the Run Locally dialog decided. `onEvent` hears `ci.run`
+     * and `ci.step`.
      */
-    fun local(dir: String, workflow: String, job: String, image: String? = null): DaemonOpProcessHandler {
+    fun local(repo: String, workflow: String, job: String?, event: String? = null, inputs: Map<String, String> = emptyMap(), image: String? = null): DaemonOpProcessHandler {
         session()
-        return DaemonOpProcessHandler(project, "ci.local", args("repo" to dir, "workflow" to workflow, "job" to job, "image" to image), "ci local $workflow:$job", CiSummary::local)
+        return DaemonOpProcessHandler(project, "ci.local",
+            args("repo" to repo, "workflow" to workflow, "job" to job, "event" to event, "input" to inputs.map { "${it.key}=${it.value}" }.takeIf { it.isNotEmpty() }, "image" to image),
+            "ci local ${workflow.substringAfterLast('/')}" + (job?.let { ":$it" } ?: ""), CiSummary::local)
     }
 
     companion object {
@@ -162,7 +173,7 @@ object CiSummary {
     fun local(r: JsonObject): Pair<List<String>, Int> {
         val exit = r.get("exit")?.takeIf { it.isJsonPrimitive }?.asInt
         val conclusion = r.str("conclusion") ?: "?"
-        val lines = listOf("-- ci.local: $conclusion" + (exit?.let { " (exit $it)" } ?: "")) + listOfNotNull(r.str("path")?.let { "-- text: $it" })
+        val lines = listOf("-- ci.local: ${r.str("run")?.let { "$it " } ?: ""}$conclusion" + (exit?.let { " (exit $it)" } ?: "")) + listOfNotNull(r.str("path")?.let { "-- text: $it" })
         return lines to (exit ?: 130)
     }
 }

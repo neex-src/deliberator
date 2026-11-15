@@ -55,6 +55,9 @@ data class CiSelection(val repo: String, val run: CiRun, val job: CiJob? = null,
     }
 }
 
+/** A workflow row of the tree: the repository and the workflow file (null file: a workflow only known from its runs). */
+data class CiWorkflowSelection(val repo: String, val name: String, val workflow: CiWorkflow?)
+
 /** A node's user object: a stable [key] (the tree reconciles by it, so a refresh keeps expansion and selection) and the way it takes a newer copy of itself. */
 internal interface CiObj {
     val key: String
@@ -63,17 +66,18 @@ internal interface CiObj {
 
 internal class RepoNode(val name: String, val typed: Boolean) : CiObj {
     var runs: CiRuns? = null; var error: String? = null; var loading = false; var shown = false; var archiving = false
+    var workflows: List<CiWorkflow> = emptyList(); var askedCached = false
     override val key get() = "r:$name"
     override fun adopt(o: CiObj) {}
     override fun toString() = name
 }
-internal class WorkflowNode(val name: String, var count: Int) : CiObj {
+internal class WorkflowNode(val repo: String, val name: String, var count: Int, var wf: CiWorkflow? = null) : CiObj {
     override val key get() = "w:$name"
-    override fun adopt(o: CiObj) { count = (o as WorkflowNode).count }
+    override fun adopt(o: CiObj) { o as WorkflowNode; count = o.count; wf = o.wf }
     override fun toString() = "$name ($count)"
 }
 internal class RunNode(val repo: String, var run: CiRun) : CiObj {
-    var detail: CiRunDetail? = null; var loading = false; var opened = false; val autoOpened = HashSet<String>()
+    var detail: CiRunDetail? = null; var loading = false; var opened = false; val autoOpened = HashSet<String>(); var lastPoll = 0L
     override val key get() = "u:${run.id}"
     override fun adopt(o: CiObj) { run = (o as RunNode).run }
     override fun toString() = run.label()
@@ -111,6 +115,8 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
     private var archiveNote = ""
     private var baseNote = ""
     private val timer = Timer(POLL_MS) { tick(false) }
+    private val runsTimer = Timer(RUNS_POLL_MS) { pollRuns(false) }
+    private var revealRun: Pair<String, String>? = null
 
     init {
         tree.isRootVisible = false
@@ -126,15 +132,17 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
                 }
                 when (val u = (value as? DefaultMutableTreeNode)?.userObject) {
                     is RepoNode -> { append(u.name, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES); if (u.typed) append("   added here", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
-                    is WorkflowNode -> append(u.toString(), SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                    is WorkflowNode -> { append(u.toString(), SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES); if (u.wf != null && u.count == 0) append("   no runs yet", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
                     is RunNode -> {
                         val st = Ci.state(u.run.status, u.run.conclusion)
                         icon = iconOf(st)
-                        append("#${u.run.number ?: u.run.id}  ", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                        append("${u.run.tag}  ", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
                         append(u.run.result, stateLook(st))
                         append("  " + listOfNotNull(u.run.event, u.run.branch, u.run.sha?.take(7)).joinToString(" "), SimpleTextAttributes.GRAYED_ATTRIBUTES)
                         u.run.title?.let { append("  $it") }
                         u.run.durationS(now)?.let { append("  ${Ci.fmt(it)}", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
+                        // what a deploy did with this commit (piece 04's notes), grey
+                        if (u.run.notes.isNotEmpty()) append("  " + u.run.notes.joinToString("; "), SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                     }
                     is JobNode -> {
                         icon = iconOf(u.job.state)
@@ -181,6 +189,8 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         WorkOps.getInstance(project).addListener(this) { ApplicationManager.getApplication().invokeLater({ rebuildRepos() }, ModalityState.any()) }
         rebuildRepos()
         timer.start()
+        runsTimer.start()
+        INSTANCES[project] = this
     }
 
     private fun iconOf(s: CiState) = when (s) {
@@ -253,25 +263,37 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
 
     // runs -----------------------------------------------------------------------------------------------------
 
-    /** Loads the runs of [repo] off the EDT and shows them (the repository's node is found by name); [user] false: no archive afterwards. */
+    /**
+     * Loads the runs of [repo] off the EDT and shows them (the repository's node is found by name). The first time the LAST KNOWN listing is shown at once with its
+     * age (01a: the tab is never empty while GitHub is asked), then the answer replaces it. [user] false is the poll: no archive afterwards, one overwritten text view.
+     */
     fun load(repo: String, user: Boolean = true) {
         val rn = repoNode(repo)?.userObject as? RepoNode
         if (rn != null) { if (rn.loading) return; rn.loading = true }
         if (user) { baseNote = "ci.runs $repo ..."; status.text = statusLine() }
         ApplicationManager.getApplication().executeOnPooledThread {
+            val ops = CiOps.getInstance(project)
+            val wfs = try { ops.workflows(repo) } catch (e: Exception) { emptyList() }
+            if (rn != null && !rn.askedCached) {
+                rn.askedCached = true
+                val kept = try { ops.runs(repo, cached = true) } catch (e: Exception) { null }
+                if (kept != null && kept.rows.isNotEmpty())
+                    ApplicationManager.getApplication().invokeLater({ show(repo, kept, null, user, wfs, final = false) }, ModalityState.any())
+            }
             var runs: CiRuns? = null
             var err: String? = null
-            try { runs = CiOps.getInstance(project).runs(repo) } catch (e: DaemonException) { err = e.message + (e.hint?.let { " ($it)" } ?: "") }
-            ApplicationManager.getApplication().invokeLater({ show(repo, runs, err, user) }, ModalityState.any())
+            try { runs = ops.runs(repo, poll = !user) } catch (e: DaemonException) { err = e.message + (e.hint?.let { " ($it)" } ?: "") }
+            ApplicationManager.getApplication().invokeLater({ show(repo, runs, err, user, wfs) }, ModalityState.any())
         }
     }
 
-    /** Renders an answer (or an error) for [repo], reconciling the nodes; the tree keeps what is expanded and selected. */
-    internal fun show(repo: String, runs: CiRuns?, error: String?, user: Boolean = true) {
+    /** Renders an answer (or an error) for [repo], reconciling the nodes; the tree keeps what is expanded and selected. [final] false: a kept listing shown while the answer comes. */
+    internal fun show(repo: String, runs: CiRuns?, error: String?, user: Boolean = true, workflows: List<CiWorkflow>? = null, final: Boolean = true) {
         val n = repoNode(repo) ?: return
         val rn = n.userObject as RepoNode
-        rn.loading = false
+        if (final) rn.loading = false
         rn.error = error
+        if (workflows != null) rn.workflows = workflows
         if (runs == null && rn.runs != null) {
             // a refresh that failed (no network, no token): the rows already shown stay, the reason goes to the status line
             baseNote = "$repo: refresh failed: $error  ·  the rows are from the last answer"
@@ -280,29 +302,59 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         }
         rn.runs = runs
         if (runs != null) loaded[repo] = runs else loaded.remove(repo)
-        if (runs != null) fillRepo(n, runs) else reconcile(n, listOf(NoteNode(error ?: "failed", true)))
+        if (runs != null) fillRepo(n, runs) else if (rn.workflows.isNotEmpty()) fillRepo(n, CiRuns(repo, null, 0, emptyList())) else reconcile(n, listOf(NoteNode(error ?: "failed", true)))
         val first = !rn.shown
         rn.shown = true
         if (first) tree.expandPath(TreePath(n.path))
-        baseNote = if (runs != null) "$repo: ${runs.rows.size} of ${runs.total} runs" + (runs.path?.let { "  ·  text: Open Runs Text" } ?: "") else "$repo: $error"
+        baseNote = if (runs != null) runsNote(repo, runs) else "$repo: $error"
         status.text = statusLine()
-        if (runs != null && user) archive(repo)
+        revealRun?.let { (r, id) -> if (r == repo) findRun(repo, id)?.let { node -> revealRun = null; tree.expandPath(TreePath(node.path)); tree.scrollPathToVisible(TreePath(node.path)) } }
+        if (runs != null && user && final && runs.source != "local") archive(repo)
+    }
+
+    /** The status line of a listing: how many, where they came from (a kept listing says how old it is), what went wrong, the rate limit when it is low. */
+    private fun runsNote(repo: String, runs: CiRuns): String {
+        val base = "$repo: ${runs.rows.size} of ${runs.total} runs"
+        val src = when {
+            runs.stale -> "  ·  GitHub did not answer (${runs.error}): the last known runs, ${runs.ageS?.let { Ci.age(it) } ?: "age unknown"}"
+            runs.source == "kept" -> "  ·  the last known runs, ${runs.ageS?.let { Ci.age(it) } ?: "age unknown"}"
+            runs.source == "local" -> "  ·  local runs only"
+            else -> ""
+        }
+        val rate = runs.rateRemaining?.takeIf { it < RATE_LOW }?.let { "  ·  GitHub rate limit: $it requests left" } ?: ""
+        return base + src + rate + (runs.path?.let { "  ·  text: Open Runs Text" } ?: "")
     }
 
     private fun fillRepo(n: DefaultMutableTreeNode, runs: CiRuns) {
-        if (runs.rows.isEmpty()) { reconcile(n, listOf(NoteNode("no runs", false))); return }
-        val repo = (n.userObject as RepoNode).name
+        val rnode = n.userObject as RepoNode
+        val repo = rnode.name
         val byWf = runs.byWorkflow()
-        reconcile(n, byWf.map { (wf, rows) -> WorkflowNode(wf, rows.size) }) { w -> tree.expandPath(TreePath(w.path)) }
-        for ((wf, rows) in byWf) {
-            val w = children(n).first { (it.userObject as? WorkflowNode)?.name == wf }
+        // the workflows of the checkout come first (also those with no run yet), then the ones only the runs know
+        val names = (rnode.workflows.map { it.name } + byWf.keys).distinct()
+        if (names.isEmpty()) { reconcile(n, listOf(NoteNode("no runs", false))); return }
+        reconcile(n, names.map { nm -> WorkflowNode(repo, nm, byWf[nm]?.size ?: 0, rnode.workflows.firstOrNull { it.name == nm }) }) { w -> tree.expandPath(TreePath(w.path)) }
+        for (nm in names) {
+            val rows = byWf[nm] ?: emptyList()
+            val w = children(n).first { (it.userObject as? WorkflowNode)?.name == nm }
             reconcile(w, rows.map { RunNode(repo, it) }) { r -> model.insertNodeInto(DefaultMutableTreeNode(NoteNode("loading jobs...", false)), r, 0) }
             // a run whose state moved reloads its jobs (a loaded one only: the others load when expanded)
-            for (rnode in children(w)) {
-                val ro = rnode.userObject as RunNode
+            for (rn in children(w)) {
+                val ro = rn.userObject as RunNode
                 val d = ro.detail
-                if (d != null && !ro.loading && (d.run.status != ro.run.status || d.run.conclusion != ro.run.conclusion || d.run.attempt != ro.run.attempt)) loadJobs(rnode)
+                if (d != null && !ro.loading && (d.run.status != ro.run.status || d.run.conclusion != ro.run.conclusion || d.run.attempt != ro.run.attempt)) loadJobs(rn)
             }
+        }
+    }
+
+    /** Opens (and scrolls to) the row of run [runId] as soon as a listing has it: the run just started from this tab. */
+    fun reveal(repo: String, runId: String) { revealRun = repo to runId; load(repo, false) }
+
+    /** 01a: the poll of the runs: every expanded repository asks for its newest runs again (one request each), whatever its rows say. */
+    internal fun pollRuns(force: Boolean) {
+        if (!force && !isShowing) return
+        for (repoNode in children(root)) {
+            val rn = repoNode.userObject as RepoNode
+            if (rn.runs != null && tree.isExpanded(TreePath(repoNode.path))) load(rn.name, false)
         }
     }
 
@@ -313,6 +365,7 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         val ro = node.userObject as? RunNode ?: return
         if (ro.loading) return
         ro.loading = true
+        ro.lastPoll = System.currentTimeMillis()
         val repo = ro.repo
         val id = ro.run.id
         val attempt = ro.run.attempt
@@ -336,21 +389,21 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         val expanded = tree.isExpanded(TreePath(node.path))
         val firstOpen = expanded && !ro.opened
         if (expanded) ro.opened = true
-        if (wasRunning && !ro.run.running) archive(repo)
+        if (wasRunning && !ro.run.running && !ro.run.local) archive(repo)
         val jobs = d.jobs
         if (jobs.isEmpty()) { reconcile(node, listOf(NoteNode("no jobs", false))); return }
         val firstRedJob = jobs.firstOrNull { it.state == CiState.RED }?.id
         reconcile(node, jobs.map { JobNode(repo, ro.run, it, d) })
-        // a job that runs (or the first red one) is opened once, when the run is open: the running step is in view; a run row the user has not opened is not unfolded
-        if (expanded) for (j in children(node)) {
-            val jo = j.userObject as JobNode
-            if ((jo.job.state == CiState.RUNNING || jo.job.id == firstRedJob) && ro.autoOpened.add(jo.job.id)) tree.expandPath(TreePath(j.path))
-        }
         var firstRed: DefaultMutableTreeNode? = null
         for (j in children(node)) {
             val jo = j.userObject as JobNode
             reconcile(j, jo.job.steps.map { StepNode(repo, ro.run, jo.job, it, d) })
             if (firstRed == null && jo.job.state == CiState.RED) firstRed = children(j).firstOrNull { (it.userObject as StepNode).step.state == CiState.RED }
+        }
+        // (after its steps are there: a node with no children cannot expand) a job that runs (or the first red one) is opened once, when the run is open: the running step is in view; a run row the user has not opened is not unfolded
+        if (expanded) for (j in children(node)) {
+            val jo = j.userObject as JobNode
+            if ((jo.job.state == CiState.RUNNING || jo.job.id == firstRedJob) && ro.autoOpened.add(jo.job.id)) tree.expandPath(TreePath(j.path))
         }
         // a red run opens down to its first failed step, once: the user's own expansion is never undone
         if (firstOpen) firstRed?.let { s -> tree.expandPath(TreePath((s.parent as DefaultMutableTreeNode).path)); tree.scrollPathToVisible(TreePath(s.path)) }
@@ -384,7 +437,9 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         for (repoNode in children(root)) {
             if ((repoNode.userObject as RepoNode).runs == null || !tree.isExpanded(TreePath(repoNode.path))) continue
             for (wf in children(repoNode)) for (runNode in children(wf)) {
-                if ((runNode.userObject as? RunNode)?.run?.running == true) loadJobs(runNode)
+                val ro = runNode.userObject as? RunNode ?: continue
+                val every = if (ro.run.local) LOCAL_POLL_MS else GITHUB_RUN_POLL_MS
+                if (ro.run.running && (force || System.currentTimeMillis() - ro.lastPoll >= every)) loadJobs(runNode)
             }
         }
     }
@@ -427,6 +482,12 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
 
     fun select(repo: String, runId: String, vararg rest: String) { pathTo(repo, runId, *rest)?.let { tree.selectionPath = it } }
 
+    /** Selects the workflow row [name] of [repo] (tests and the driving of the IDE). */
+    fun selectWorkflow(repo: String, name: String) {
+        val r = repoNode(repo) ?: return
+        children(r).firstOrNull { (it.userObject as? WorkflowNode)?.name == name }?.let { tree.selectionPath = TreePath(it.path) }
+    }
+
     private fun pathTo(repo: String, runId: String, vararg rest: String): TreePath? {
         var n = findRun(repo, runId) ?: return null
         for (k in rest) n = children(n).firstOrNull { (it.userObject as? CiObj)?.key == k }
@@ -454,17 +515,31 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         else -> null
     }
 
+    fun workflowSelection(): CiWorkflowSelection? = (tree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject.let { u ->
+        (u as? WorkflowNode)?.let { CiWorkflowSelection(it.repo, it.name, it.wf) }
+    }
+
     override fun uiDataSnapshot(sink: DataSink) {
         sink[SELECTION] = selection()
+        sink[WORKFLOW] = workflowSelection()
         sink[PANEL] = this
     }
 
-    override fun dispose() { timer.stop() }
+    override fun dispose() { timer.stop(); runsTimer.stop(); INSTANCES.remove(project, this) }
 
     companion object {
         const val KEY = "deliberator.ci.repos"
-        const val POLL_MS = 5000
+        const val POLL_MS = 2000
+        /** A running GitHub run is asked again at most this often (the API's rate limit), a local one every [LOCAL_POLL_MS]. */
+        const val GITHUB_RUN_POLL_MS = 5000L
+        const val LOCAL_POLL_MS = 1500L
+        /** 01a: the newest runs of every visible repository are asked again this often (one request per repository). */
+        const val RUNS_POLL_MS = 30000
+        const val RATE_LOW = 200
+        private val INSTANCES = java.util.concurrent.ConcurrentHashMap<Project, CiPanel>()
+        fun of(project: Project): CiPanel? = INSTANCES[project]
         val SELECTION: DataKey<CiSelection> = DataKey.create("deliberator.ci.selection")
         val PANEL: DataKey<CiPanel> = DataKey.create("deliberator.ci.panel")
+        val WORKFLOW: DataKey<CiWorkflowSelection> = DataKey.create("deliberator.ci.workflow")
     }
 }

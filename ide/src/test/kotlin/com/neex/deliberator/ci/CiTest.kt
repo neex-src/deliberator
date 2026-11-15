@@ -231,6 +231,52 @@ class CiTest : BasePlatformTestCase() {
         }
     }
 
+    private fun closeTheNetwork() {
+        val ws = Path.of(bg { WorkspaceService.getInstance(project).call("workspace.show").resultObject().get("path").asString })
+        Files.writeString(ws.resolve("github.edn"), "{:token-source :none :api \"http://127.0.0.1:1\"}\n")
+    }
+
+    fun testTheLastKnownRunsShowAtOnceWithTheirAgeWhenGithubCannotBeReached() {
+        bg { ops.runs(repo) }                              // an answer from GitHub: kept on disk
+        closeTheNetwork()
+        val r = bg { ops.runs(repo, cached = true) }
+        assertEquals("kept", r.source)
+        assertEquals(listOf("210", "200", "195", "190"), r.rows.map { it.id })
+        assertNotNull(r.ageS)
+        val stale = bg { ops.runs(repo) }
+        assertTrue(stale.stale)
+        assertTrue(stale.error!!, stale.error!!.contains("cannot reach"))
+        val panel = CiPanel(project)
+        try {
+            panel.addRepo(repo)
+            waitTree(panel, "the kept runs are shown") { panel.lines().any { it.contains("#20") } }
+            wait("the status line says they are the last known ones") { panel.statusText().contains("last known runs") }
+            assertTrue(panel.statusText(), panel.statusText().contains("GitHub did not answer") || panel.statusText().contains("last known"))
+        } finally {
+            com.intellij.openapi.util.Disposer.dispose(panel)
+            com.intellij.ide.util.PropertiesComponent.getInstance(project).unsetValue(CiPanel.KEY)
+        }
+    }
+
+    fun testANewRunAppearsByItselfAndALowRateLimitIsInTheStatusLine() {
+        val panel = CiPanel(project)
+        try {
+            panel.addRepo(repo)
+            wait("the runs are shown") { panel.lines().any { it.contains("#21") } }
+            assertFalse(panel.lines().any { it.contains("#22") })
+            val expanded = panel.expandedKeys()
+            github.newRun = true
+            github.rateRemaining = 37
+            panel.pollRuns(true)                          // what the 30 s timer does while the tab shows
+            waitTree(panel, "the new run is in the tree without a refresh") { panel.lines().any { it.contains("#22") && it.contains("pushed meanwhile") } }
+            assertTrue(panel.statusText(), panel.statusText().contains("rate limit: 37"))
+            assertTrue("nothing folded", panel.expandedKeys().containsAll(expanded))
+        } finally {
+            com.intellij.openapi.util.Disposer.dispose(panel)
+            com.intellij.ide.util.PropertiesComponent.getInstance(project).unsetValue(CiPanel.KEY)
+        }
+    }
+
     private fun updated(place: String, file: com.intellij.openapi.vfs.VirtualFile?): com.intellij.openapi.actionSystem.Presentation {
         val a = ActionManager.getInstance().getAction("deliberator.ci.local")
         val dc = com.intellij.openapi.actionSystem.impl.SimpleDataContext.builder()

@@ -90,13 +90,14 @@
     worktree.list repo ws                          -> [{repo name branch head path dirty missing}]
     worktree.remove repo* name* force ws           -> {repo name path branch branch-kept}   (the branch stays)
     logs.fetch target* env since for follow filter session ws -> {path lines bytes sha target source [follow]}   [logs.line]
-    ci.runs repo* workflow branch status limit head-sha session ws -> {path count total rows repo workflow auth rate-remaining raw}   (M5.2: GitHub Actions runs as sessions/<k>/ci/runs-*.txt; read-only)
+    ci.runs repo* workflow branch status limit head-sha cached poll session ws -> {path count total rows repo workflow auth rate-remaining raw source age-s stale error local-count}   (M5.2 + piece 01a and 03: GitHub Actions runs and the LOCAL runs (origin local, id local-<n>) as sessions/<k>/ci/runs-*.txt; the last GitHub listing is kept, cached answers it at once; read-only)
+    ci.workflows repo* worktree ws                -> {dir repo workflows [{file path name events inputs jobs}]}   (piece 03: the workflow files of a checkout, read with a YAML parser)
     ci.jobs repo* run* attempt refresh session ws  -> {repo run attempt final source kept-at age-s run-row jobs [{id name status conclusion started-at completed-at duration-s url runner log steps [{number name status conclusion started-at completed-at duration-s log lines exact}]}] path dir raw auth}   (piece 01: a run's jobs and steps; a finished run is kept at workspace level and served with no network)
     ci.archive repo* limit session ws              -> {repo limit checked new-runs new-logs already failed path}   (keeps the jobs and logs of the newest finished runs that are not kept yet)
     ci.log run* job step repo session ws           -> {path lines bytes sha repo run job step conclusion other-failed raw auth source kept kept-at age-s}   (a job's log, or one step's lines, as text under sessions/<k>/ci/; a finished run's log is kept)
     ci.tail run* job repo interval-ms session ws   -> {path lines bytes sha target source follow repo run job}   [logs.line]   (a running job: step transitions, then its log)
     ci.diff run* job step repo against normalise session ws -> {path diff equal red green added removed normalised}   (M5.3: the failed job's log against the last green run's, normalised)
-    ci.local repo* workflow* job* worktree event env image session ws -> {path lines bytes sha target source follow exit conclusion dir workflow job event image docker-host endpoint}   [logs.line]   (M5.4: one job of a workflow with act on the runtime's Podman, Floci injected; a red job is a result)
+    ci.local repo* workflow* job all worktree event input env image session ws -> {run number repo conclusion exit jobs summary record path lines dir workflow job event image docker-host endpoint}   [logs.line ci.run ci.step]   (piece 03: a workflow (all jobs) or one job with act on the runtime's Podman, Floci injected, recorded as the run local-<n>; a red run is a result)
     pr.open repo* n* github remote session ws     -> {repo n ref remote head-sha worktree{name path branch head created moved} github pr comments{path inline reviews conversation} checks{path count by-result rows}}   (M5.5: refs/pull/<n>/head into worktrees/<repo>/pr-<n>; reviews and comments as sessions/<k>/pr/*.txt)
     logs.insights groups* query* env since until name budget-ms limit session ws -> {query-id status bytes-scanned statistics rows path sha query-file raw}   [line]   (M4.3)
     logs.linkable path* ws                         -> {path linkable kind}   (is this file one whose places can name code: a CI log or diff, a kept CI log, a run's output; the IDE asks, it does not guess from the path)
@@ -131,6 +132,7 @@
             [deliberator.awsdiscover :as awsdiscover]
             [deliberator.ci :as ci]
             [deliberator.cilocal :as cilocal]
+            [deliberator.cilocalrun :as cilocalrun]
             [deliberator.hcl :as hcl]
             [deliberator.ecstarget :as ecstarget]
             [deliberator.tfdrift :as tfdrift]
@@ -974,8 +976,8 @@
                        :follow follow :emit! (:emit! ctx) :cancelled? (:cancelled? ctx))
       (finally (when counter (swap! counter dec))))))
 
-(defn- ci-runs [_ {:keys [repo workflow branch status limit head-sha] :as args}]
-  (ci/runs! (ws-of args) {:repo repo :workflow workflow :branch branch :status status :limit limit :head-sha head-sha
+(defn- ci-runs [_ {:keys [repo workflow branch status limit head-sha cached poll] :as args}]
+  (ci/runs! (ws-of args) {:repo repo :workflow workflow :branch branch :status status :limit limit :head-sha head-sha :cached cached :poll poll
                           :session (session-key (ws-of args) args)}))
 (defn- ci-jobs [_ {:keys [run repo attempt refresh] :as args}]
   (ci/jobs! (ws-of args) {:repo repo :run run :attempt attempt :refresh refresh :session (session-key (ws-of args) args)}))
@@ -991,10 +993,20 @@
          (finally (when counter (swap! counter dec))))))
 (defn- ci-diff [_ {:keys [run job repo against normalise step] :as args}]
   (ci/diff! (ws-of args) {:repo repo :run run :job job :step step :against against :normalise normalise :session (session-key (ws-of args) args)}))
-(defn- ci-local [ctx {:keys [repo workflow job worktree event env image] :as args}]
+(defn- parse-inputs
+  "`--input k=v` (a list of \"k=v\") or an object -> {name value}."
+  [x]
+  (cond (map? x) (into {} (map (fn [[k v]] [(name k) (str v)])) x)
+        (sequential? x) (into {} (for [kv x :let [[k v] (str/split (str kv) #"=" 2)]] [k (or v "")]))
+        (string? x) (parse-inputs (str/split x #","))
+        :else {}))
+(defn- ci-workflows [_ {:keys [repo worktree] :as args}]
+  (let [ws (ws-of args) dir (cilocal/resolve-dir ws repo worktree)]
+    {:dir dir :repo (cilocalrun/repo-key-of-dir ws repo dir) :workflows (cilocal/workflows dir)}))
+(defn- ci-local [ctx {:keys [repo workflow job all worktree event env image input] :as args}]
   (let [ws (ws-of args) counter (:follows (:daemon ctx))]
     (when counter (swap! counter inc))      ; a running pipeline is work in flight, like a follow
-    (try (cilocal/run! ws {:repo repo :workflow workflow :job job :worktree worktree :event event :env env :image image
+    (try (cilocal/run! ws {:repo repo :workflow workflow :job (when-not all job) :worktree worktree :event event :env env :image image :inputs (parse-inputs input)
                            :session (session-key ws args) :emit! (:emit! ctx) :cancelled? (:cancelled? ctx)})
          (finally (when counter (swap! counter dec))))))
 (defn- pr-open [ctx {:keys [repo n github remote] :as args}]
@@ -1493,14 +1505,20 @@
                                        :name {:type :string :required true :doc "worktree name from worktree.list"}
                                        :force {:type :bool :doc "remove even with uncommitted changes"})}
    "ci.runs" {:fn ci-runs :class :mutate
-              :doc "The runs of a GitHub Actions workflow (or of the repository) as text under the session's ci/ (runs-<repo>-<workflow>-<ts>.txt, one line per run); the raw API response is persisted first. Read-only against GitHub; the token comes from github.edn, GITHUB_TOKEN, GH_TOKEN or gh auth token and is never stored."
+              :doc "The runs of a GitHub Actions workflow (or of the repository), and the LOCAL runs of the repository (origin local, id local-<n>), newest first, as text under the session's ci/ (runs-<repo>-<workflow>-<ts>.txt, one line per run); each row carries what a deploy did with its commit (notes). The raw API response is persisted first and the last listing is KEPT (cached answers it at once with its age; GitHub unreachable answers it too, stale). Read-only against GitHub; the token comes from github.edn, GITHUB_TOKEN, GH_TOKEN or gh auth token and is never stored."
               :args (ws-schema :repo {:type :string :required true :doc "owner/name, a github url, or a cloned repository's name"}
                                :workflow {:type :string :positional true :doc "workflow name, file name (ci.yml) or id; default all workflows"}
                                :branch {:type :string :doc "only runs of this branch"}
                                :status {:type :string :doc "completed, in_progress, queued, or a conclusion such as failure or success"}
                                :limit {:type :int :default 20 :doc "at most this many runs (max 100)"}
                                :head-sha {:type :string :doc "only runs of this commit"}
+                               :cached {:type :bool :doc "answer the kept listing and the local runs at once, no request"}
+                               :poll {:type :bool :doc "a poll of the IDE: one overwritten text view instead of a stamped file"}
                                :session {:type :string :doc "session key; default the current session"})}
+   "ci.workflows" {:fn ci-workflows :class :read
+                   :doc "The workflow files of a checkout (.github/workflows, and the estate's nested one) read with a YAML parser: name, events, workflow_dispatch inputs (type, default, options, required) and the jobs with their needs and stage. What Run Locally offers."
+                   :args (ws-schema :repo {:type :string :required true :doc "an absolute directory, or the name of a repository from repo.list"}
+                                    :worktree {:type :string :doc "a worktree of the repository"})}
    "ci.jobs" {:fn ci-jobs :class :mutate
               :doc "The jobs of a CI run and each job's steps (number, name, status, conclusion, started, completed, duration) as data, and as a text view under sessions/<k>/ci/jobs-<repo>-<run>.txt (one line per job and per step). A run in progress answers what is known now and is never kept; a FINISHED run is fetched once and kept under the workspace's ci/ directory, then answered from the kept copy with no network and no token (kept-at and age-s say when it was fetched). refresh asks GitHub again. Read-only against GitHub."
               :args (ws-schema :repo {:type :string :required true :doc "owner/name, a github url, or a cloned repository's name"}
@@ -1538,13 +1556,15 @@
                                :normalise {:type :bool :default true :doc "remove what changes from run to run (false: compare the lines as they are)"}
                                :session {:type :string :doc "session key; default the current session"})}
    "ci.local" {:fn ci-local :class :mutate
-               :doc "Runs one job of a GitHub Actions workflow locally with act on the runtime's Podman (the job's needs first): the local environment's Floci endpoint, fake keys and region are injected, nothing else of AWS. Output is streamed as logs.line events and kept as one text file under sessions/<k>/ci/ (raw blob adopted at the end). A job that fails is a result (conclusion failure, exit), not an error. The estate's pipeline: dlb ci local <repo> estate/.github/workflows/deploy.yml deploy."
-               :events ["logs.line"]
+               :doc "Runs a GitHub Actions workflow locally with act on the runtime's Podman: every job in needs order, or one job (and what it needs). The local environment's Floci endpoint, fake keys and region are injected, nothing else of AWS, no GitHub token; secrets and variables come from the workspace's ci-local.edn or are local-<NAME>. It is a RUN (local-<n>, recorded at workspace level while it goes, jobs and steps as ci.jobs answers them, listed by ci.runs, opened by ci.jobs, ci.log, ci.diff); the console is streamed as logs.line, ci.run and ci.step events say where it is. A run that fails is a result (conclusion failure), not an error. A deploy ends the log with what the ECS-bound services now run. The estate's pipeline: dlb ci local <repo> estate/.github/workflows/deploy.yml."
+               :events ["logs.line" "ci.run" "ci.step"]
                :args (ws-schema :repo {:type :string :required true :doc "an absolute directory, or the name of a repository from repo.list (a bare clone needs worktree)"}
                                 :workflow {:type :string :required true :doc "workflow file: a path relative to the directory, or a name under .github/workflows/"}
-                                :job {:type :string :required true :doc "the job to run"}
+                                :job {:type :string :positional true :doc "only this job (and the jobs it needs); default every job"}
+                                :all {:type :bool :doc "the whole workflow, whatever job says"}
                                 :worktree {:type :string :doc "a worktree of the repository (worktree.list) to run in"}
-                                :event {:type :string :default "workflow_dispatch" :doc "the event act simulates"}
+                                :event {:type :string :doc "workflow_dispatch (default when the workflow listens to it), push or pull_request; the payload is built from the checkout's branch and head"}
+                                :input {:type :strings :doc "workflow_dispatch inputs as name=value (the flag may repeat)"}
                                 :env {:type :string :default "local" :doc "a local environment; any other kind is refused"}
                                 :image {:type :string :doc "runner image of ubuntu-latest; default catthehacker/ubuntu:act-22.04"}
                                 :session {:type :string :doc "session key; default the current session"})}

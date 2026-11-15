@@ -14,7 +14,12 @@ data class CiRun(
     val id: String, val number: String?, val workflow: String, val title: String?, val branch: String?, val sha: String?,
     val status: String, val conclusion: String?, val createdAt: String?, val url: String?,
     val event: String? = null, val attempt: Int = 1, val origin: String = "github", val startedAt: String? = null, val updatedAt: String? = null,
+    val notes: List<String> = emptyList(),
 ) {
+    /** A run of this machine (`ci.local`): `local #3`, no page on a CI system, cancellable while it runs. */
+    val local: Boolean get() = origin == "local"
+    val tag: String get() = (if (local) "local #" else "#") + (number ?: id)
+
     val running: Boolean get() = status != "completed"
     val red: Boolean get() = conclusion in RED
     val result: String get() = conclusion ?: status
@@ -28,7 +33,7 @@ data class CiRun(
 
     /** The row's text: `#20  failure  push feat 9f3a2c1  wip  2026-10-10 10:00  3m 20s`. */
     fun label(now: java.time.Instant = java.time.Instant.now()): String =
-        "#${number ?: id}  $result  ${listOfNotNull(event, branch, sha?.take(7)).joinToString(" ")}  ${title ?: ""}  ${createdAt?.take(16)?.replace('T', ' ') ?: ""}  ${durationS(now)?.let { Ci.fmt(it) } ?: ""}"
+        "$tag  $result  ${listOfNotNull(event, branch, sha?.take(7)).joinToString(" ")}  ${title ?: ""}  ${createdAt?.take(16)?.replace('T', ' ') ?: ""}  ${durationS(now)?.let { Ci.fmt(it) } ?: ""}${if (notes.isEmpty()) "" else "  [" + notes.joinToString("; ") + "]"}"
             .replace(Regex("\\s{3,}"), "  ").trim()
 
     companion object {
@@ -74,10 +79,23 @@ data class CiRunDetail(val repo: String, val run: CiRun, val attempt: Int, val f
 }
 
 /** The answer of `ci.runs`: [path] is the text file the daemon wrote (one line per run), [total] what GitHub knows. */
-data class CiRuns(val repo: String, val path: String?, val total: Int, val rows: List<CiRun>) {
+/** [source] says where the rows came from (`fetched`, `kept` = the last known listing with its [ageS], `local` = only this machine's runs); [stale] a refresh that failed. */
+data class CiRuns(val repo: String, val path: String?, val total: Int, val rows: List<CiRun>, val source: String = "fetched", val ageS: Long? = null,
+                  val stale: Boolean = false, val error: String? = null, val rateRemaining: Int? = null) {
     /** The rows grouped by workflow name, in the order GitHub listed them (newest first). */
     fun byWorkflow(): Map<String, List<CiRun>> = rows.groupBy { it.workflow }
 }
+
+/** A dispatch input of a workflow (`on.workflow_dispatch.inputs`): what Run Locally asks for. */
+data class CiWfInput(val name: String, val type: String?, val default: String?, val description: String?, val options: List<String>, val required: Boolean)
+
+data class CiWfJob(val id: String, val name: String, val needs: List<String>, val stage: Int)
+
+/** A workflow file of a checkout as `ci.workflows` reads it (before any run exists). [error] when the file did not parse. */
+data class CiWorkflow(val file: String, val path: String, val name: String, val events: List<String>, val inputs: List<CiWfInput>, val jobs: List<CiWfJob>, val error: String? = null)
+
+/** What the Run Locally dialog decided: [job] null = every job, [inputs] name to value. */
+data class CiLocalSpec(val event: String?, val job: String?, val inputs: Map<String, String>)
 
 /** What the view does when a run is opened with Enter or a double-click (M5.3: a red run is a diff against the last green one). */
 enum class CiDefault { DIFF, FOLLOW, LOG }
@@ -97,7 +115,7 @@ object Ci {
 
     fun runOf(o: JsonObject) = CiRun(o.str("id") ?: "?", o.str("number"), o.str("workflow") ?: "(workflow)", o.str("title"), o.str("branch"), o.str("sha"),
         o.str("status") ?: "?", o.str("conclusion"), o.str("created-at"), o.str("url"), o.str("event"), o.int("attempt") ?: 1, o.str("origin") ?: "github",
-        o.str("started-at"), o.str("updated-at"))
+        o.str("started-at"), o.str("updated-at"), (o.get("notes") as? com.google.gson.JsonArray)?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString }.orEmpty())
 
     fun instant(s: String?): java.time.Instant? = s?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() }
 
@@ -140,8 +158,21 @@ object Ci {
         val rows = r.getAsJsonArray("rows")?.filter { it.isJsonObject }?.map { it.asJsonObject }?.map { o ->
             runOf(o)
         }.orEmpty()
-        return CiRuns(r.str("repo") ?: "", r.str("path"), r.get("total")?.takeIf { it.isJsonPrimitive }?.asInt ?: rows.size, rows)
+        return CiRuns(r.str("repo") ?: "", r.str("path"), r.get("total")?.takeIf { it.isJsonPrimitive }?.asInt ?: rows.size, rows,
+            r.str("source") ?: "fetched", r.long("age-s"), r.bool("stale") ?: false, r.str("error"), r.int("rate-remaining"))
     }
+
+    fun parseWorkflows(r: JsonObject): List<CiWorkflow> = r.getAsJsonArray("workflows")?.filter { it.isJsonObject }?.map { it.asJsonObject }?.map { w ->
+        fun strs(k: String) = (w.get(k) as? com.google.gson.JsonArray)?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString?.removePrefix(":") }.orEmpty()
+        CiWorkflow(w.str("file") ?: "", w.str("path") ?: "", w.str("name") ?: (w.str("file") ?: "?"), strs("events"),
+            (w.get("inputs") as? com.google.gson.JsonArray)?.filter { it.isJsonObject }?.map { it.asJsonObject }?.map { i ->
+                CiWfInput(i.str("name") ?: "?", i.str("type"), i.str("default"), i.str("description"),
+                    (i.get("options") as? com.google.gson.JsonArray)?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString }.orEmpty(), i.bool("required") ?: false)
+            }.orEmpty(),
+            (w.get("jobs") as? com.google.gson.JsonArray)?.filter { it.isJsonObject }?.map { it.asJsonObject }?.map { j ->
+                CiWfJob(j.str("id") ?: "?", j.str("name") ?: (j.str("id") ?: "?"), (j.get("needs") as? com.google.gson.JsonArray)?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString }.orEmpty(), j.int("stage") ?: 0)
+            }.orEmpty(), w.str("error"))
+    }.orEmpty()
 }
 
 /** A job of a workflow file: its id (the key under `jobs:`), its 0-based [line], and [end], the line after its block. */
