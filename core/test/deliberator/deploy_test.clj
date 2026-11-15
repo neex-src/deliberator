@@ -41,12 +41,14 @@
                      :stopped-reason "Scaling activity initiated by deployment ecs-svc/2")
         old-out (task "t-old2" "ecs-svc/1" :last-status "STOPPED" :stopped (i "2026-11-15T09:00:00Z") :stop-code "ServiceSchedulerInitiated"
                       :stopped-reason "Scaling activity initiated by deployment ecs-svc/1")
+        scaled (task "t-old4" "ecs-svc/1" :last-status "STOPPED" :stopped (i "2026-11-15T10:00:12Z") :stop-code "ServiceSchedulerInitiated"
+                     :stopped-reason "Scaling activity initiated by (deployment ecs-svc/1)")
         by-window (task "t-old3" "ecs-svc/1" :last-status "STOPPED" :stopped (i "2026-11-15T10:00:10Z") :stop-code "ServiceSchedulerInitiated"
                         :stopped-reason "Service deployment replaced task definition x")
         crashed (task "t-crash" "ecs-svc/1" :last-status "STOPPED" :stopped (i "2026-11-15T10:00:10Z") :stop-code "EssentialContainerExited")
-        {:keys [started replaced]} (d/tasks-of dep [mine other old-in old-out by-window crashed] now)]
+        {:keys [started replaced]} (d/tasks-of (assoc dep :before-id "ecs-svc/1") [mine other old-in old-out by-window crashed scaled] now)]
     (is (= ["t-new"] (map :id started)) "startedBy decides; a later deployment's task is not ours")
-    (is (= #{"t-old" "t-old3"} (set (map :id replaced))) "stopped by the scheduler inside the window; one that names another deployment, or crashed, is not")))
+    (is (= #{"t-old" "t-old3" "t-old4"} (set (map :id replaced))) "stopped by the scheduler inside the window; one that names another deployment, or crashed, is not")))
 
 (deftest the-events-of-a-deployment-are-the-service-events-inside-its-window
   (let [ev (fn [at msg] {:createdAt (i at) :message msg :id msg})

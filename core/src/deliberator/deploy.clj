@@ -168,14 +168,17 @@
         live (some #(when (= id (:id %)) %) (:deployments svc))
         status (:status sd)]
     (cond-> {:id id :source :service-deployments :arn (:serviceDeploymentArn sd) :status status
-             :rollout-state (or (:rolloutState live) (rollout-of-status status))
+             :rollout-state (or (rollout-of-status status) (:rolloutState live))
              :started (->inst (or (:startedAt sd) (:createdAt sd))) :created (->inst (:createdAt sd))}
       (:finishedAt sd) (assoc :finished (->inst (:finishedAt sd)))
-      (or (:rolloutStateReason live) (:statusReason sd)) (assoc :rollout-reason (or (:rolloutStateReason live) (:statusReason sd)))
+      ;; DescribeServices can lag the deployment's own status: its reason is only used while both say the same
+      (or (:statusReason sd) (and live (= (:rolloutState live) (rollout-of-status status)) (:rolloutStateReason live)))
+      (assoc :rollout-reason (or (:statusReason sd) (:rolloutStateReason live)))
       (:rollback sd) (assoc :rollback (:rollback sd))
       (get-in sd [:deploymentCircuitBreaker :status]) (assoc :circuit-breaker (get-in sd [:deploymentCircuitBreaker :status]))
       (get-in sd [:targetServiceRevision :arn]) (assoc :target-revision (get-in sd [:targetServiceRevision :arn]))
-      (:sourceServiceRevisions sd) (assoc :source-revision (:arn (first (:sourceServiceRevisions sd)))))))
+      (:sourceServiceRevisions sd) (assoc :source-revision (:arn (first (:sourceServiceRevisions sd)))
+                                          :before-id (deployment-id (:arn (first (:sourceServiceRevisions sd))))))))
 
 (defn- service-deployment-rows!
   "-> `{:rows [...] :notes [...]}`; rows nil with a note when `ListServiceDeployments` is not there or not allowed."
@@ -215,7 +218,8 @@
                             :started (->inst (:createdAt d)) :created (->inst (:createdAt d))
                             :desired (:desiredCount d)}
                      done? (assoc :finished (->inst (:updatedAt d)))
-                     (:rolloutStateReason d) (assoc :rollout-reason (:rolloutStateReason d)))
+                     (:rolloutStateReason d) (assoc :rollout-reason (:rolloutStateReason d))
+                     older (assoc :before-id (:id older)))
                    (:taskDefinition older) (:taskDefinition d))))))
 
 (defn- codedeploy-rows!
@@ -312,9 +316,12 @@
      :replaced (vec (sort-by :stopped
                              (for [t tasks
                                    :when (and (not (ids (:id t))) (:stopped t) (= "ServiceSchedulerInitiated" (:stop-code t))
+                                              (not (before? (:stopped t) from)) (not (before? to (:stopped t)))
+                                              ;; the real stop reason is `Scaling activity initiated by (deployment ecs-svc/<id>)`, the id of the
+                                              ;; deployment whose task is scaled down: the one before this
                                               (if-let [m (seq (mentions t))]
-                                                (some #{(:id dep)} m)
-                                                (and (not (before? (:stopped t) from)) (not (before? to (:stopped t))))))]
+                                                (some (set [(:id dep) (:before-id dep)]) m)
+                                                true))]
                                t)))}))
 
 (defn events-in
@@ -455,7 +462,7 @@
     {:rows (newest-first (into (vec rows) (:rows cd)))
      :source (if (:rows sd) :service-deployments :describe-services)
      :notes (vec (concat (:notes sd) (when-not (:rows sd) ["the rows come from DescribeServices: only the deployments ECS still lists"])))
-     :absent (:absent cd) :errors (:errors cd)}))
+     :absent (when-let [a (:absent cd)] {:codedeploy a}) :errors (:errors cd)}))
 
 (defn collect!
   "Everything one deployment's text needs, fetched now: -> a map for `render-show`. `lstate` is the log state atom (see `collect-logs!`)."
@@ -720,7 +727,11 @@
                               (cancelled?) :cancelled
                               (> (System/currentTimeMillis) deadline) :timeout)]
               (cond
-                (and done? (zero? grace) (not fail?))   ; one more look: the last log lines come a moment after the rollout ends
+                ;; one more look: the last log lines come a moment after the rollout ends, and ECS writes "has reached a steady state" after it
+                (and done? (not fail?) (= :completed ended) (< grace 25)
+                     (or (< grace 1) (not-any? #(str/includes? (str (:message %)) "steady state") (:events d))))
+                (do (Thread/sleep 3000) (recur (:id row) (inc grace) 0))
+                (and done? (not fail?) (zero? grace) (not= :completed ended))
                 (do (Thread/sleep 3000) (recur (:id row) 1 0))
                 (or done? ended)
                 (let [fl (when (#{:failed :failing} ended) (failure-lines d))
