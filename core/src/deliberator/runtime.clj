@@ -220,6 +220,8 @@
            :health (if (or jar exploded) (service-health spec) (:health spec))
            :podman-socket (:podman-socket spec)}
         d (cond-> d
+            (:entrypoint spec) (assoc :entrypoint (vec (:entrypoint spec)))
+            (:image-id spec) (assoc :image-id (:image-id spec))
             jar (assoc :jar-stamp [(.length jar) (.lastModified jar)] :jar-path (str jar))
             exploded (assoc :exploded exploded :dep-stamp (dep-stamp (:dependency exploded)))
             (or jar exploded (:service? spec)) (assoc :service? true)
@@ -355,6 +357,7 @@
               (:secrets-from d) (assoc "deliberator.secrets-from" (get-in d [:secrets-from :env])))
    "env" (merge (or (:secret-values d) (resolve-secrets ws (:secrets d))) (:env d))
    "command" (:command d)
+   "entrypoint" (:entrypoint d)
    "netns" {"nsmode" "bridge"}
    "Networks" {(:network d) (if (seq (:aliases d)) {"aliases" (:aliases d)} {})}
    "log_configuration" {"driver" "k8s-file"}
@@ -753,6 +756,12 @@
     (when ctr
       (podman/stop! c (:Id ctr))
       (first (:Names ctr)))))
+
+(defn image-id
+  "The id of `image` in the runtime's Podman store (not persisted: the watch asks at a revision), nil when it is not there or there is no runtime.edn."
+  [ws image]
+  (when-let [cfg (read-config ws)]
+    (podman/image-id (podman-client ws cfg :persist? false) image)))
 
 (defn role-container
   "The container of `role` of `ws` as Podman lists it (`:State`, `:Names`, `:Id`), nil when there is none or no runtime.edn.

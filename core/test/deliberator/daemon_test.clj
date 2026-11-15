@@ -47,7 +47,7 @@
   "The one deliberate change-detector of the op table (review 2026-10-25, R29): adding or renaming an op fails
   `op-describe-lists-every-operation-with-its-schema` until the name is added here, on purpose, in the same commit as its
   `dlb` help and docs. Every other test derives its expectations from `ops/table`."
-  ["hello" "op.describe" "op.tools" "workspace.agent" "daemon.stop" "provider.list" "provider.stop" "fake.record" "fake.replay" "fake.stop" "fake.list" "fake.commit" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.events" "service.build" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "explore.write" "session.note" "session.start" "session.end" "session.list" "session.current"
+  ["hello" "op.describe" "op.tools" "workspace.agent" "daemon.stop" "provider.list" "provider.stop" "fake.record" "fake.replay" "fake.stop" "fake.list" "fake.commit" "runtime.sync-env" "service.adopt" "service.list" "service.show" "service.status" "service.events" "service.build" "service.dev" "service.start" "service.stop" "service.restart" "service.reload" "topology.show" "topology.set" "workspace.show" "workspace.open" "explore.write" "session.note" "session.start" "session.end" "session.list" "session.current"
    "audit.show" "config.chain" "config.refresh" "deployed.refresh" "deployed.show" "deploy.list" "deploy.show" "deploy.follow" "logs.insights"
    "env.list" "env.describe" "env.check" "env.save" "env.create" "env.remove" "runtime.ensure" "runtime.status" "runtime.down" "runtime.logs" "runtime.set"
    "aws.describe" "aws.discover" "terraform.drift" "terraform.local" "terraform.graph" "terraform.apply-all" "terraform.locate"

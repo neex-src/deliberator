@@ -38,7 +38,7 @@
 
 (defn- register! [ws v]
   (ecs! ws :RegisterTaskDefinition {:family "fam"
-                                    :containerDefinitions [{:name "web" :image "alpine:3.20" :essential true
+                                    :containerDefinitions [{:name "web" :image "registry.invalid/ef/web:1" :essential true
                                                             :environment [{:name "V" :value v}]}]}))
 
 (defn- thrown [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (ops/error-map e))))
@@ -82,8 +82,8 @@
            (is (running?))
            (let [r (row)]
              (is (= "running" (:status r)))
-             (is (= {:cluster "c" :service "s" :desired 1 :revision "fam:1" :image "alpine:3.20"} (select-keys (:ecs r) [:cluster :service :desired :revision :image])))
-             (is (= "revision 1 · alpine:3.20 (not used: the description's image runs)" (:text (:ecs r))))))
+             (is (= {:cluster "c" :service "s" :desired 1 :revision "fam:1" :image "registry.invalid/ef/web:1"} (select-keys (:ecs r) [:cluster :service :desired :revision :image])))
+             (is (= "revision 1 · registry.invalid/ef/web:1 (not used: not in the runtime's store, the description's image runs)" (:text (:ecs r))))))
          (testing "an unchanged poll writes nothing to the raw store"
            (let [n #(count (filter (fn [f] (.endsWith (str f) ".edn")) (file-seq (.toFile (store/path ws "raw")))))
                  _ (loop [last -1]   ; the rollout state of a new service turns COMPLETED by itself once: let that response settle first
@@ -123,7 +123,7 @@
              (ecs! ws :UpdateService {:cluster "c" :service "s" :taskDefinition "fam:2"})
              (is (some? (await-true 8000 #(and (running?) (not= old-id (:Id (ctr)))))))
              (is (some #(= "V=2" %) (get-in (podman/inspect c (:Id (ctr))) [:Config :Env])))
-             (is (= "revision 2 · alpine:3.20 (not used: the description's image runs)" (:text (:ecs (row)))))))
+             (is (= "revision 2 · registry.invalid/ef/web:1 (not used: not in the runtime's store, the description's image runs)" (:text (:ecs (row)))))))
          (testing "a restart of the watch changes nothing"
            (let [id1 (:Id (ctr))]
              (unwatch!) (watch!)

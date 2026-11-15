@@ -22,6 +22,7 @@
   The compile output, the steps and the agent's lines are appended to `logs/reload/<name>-<ts>.log` and stored raw."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
+            [deliberator.ecsrecord :as ecsrecord]
             [deliberator.jdwp :as jdwp]
             [deliberator.process :as process]
             [deliberator.runtime :as runtime]
@@ -177,6 +178,9 @@
                     :known (description/names ws) :hint "service.adopt a module, or dlb service list"))
         _ (when-not (description/runnable? d)
             (fail :service/not-runnable (str "service " name " is a " (clojure.core/name (:kind d)) ": nothing runs in a container to reload")))
+        _ (when (ecsrecord/deployed? (ecsrecord/read-record ws name))
+            (fail :service/deployed-image (str "service " name " runs the deployed image of its task definition revision: " service/debug-refused)
+                  :service name :hint (str "dlb service dev " name)))
         _ (when-not (description/reloadable? d)
             (fail :service/not-reloadable
                   (str "service " name " is a " (clojure.core/name (:kind d)) ": it runs its image as it is, there is no JVM to bring classes into")
