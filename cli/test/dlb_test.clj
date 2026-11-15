@@ -797,6 +797,12 @@
     (is (str/includes? h "events: logs.line"))
     (is (str/includes? h "--worktree")))
   (is (str/includes? (:out (dlb *home* "help" "ci" "diff")) "dlb ci diff <run>"))
+  (testing "piece 01: jobs, a step's log, archive"
+    (is (str/includes? (:out (dlb *home* "help" "ci")) "dlb ci jobs <repo> <run>"))
+    (is (str/includes? (:out (dlb *home* "help" "ci")) "dlb ci archive <repo>"))
+    (is (str/includes? (:out (dlb *home* "help" "ci" "log")) "--step"))
+    (is (str/includes? (:out (dlb *home* "help" "ci" "diff")) "--step"))
+    (is (str/includes? (:out (dlb *home* "help" "ci" "jobs")) "--refresh")))
   (dlb *home* "workspace" "open" "ci5")
   (dlb *home* "session" "start" "C1" "--ws" "ci5")
   (let [r (dlb *home* "ci" "log" "12345" "--ws" "ci5")]
