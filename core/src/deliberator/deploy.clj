@@ -300,13 +300,20 @@
                           (range) (partition-all 100 arns))]
     (mapv #(task-row % @(:tds ctx)) described)))
 
+(defn window-end
+  "Where the window of `dep` closes: ECS writes the closing events (`deployment completed`, `has reached a steady state`) a minute after the
+  deployment's `finishedAt`, so 150 s later, but never past the start of the next deployment (`:next-started`)."
+  [dep now]
+  (let [e (.plusSeconds ^Instant (or (:finished dep) now) 150)]
+    (if (and (:next-started dep) (before? (:next-started dep) e)) (:next-started dep) e)))
+
 (defn tasks-of
   "`{:started [...] :replaced [...]}` of `tasks` for deployment `dep` (a row): started = `startedBy` is the deployment's id; replaced = stopped by
   the scheduler inside the window of the deployment (or naming it in the stop reason) that it did not start. A CodeDeploy deployment has no
   `startedBy`: its started tasks are the ones created inside its window."
   [dep tasks now]
   (let [from (some-> (:started dep) (.minusSeconds 2))
-        to (.plusSeconds ^Instant (or (:finished dep) now) 30)
+        to (window-end dep now)
         started (if (= :codedeploy (:source dep))
                   (filterv #(and (not (before? (:created %) from)) (not (before? to (:created %)))) tasks)
                   (filterv #(= (:id dep) (:started-by %)) tasks))
@@ -328,7 +335,7 @@
   "The service `events` (DescribeServices) inside the window of `dep`, oldest first."
   [events dep now]
   (let [from (some-> (:started dep) (.minusSeconds 1))
-        to (.plusSeconds ^Instant (or (:finished dep) now) 10)]
+        to (window-end dep now)]
     (->> events
          (map (fn [e] {:at (->inst (:createdAt e)) :message (:message e) :id (:id e)}))
          (filter (fn [e] (or (and (not (before? (:at e) from)) (not (before? to (:at e))))
@@ -473,7 +480,8 @@
         now (store/now)
         svc (or (describe-service ctx cluster service (str "ds:" cluster "/" service)) (:svc target))
         listing (list-rows! ctx (assoc target :svc svc) limit)
-        row (pick (:rows listing) dep-id)]
+        row (pick (:rows listing) dep-id)
+        row (when row (let [newer (last (take-while #(not= (:id row) (:id %)) (:rows listing)))] (cond-> row newer (assoc :next-started (:started newer)))))]
     (when-not row
       (fail :deploy/not-found (str "no deployment " (or dep-id "(newest)") " of " cluster "/" service)
             :ids (mapv :id (:rows listing)) :hint "dlb deploy list names them"))
