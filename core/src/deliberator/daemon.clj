@@ -26,6 +26,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [deliberator.ecsfollow :as ecsfollow]
             [deliberator.ops :as ops]
             [deliberator.protocol :as protocol]
             [deliberator.provider :as provider]
@@ -170,6 +171,7 @@
               providers (provider/registry home log)
               follows (atom 0)                 ; active logs.fetch follows: work in flight like a run (hello counts them, R32)
               stop-ref (atom nil)
+              ecs-stop (atom nil)     ; the ECS watch
               dstate {:version (version) :pid (.pid (ProcessHandle/current)) :home home :providers providers
                       :endpoint endpoint :runs runs :follows follows :checked (atom #{})
                       ;; `daemon.stop`: the same `stop!`, started after the answer has been written
@@ -192,6 +194,7 @@
                            (catch Throwable e (log "stop: finalising runs failed" (ex-message e)))
                            (finally
                              (try (when-let [s @server] ((:stop! s))) (catch Throwable _ nil))
+                             (try (when-let [f @ecs-stop] (f)) (catch Throwable _ nil))
                              (try (provider/stop-all! providers) (catch Throwable _ nil))
                              (try (Files/deleteIfExists (.resolve dir "endpoint")) (catch Exception _ nil))
                              (try (Files/deleteIfExists (.resolve dir "deliberatord.sock")) (catch Exception _ nil))
@@ -212,6 +215,7 @@
           (reset! stop-ref stop!)
           (reset! server (binding [store/*home* home]
                            (protocol/listen! ssc {:dispatch dispatch :error-fn ops/error-map :log log})))
+          (reset! ecs-stop (ecsfollow/start! {:home home :log log :touch! #(reset! last-activity (System/currentTimeMillis))}))
           (store/write-bytes-atomic! (.resolve dir "endpoint") (.getBytes (str endpoint "\n") StandardCharsets/UTF_8))
           (log "started" (version) "pid" (:pid dstate) "home" home "endpoint" endpoint
                "idle-minutes" (/ idle-ms 60000.0) "threads" (name protocol/thread-model))

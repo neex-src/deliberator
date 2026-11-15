@@ -93,6 +93,8 @@
               (and (:jdwp desc) (not (integer? (:jdwp desc)))) (conj "jdwp")
               (and (= :spring-boot (:kind desc)) (= :hotswap (image-kind desc)) (not (string? (:main desc))))
               (conj "main (the main class, for the hotswap image; or :image of a plain JRE)")
+              (and (contains? desc :ecs) (not (and (map? (:ecs desc)) (string? (:cluster (:ecs desc))) (string? (:service (:ecs desc))) (not (str/blank? (:cluster (:ecs desc)))) (not (str/blank? (:service (:ecs desc)))))))
+              (conj ":ecs ({:cluster \"c\" :service \"s\"}: the ECS service of the local environment it follows)")
               (and (contains? desc :reload) (not (map? (:reload desc)))) (conj ":reload ({:cmd [argv] :dir :modules [\"sibling\"]})")
               (and (contains? desc :depends)
                    (not (and (map? (:depends desc)) (every? string? (keys (:depends desc))) (every? string? (vals (:depends desc))))))
