@@ -192,6 +192,8 @@
                     text="Debug" description="Start the service and attach the IDE's debugger to its JDWP port"/>
             <action id="deliberator.service.logs" icon="AllIcons.Actions.ShowAsTree" class="com.neex.deliberator.services.ServiceLogsAction"
                     text="Log" description="logs.fetch of the service's container log, opened in the editor"/>
+            <action id="deliberator.service.dev" icon="AllIcons.Actions.Rollback" class="com.neex.deliberator.services.ServiceDevAction"
+                    text="Back to Dev Container" description="service.dev: a service bound to an ECS service runs your build again instead of the deployed revision's image, held until the next revision"/>
             <action id="deliberator.service.build" icon="AllIcons.Actions.Compile" class="com.neex.deliberator.services.ServiceBuildAction"
                     text="Build" description="service.build"/>
             <action id="deliberator.topology.set" icon="AllIcons.General.Web" class="com.neex.deliberator.services.TopologySetAction"
@@ -248,6 +250,19 @@
                 <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             </action>
         </group>
+        <!-- piece 04 stage 2: the deployments of the Environments tab -->
+        <group id="deliberator.deploy" text="Deliberator Deployments" popup="true">
+            <action id="deliberator.deploy.follow" icon="AllIcons.Actions.Execute" class="com.neex.deliberator.environments.DeployFollowAction"
+                    text="Follow Deploy" description="deploy.follow: a rollout's events, tasks and container lines in a console tab until it ends; the deploy text opens beside it and grows"/>
+            <action id="deliberator.deploy.text" icon="AllIcons.Actions.Show" class="com.neex.deliberator.environments.DeployOpenTextAction"
+                    text="Open Deploy Text" description="deploy.show: the deployment as one text: header, events, tasks, the containers' log lines"/>
+            <action id="deliberator.deploy.logs" icon="AllIcons.Actions.ShowAsTree" class="com.neex.deliberator.environments.DeployLogsAction"
+                    text="Container Logs of This Deployment" description="The log lines of the containers of the tasks this deployment started: the deploy text at its log section"/>
+            <action id="deliberator.deploy.ciRun" icon="AllIcons.Vcs.History" class="com.neex.deliberator.environments.DeployCiRunAction"
+                    text="Open CI Run" description="Select the CI run that made this revision (task definition tag run-id) in the CI tab"/>
+            <action id="deliberator.deploy.refresh" icon="AllIcons.Actions.Refresh" class="com.neex.deliberator.environments.DeployRefreshAction"
+                    text="Refresh Deployments" description="deploy.list of the chosen service: asks AWS (read calls only); the table shows the cached answer until then"/>
+        </group>
         <group id="deliberator.explorer" text="Deliberator Explorer" popup="true">
             <action id="deliberator.explorer.serviceLog" icon="AllIcons.Actions.ShowAsTree" class="com.neex.deliberator.explorer.OpenLinkedLogAction"
                     text="Open Service Log" description="logs.fetch of the log/ target service.list names for the service this row belongs to"/>
@@ -256,6 +271,11 @@
             <action id="deliberator.explorer.declaration" icon="AllIcons.Actions.EditSource" class="com.neex.deliberator.explorer.OpenDeclarationAction"
                     text="Open Terraform Declaration" description="terraform.locate: the .tf file and line that declare this drift row's address"/>
         </group>
+        <!-- piece 04 stage 2: the CI tab's Open Deployment (its own file, registered into the CI group) -->
+        <action id="deliberator.deploy.openFromCi" icon="AllIcons.Actions.Forward" class="com.neex.deliberator.environments.OpenDeploymentAction"
+                text="Open Deployment" description="deploy.where: the deployment that carries this run's commit; its deploy text opens">
+            <add-to-group group-id="deliberator.ci" anchor="last"/>
+        </action>
         <group id="deliberator.toolwindow.actions">
             <action id="deliberator.workspace.create" icon="AllIcons.General.Add" class="com.neex.deliberator.actions.CreateWorkspaceAction" text="Open Workspace" description="The workspace of this project does not exist yet: workspace.open creates it"/>
             <action id="deliberator.workspace.refresh" icon="AllIcons.Actions.Refresh" class="com.neex.deliberator.actions.RefreshAction" text="Refresh" description="Re-read the workspace from the daemon"/>

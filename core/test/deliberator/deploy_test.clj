@@ -136,3 +136,33 @@
         (is (= ["acme-audit"] (map :service (d/by-commit ws "ffffffffffff")))))
       (is (= ["ecs-svc/10"] (map :deployment (d/by-run-id ws "77"))))
       (is (= ["deployed to dlbremote: acme-billing revision 12" "deployed to dlbremote: acme-billing revision 11"] (d/commit-notes ws "0123456789ab"))))))
+
+(deftest the-cached-list-and-where-answer-from-files-without-a-call
+  (ru/with-remote-at-floci [remote local]
+    (let [ws "default" env-name (:name remote)
+          rows [{:env env-name :cluster "c" :service "svc" :id "ecs-svc/9" :status "SUCCESSFUL" :revision-before 1 :revision-after 2
+                 :started (i "2026-11-15T10:00:00Z") :git-sha "0123456789abcdef" :run-id "70"}]]
+      (is (= :deploy/no-cache (:type (try (d/list! ws env-name "c/svc" {:cached true}) (catch clojure.lang.ExceptionInfo e (ex-data e))))))
+      (store/write-edn! (.resolveSibling (d/list-path ws env-name "c" "svc") "list.edn")
+                        {:env env-name :cluster "c" :service "svc" :kind :ecs :fetched-at (i "2026-11-15T10:01:00Z") :source :service-deployments :rows rows})
+      (let [r (d/list! ws env-name "svc" {:cached true})]
+        (is (= {:cached true :cluster "c" :count 1 :kind :ecs} (select-keys r [:cached :cluster :count :kind])))
+        (is (= "ecs-svc/9" (:id (first (:rows r)))))
+        (is (string? (:age r))))
+      (is (= ["ecs-svc/9"] (map :id (:rows (d/list! ws env-name "c/svc" {:cached true})))))
+      (let [w (d/where ws {:sha "0123456"})]
+        (is (= ["ecs-svc/9"] (map :deployment (:rows w))))
+        (is (= ["deployed to dlbremote: svc revision 2"] (:notes w))))
+      (is (= 1 (count (:rows (d/where ws {:run-id "70"})))))
+      (is (= :deploy/no-key (:type (try (d/where ws {}) (catch clojure.lang.ExceptionInfo e (ex-data e)))))))))
+
+(deftest a-lambdas-versions-render-as-text-with-the-last-update
+  (let [text (d/render-lambda {:env "aws" :function "orders-fn" :fetched-at (i "2026-11-15T10:00:00Z") :notes ["a note"]
+                               :latest {:State "Active" :LastUpdateStatus "Failed" :LastUpdateStatusReason "The function failed to update" :CodeSha256 "abc=" :LastModified "2026-11-15T09:00:00.000+0000"}
+                               :rows [{:version "7" :started (i "2026-11-15T09:00:00Z") :status "Active" :rollout-state "FAILED" :code-sha256 "abc=" :rollout-reason "The function failed to update"}
+                                      {:version "6" :started (i "2026-11-14T09:00:00Z") :status "Active" :rollout-state "COMPLETED" :code-sha256 "old=" :description "first"}]})]
+    (is (str/ends-with? text "\n"))
+    (doseq [want ["lambda       orders-fn" "latest       Active  update Failed: The function failed to update  code abc=" "note         a note"
+                  "== versions (newest first)" "7       2026-11-15T09:00:00Z  Active  update FAILED  code abc=  The function failed to update"
+                  "update COMPLETED  code old=  \"first\""]]
+      (is (str/includes? text want) want))))

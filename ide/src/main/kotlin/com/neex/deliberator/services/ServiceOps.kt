@@ -82,6 +82,9 @@ class ServiceOps(private val project: Project) {
     fun restart(name: String, onEvent: (DaemonEvent) -> Unit = {}): Started =
         started(refreshed { svc.call("service.restart", args(name), onEvent).resultObject() }, name)
 
+    /** `service.dev`: back to the dev container of a service bound to ECS (held until the next revision); a service that is not bound is the daemon's `service/not-bound`. */
+    fun dev(name: String): JsonObject = refreshed { svc.call("service.dev", args(name)).resultObject() }
+
     fun stop(name: String): JsonObject = refreshed { svc.call("service.stop", args(name)).resultObject() }
 
     fun build(name: String, onEvent: (DaemonEvent) -> Unit = {}): JsonObject =

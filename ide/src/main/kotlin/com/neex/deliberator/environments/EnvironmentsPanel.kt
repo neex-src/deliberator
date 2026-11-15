@@ -4,6 +4,12 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.DataSink
+import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.UiDataProvider
+import com.intellij.ui.PopupHandler
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.OnePixelSplitter
@@ -27,7 +33,7 @@ import javax.swing.table.DefaultTableModel
  * revision or function version per service, from the cache with its age; Refresh = `deployed.refresh`, read calls only). The pattern is the
  * parameter view's: cached first, refresh on demand. Every daemon call is off the EDT; the tab writes nothing itself.
  */
-class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
+class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProvider, Disposable {
     private val envModel = object : DefaultTableModel(arrayOf("Name", "Kind", "Account", "Region", "Mode", "Profile / endpoint"), 0) {
         override fun isCellEditable(row: Int, column: Int) = false
     }
@@ -36,6 +42,20 @@ class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), 
         override fun isCellEditable(row: Int, column: Int) = false
     }
     private val depTable = JBTable(depModel).apply { setShowGrid(false) }
+    /** The newest deployments of the service row chosen above (`deploy.list`): one table, reconciled by deployment id, never rebuilt while nothing changed. */
+    private val deploysModel = object : DefaultTableModel(arrayOf("Status", "Rollout", "Started", "Revision", "Image", "Commit", "Run", "Id"), 0) {
+        override fun isCellEditable(row: Int, column: Int) = false
+    }
+    private val deploysTable = object : JBTable(deploysModel) {
+        override fun getToolTipText(e: java.awt.event.MouseEvent): String? =
+            rowAtPoint(e.point).takeIf { it >= 0 }?.let { deployments?.rows?.getOrNull(it) }?.let { r ->
+                listOfNotNull(r.text(), r.reason?.let { "reason: $it" }, r.source?.let { "from $it" }, r.finished?.let { "finished $it" }).joinToString("\n")
+            }
+    }.apply { setShowGrid(false); setSelectionMode(ListSelectionModel.SINGLE_SELECTION) }
+    private val deploysStatus = JBLabel(" ")
+    private val deploysSeq = AtomicInteger()
+    @Volatile private var deployments: DeploymentList? = null
+    private var filling = false
     private val status = JBLabel(" ")
     private val refreshButton = JButton("Refresh").apply { toolTipText = "deployed.refresh of the chosen environment (read calls only), then the cached view again" }
     private val removeButton = JButton("Remove...")
@@ -68,8 +88,26 @@ class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), 
         }
         val auditButton = JButton("Audit log...").apply { toolTipText = "The audit trail of a session as text, the confirmations highlighted"; addActionListener { AuditLogs.choose(project) } }
         add(JPanel(FlowLayout(FlowLayout.LEFT)).apply { add(newButton); add(removeButton); add(useButton); add(refreshButton); add(textButton); add(recordButton); add(auditButton) }, BorderLayout.NORTH)
-        val lower = JPanel(BorderLayout()).apply { add(status, BorderLayout.NORTH); add(JBScrollPane(depTable), BorderLayout.CENTER) }
-        add(OnePixelSplitter(true, 0.4f).apply { firstComponent = JBScrollPane(envTable); secondComponent = lower }, BorderLayout.CENTER)
+        val deploysBar = ActionManager.getInstance().getAction("deliberator.deploy")?.let { g ->
+            ActionManager.getInstance().createActionToolbar("DeliberatorDeployments", g as DefaultActionGroup, true).also { it.targetComponent = this }
+        }
+        val deploysPane = JPanel(BorderLayout()).apply {
+            add(JPanel(BorderLayout()).apply { add(deploysStatus, BorderLayout.NORTH); deploysBar?.let { add(it.component, BorderLayout.SOUTH) } }, BorderLayout.NORTH)
+            add(JBScrollPane(deploysTable), BorderLayout.CENTER)
+        }
+        deploysBar?.let { PopupHandler.installPopupMenu(deploysTable, ActionManager.getInstance().getAction("deliberator.deploy") as DefaultActionGroup, ActionPlaces.POPUP) }
+        deploysTable.inputMap.put(javax.swing.KeyStroke.getKeyStroke("ENTER"), "deliberator.deploy.open")
+        deploysTable.actionMap.put("deliberator.deploy.open", object : javax.swing.AbstractAction() { override fun actionPerformed(e: java.awt.event.ActionEvent?) { openDeploymentText() } })
+        deploysTable.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) { if (e.clickCount == 2) openDeploymentText() }
+        })
+        depTable.selectionModel.addListSelectionListener { if (!it.valueIsAdjusting && !filling) loadDeployments(false) }
+        val lower = JPanel(BorderLayout()).apply {
+            add(status, BorderLayout.NORTH)
+            add(OnePixelSplitter(true, 0.5f).apply { firstComponent = JBScrollPane(depTable); secondComponent = deploysPane }, BorderLayout.CENTER)
+        }
+        EnvironmentsPanelHolder.register(project, this)
+        add(OnePixelSplitter(true, 0.2f).apply { firstComponent = JBScrollPane(envTable); secondComponent = lower }, BorderLayout.CENTER)
         envTable.selectionModel.addListSelectionListener { if (!it.valueIsAdjusting) selected()?.let(::showDeployed) }
         envTable.addMouseListener(object : java.awt.event.MouseAdapter() {
             override fun mouseClicked(e: java.awt.event.MouseEvent) { if (e.clickCount == 2) useSelected() }
@@ -144,9 +182,14 @@ class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), 
     }
 
     private fun renderDeployed(v: DeployedView?) {
+        val keepKey = selectedService()?.let { it.kind + "/" + it.cluster + "/" + it.name }
         view = v
+        filling = true
         depModel.rowCount = 0
         v?.rows?.forEach { depModel.addRow(arrayOf(it.kind, it.cluster ?: "", it.name, it.revision, it.image, it.running, it.updated ?: "")) }
+        v?.rows?.indexOfFirst { it.kind + "/" + it.cluster + "/" + it.name == keepKey }?.takeIf { it >= 0 }?.let { depTable.setRowSelectionInterval(it, it) }
+        filling = false
+        if (v == null || selectedService() == null) renderDeployments(null, "Select a service or function above: its newest deployments show here.") else loadDeployments(false)
         status.text = v?.status() ?: "No environment."
         refreshButton.isEnabled = v != null
         removeButton.isEnabled = selected()?.let { it.name != "local" } ?: false
@@ -209,5 +252,81 @@ class EnvironmentsPanel(private val project: Project) : JPanel(BorderLayout()), 
         })
     }
 
-    override fun dispose() {}
+    // --- the deployments of the chosen service (04 stage 2) ----------------------------------------------------------------
+
+    /** The service or function row of the deployed table that is selected. */
+    internal fun selectedService(): DeployedRow? = depTable.selectedRow.takeIf { it >= 0 }?.let { view?.rows?.getOrNull(it) }
+
+    /** The deployment row that is selected. */
+    internal fun selectedDeployment(): DeploymentRow? = deploysTable.selectedRow.takeIf { it >= 0 }?.let { deployments?.rows?.getOrNull(it) }
+
+    /** What the deploy actions act on: the chosen service in the chosen environment and, when one is chosen, its deployment. */
+    internal fun target(): DeployTarget? {
+        val e = selected() ?: return null
+        val s = selectedService() ?: return null
+        return DeployTarget(e.name, DeployOps.spec(s), s.kind, selectedDeployment())
+    }
+
+    override fun uiDataSnapshot(sink: DataSink) { sink[DeployController.TARGET] = target() }
+
+    /** The deployments as shown (tests). */
+    internal fun deploymentRows(): List<List<String>> = (0 until deploysModel.rowCount).map { r -> (0 until deploysModel.columnCount).map { deploysModel.getValueAt(r, it).toString() } }
+
+    internal fun deploymentsStatus(): String = deploysStatus.text
+
+    internal fun selectService(name: String) {
+        val i = view?.rows?.indexOfFirst { it.name == name } ?: -1
+        if (i >= 0) depTable.setRowSelectionInterval(i, i)
+    }
+
+    internal fun selectDeployment(id: String) {
+        val i = deployments?.rows?.indexOfFirst { it.id == id } ?: -1
+        if (i >= 0) deploysTable.setRowSelectionInterval(i, i)
+    }
+
+    /** Fills the deployments table: from the cache at once (principle 2), or with [fetch] from AWS (`deploy.list`, read calls). Off the EDT. */
+    private fun loadDeployments(fetch: Boolean) {
+        val e = selected() ?: return
+        val s = selectedService() ?: run { renderDeployments(null, "Select a service or function above: its newest deployments show here."); return }
+        val spec = DeployOps.spec(s)
+        val mine = deploysSeq.incrementAndGet()
+        deploysStatus.text = if (fetch) "$spec in ${e.name}: fetching the deployments (read calls only)..." else "$spec in ${e.name}: reading the cached deployments..."
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val svc = WorkspaceService.getInstance(project)
+                val l = if (fetch) DeployOps.list(svc, e.name, spec) else DeployOps.listCached(svc, e.name, spec)
+                ApplicationManager.getApplication().invokeLater({
+                    if (deploysSeq.get() == mine) renderDeployments(l, "$spec in ${e.name}: no deployments fetched yet. Refresh Deployments asks AWS (read calls only).")
+                }, ModalityState.any())
+            } catch (x: DaemonException) {
+                ApplicationManager.getApplication().invokeLater({ if (deploysSeq.get() == mine) deploysStatus.text = "$spec: ${x.message}" + (x.hint?.let { " ($it)" } ?: "") }, ModalityState.any())
+                failed("Deployments", x)
+            }
+        }
+    }
+
+    /** Refresh Deployments: `deploy.list` of the chosen service (read calls only), then the table follows it. */
+    fun refreshDeployments() = ApplicationManager.getApplication().invokeLater({ loadDeployments(true) }, ModalityState.any())
+
+    /** Reconciles the table with [l] by deployment id: the same ids in the same order only change the cells that differ, selection survives either way. EDT. */
+    internal fun renderDeployments(l: DeploymentList?, empty: String) {
+        val keep = selectedDeployment()?.id   // by id, from the list that is still shown
+        deployments = l
+        val rows = l?.rows ?: emptyList()
+        val same = rows.size == deploysModel.rowCount && rows.indices.all { deploysModel.getValueAt(it, 7) == rows[it].id }
+        filling = true
+        if (same) {
+            rows.forEachIndexed { i, r -> val c = r.cells(); for (j in c.indices) if (deploysModel.getValueAt(i, j) != c[j]) deploysModel.setValueAt(c[j], i, j) }
+        } else {
+            deploysModel.rowCount = 0
+            rows.forEach { deploysModel.addRow(it.cells()) }
+            rows.indexOfFirst { it.id == keep }.takeIf { it >= 0 }?.let { deploysTable.setRowSelectionInterval(it, it) }
+        }
+        filling = false
+        deploysStatus.text = l?.status() ?: empty
+    }
+
+    private fun openDeploymentText() { target()?.takeIf { it.row != null }?.let { DeployController.openText(project, it) } }
+
+    override fun dispose() { EnvironmentsPanelHolder.forget(project, this) }
 }
