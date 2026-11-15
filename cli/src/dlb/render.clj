@@ -58,7 +58,7 @@
                 ""
                 "Positional words fill the required args in the order shown by `dlb help <op>`; every arg is also --name value."
                 "  dlb daemon status                 version, pid, home of the running daemon (never starts one)"
-                "Exit codes: 0 ok, 1 failed checks / differing runs / confirm-required, 2 error."
+                "Exit codes: 0 ok, 1 failed checks (a run, an answer with ok: false, drift found) / differing runs / confirm-required, 2 error."
                 ""]
                (mapcat (fn [area]
                          (cons (str area ":")
