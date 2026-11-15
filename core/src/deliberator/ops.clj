@@ -1020,10 +1020,13 @@
 (defn- deployed-show [_ {:keys [env service] :as args}]
   (deployed/show (ws-of args) (or env "local") {:service service}))
 
-(defn- deploy-list [ctx {:keys [service env limit] :as args}]
+(defn- deploy-list [ctx {:keys [service env limit cached] :as args}]
   (let [ws (ws-of args) env-name (or env "local")]
-    (verify-remote! ctx ws env-name)
-    (deploy/list! ws env-name service (cond-> {} limit (assoc :limit limit)))))
+    (when-not cached (verify-remote! ctx ws env-name))
+    (deploy/list! ws env-name service (cond-> {} limit (assoc :limit limit) cached (assoc :cached true)))))
+
+(defn- deploy-where [_ {:keys [sha run-id] :as args}]
+  (deploy/where (ws-of args) {:sha sha :run-id run-id}))
 
 (defn- deploy-show [ctx {:keys [service deployment env cached] :as args}]
   (let [ws (ws-of args) env-name (or env "local")]
@@ -1287,7 +1290,12 @@
                   :doc "The deployments of an ECS service (newest first): id, status, rollout state and reason, started, finished, revision and image before -> after, the commit and CI run of the revision (task definition tags git-sha and run-id). From ECS's service-deployment calls, else (the call is not there or not allowed) the service's deployments from DescribeServices; plus the CodeDeploy deployments of its group where the account has CodeDeploy. For a Lambda function: its versions and last update. Read calls only, every response persisted raw; writes cache/<env>/deploy/<cluster>/<service>/list.txt."
                   :args (ws-schema :service {:type :string :required true :doc "ECS service (name or cluster/name) or Lambda function"}
                                    :env {:type :string :doc "environment name; default local"}
-                                   :limit {:type :int :doc "at most this many deployments; default 20"})}
+                                   :limit {:type :int :doc "at most this many deployments; default 20"}
+                                   :cached {:type :bool :doc "the answer of the last list from disk, with its age, no AWS call"})}
+   "deploy.where" {:fn deploy-where :class :read
+                    :doc "The deployments that carry a commit (sha, a full commit or a prefix of at least 7 characters) or were made by a CI run (run-id), newest first, with the notes `deployed to <env>: <service> revision N`: read from the environments' caches (deployed.edn and the deploy lists), no AWS call."
+                    :args (ws-schema :sha {:type :string :doc "commit"}
+                                     :run-id {:type :string :doc "CI run id"})}
    "deploy.show" {:fn deploy-show :class :mutate
                    :doc "ONE text file for a deployment (default the newest): the header (status, rollout, window, revision and image before -> after, commit and CI run), the service's events inside the deployment's window, the tasks it started and replaced (stop code, reason, exit codes) and the log lines of the started tasks' containers in time order, each line naming its container (CloudWatch from the task definition's awslogs options; on a local environment the runtime's container logs). cache/<env>/deploy/<cluster>/<service>/<deployment>.txt. cached answers from that file with its age, no AWS call. Read calls only."
                    :args (ws-schema :service {:type :string :required true :doc "ECS service (name or cluster/name) or Lambda function"}

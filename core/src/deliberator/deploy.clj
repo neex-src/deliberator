@@ -583,16 +583,44 @@
 
 (defn- keep-row [env-name cluster service row]
   (-> row (select-keys [:id :source :status :rollout-state :started :finished :revision-before :revision-after :image-before :image-after
-                        :git-sha :run-id :commit-source :family])
+                        :git-sha :run-id :commit-source :family :rollout-reason :version :code-sha256 :description])
       (assoc :env env-name :cluster cluster :service service)))
 
 (defn- age-of [^Instant at now] (deployed/age-text (- (.toEpochMilli ^Instant now) (.toEpochMilli at))))
 
 ;; --- operations -----------------------------------------------------------------------------------------------------
 
+(declare list-fetch!)
+
+(defn- cached-list
+  "The answer of the last `list!` of `service-spec` read from its `list.edn`, with its age; nil when there is none. No AWS call."
+  [ws env-name service-spec limit]
+  (let [base (store/path ws "cache" (store/safe-name env-name) "deploy")
+        [c n] (if (str/includes? (str service-spec) "/") (str/split service-spec #"/" 2) [nil service-spec])
+        d (first (for [cd (or (.listFiles (.toFile base)) []) :when (or (nil? c) (= (slug c) (.getName cd)))
+                       :let [sd (io/file cd (slug n))] :when (.isFile (io/file sd "list.edn"))] sd))]
+    (when d
+      (let [m (store/read-edn (.toPath (io/file d "list.edn")))
+            at (:fetched-at m)
+            txt (io/file d "list.txt")]
+        (cond-> {:env env-name :service (or (:service m) (:function m)) :kind (or (:kind m) :ecs) :source (:source m)
+                 :count (count (:rows m)) :rows (vec (take limit (:rows m))) :cached true :fetched-at at :path (str txt) :text (str txt)}
+          (:cluster m) (assoc :cluster (:cluster m))
+          (:latest m) (assoc :latest (:latest m))
+          (seq (:notes m)) (assoc :notes (:notes m))
+          at (assoc :age (age-of at (store/now)))
+          (.isFile txt) (assoc :table (slurp txt)))))))
+
 (defn list!
-  "See the namespace docstring. -> `{:env :service :cluster :kind :source :count :rows :path :text :table :notes :absent :errors :raw}`."
-  [ws env-name service-spec {:keys [limit] :or {limit list-cap}}]
+  "See the namespace docstring. `:cached true` answers from the file of the last list with its age and no AWS call (`deploy/no-cache` when there is none).
+  -> `{:env :service :cluster :kind :source :count :rows :path :text :table :notes :absent :errors :raw [:cached :age]}`."
+  [ws env-name service-spec {:keys [limit cached] :or {limit list-cap}}]
+  (if cached
+    (or (cached-list ws env-name service-spec limit)
+        (fail :deploy/no-cache (str "no cached deployments of " service-spec " in " env-name) :hint "dlb deploy list without --cached fetches them"))
+    (list-fetch! ws env-name service-spec limit)))
+
+(defn- list-fetch! [ws env-name service-spec limit]
   (let [ctx (ctx-of ws env-name nil)
         target (resolve-service! ctx service-spec)
         now (store/now)]
@@ -602,6 +630,11 @@
             p (.resolve (store/path ws "cache" (store/safe-name env-name) "deploy" "lambda" (slug (:function target))) "list.txt")
             tbl (render-lambda d)]
         (write-text! p tbl)
+        (store/write-edn! (.resolveSibling p "list.edn")
+                          {:env env-name :function (:function target) :kind :lambda :source :lambda :fetched-at now
+                           :rows (mapv #(keep-row env-name nil (:function target) %) rows) :notes (vec notes)
+                           :latest {:state (:State latest) :update-status (:LastUpdateStatus latest) :reason (or (:LastUpdateStatusReason latest) (:StateReason latest))
+                                    :code-sha256 (:CodeSha256 latest) :modified (:LastModified latest)}})
         {:env env-name :service (:function target) :kind :lambda :source :lambda :count (count rows) :rows (vec (take limit rows))
          :path (str p) :text (str p) :table tbl :notes (vec notes) :raw (count @(:refs ctx))})
       (let [{:keys [cluster service]} target
@@ -613,7 +646,7 @@
             p (list-path ws env-name cluster service)]
         (write-text! p tbl)
         (store/write-edn! (.resolveSibling p "list.edn")
-                          {:env env-name :cluster cluster :service service :fetched-at now :source (:source listing)
+                          {:env env-name :cluster cluster :service service :fetched-at now :source (:source listing) :kind :ecs :notes (:notes listing)
                            :rows (mapv #(keep-row env-name cluster service %) rows) :raw @(:refs ctx)})
         (cond-> {:env env-name :service service :cluster cluster :kind :ecs :source (:source listing) :count (count rows) :rows rows
                  :path (str p) :text (str p) :table tbl :raw (count @(:refs ctx)) :fetched-at now}
@@ -711,7 +744,7 @@
         lstate (atom {})
         seen (atom #{})
         deadline (+ (System/currentTimeMillis) timeout-ms)
-        line! (fn [kind text at] (emit! {:event "deploy.line" :kind (name kind) :text text :at (str at)}))
+        line! (fn [kind text at & [path]] (emit! (cond-> {:event "deploy.line" :kind (name kind) :text text :at (str at)} path (assoc :path (str path)))))
         last-text (atom nil)
         announced (atom false)
         waiting (atom false)
@@ -739,7 +772,8 @@
                                 {:row (keep-row env-name (:cluster d) (:service d) row) :fetched-at (:fetched-at d)})
               (reset! last-text text))
             (when (compare-and-set! announced false true)
-              (line! :status (str "following " (:cluster d) "/" (:service d) " " (:id row) "  " (:status row) " rollout " (:rollout-state row)) (store/now)))
+              (line! :status (str "following " (:cluster d) "/" (:service d) " " (:id row) "  " (:status row) " rollout " (:rollout-state row)) (store/now)
+                     (show-path ws env-name (:cluster d) (:service d) (:id row))))
             (doseq [[at txt kind k] items] (line! kind txt at) (swap! seen conj k))
             (let [fail? (and (not (terminal? row)) (failing? (:started d)))
                   done? (or (terminal? row) fail?)
@@ -824,3 +858,12 @@
   [ws sha]
   (vec (distinct (for [r (by-commit ws sha)]
                    (str "deployed to " (:env r) ": " (:service r) (when (:revision r) (str " revision " (:revision r))))))))
+
+(defn where
+  "`deploy.where`: the deployments that carry a commit (`:sha`) or were made by a CI run (`:run-id`), from the caches only: `{:rows [...] :notes [...]}`
+  (the rows of `by-commit` / `by-run-id`, the strings of `commit-notes`)."
+  [ws {:keys [sha run-id]}]
+  (cond (not (str/blank? sha)) {:rows (by-commit ws sha) :notes (commit-notes ws sha)}
+        (not (str/blank? run-id)) (let [rs (by-run-id ws run-id)]
+                                    {:rows rs :notes (vec (distinct (for [r rs] (str "deployed to " (:env r) ": " (:service r) (when (:revision r) (str " revision " (:revision r)))))))})
+        :else (fail :deploy/no-key "deploy.where needs a sha or a run-id" :hint "dlb deploy where --sha <commit>")))
