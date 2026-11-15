@@ -11,7 +11,7 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 /**
- * Piece 03 in the IDE, against the real daemon and the real `act` on the sandbox's Podman (the test returns, saying so, when act or Podman is not there): the workflow
+ * Piece 03 in the IDE, against the real daemon and the real `act` on the sandbox's container engine (the test returns, saying so, when act is not there): the workflow
  * node of a checkout is in the tree before any run, a run started from it appears on top of its workflow as `local #n` with its steps moving and ending, a step's
  * log opens, a cancelled run ends cancelled and leaves no container.
  */
