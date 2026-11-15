@@ -209,3 +209,14 @@
       (is (not (str/includes? txt "Post job cleanup")) "only that step")
       (testing "both runs' logs are kept now"
         (is (= 2 (count (filter #(str/ends-with? % "/run.edn") (files-under (store/path "w" "ci"))))))))))
+
+(deftest the-daemon-says-which-files-name-code
+  (with-github [srv state]
+    (let [r (call "ci.log" {:repo "acme/widgets" :run "300" :step "4"})
+          d (call "ci.diff" {:repo "acme/widgets" :run "300" :step "4"})
+          k (fn [p] (call "logs.linkable" {:path p}))]
+      (is (= :ci (:kind (k (:path r)))) "a session's CI log")
+      (is (= :ci (:kind (k (:path d)))) "a session's CI diff")
+      (is (= :ci (:kind (k (:kept r)))) "a kept log")
+      (is (false? (:linkable (k "/etc/hostname"))))
+      (is (false? (:linkable (k (str (store/path "w" "sessions" "S1" "notes.txt")))))))))

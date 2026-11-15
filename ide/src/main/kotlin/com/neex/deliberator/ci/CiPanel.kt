@@ -73,7 +73,7 @@ internal class WorkflowNode(val name: String, var count: Int) : CiObj {
     override fun toString() = "$name ($count)"
 }
 internal class RunNode(val repo: String, var run: CiRun) : CiObj {
-    var detail: CiRunDetail? = null; var loading = false; var opened = false
+    var detail: CiRunDetail? = null; var loading = false; var opened = false; val autoOpened = HashSet<String>()
     override val key get() = "u:${run.id}"
     override fun adopt(o: CiObj) { run = (o as RunNode).run }
     override fun toString() = run.label()
@@ -110,7 +110,6 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
     private val loaded = HashMap<String, CiRuns>()
     private var archiveNote = ""
     private var baseNote = ""
-    private var ticks = 0
     private val timer = Timer(POLL_MS) { tick(false) }
 
     init {
@@ -254,7 +253,7 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
 
     // runs -----------------------------------------------------------------------------------------------------
 
-    /** Loads the runs of [repo] off the EDT and shows them (the repository's node is found by name); [user] false is the poll (no archive unless a run finished). */
+    /** Loads the runs of [repo] off the EDT and shows them (the repository's node is found by name); [user] false: no archive afterwards. */
     fun load(repo: String, user: Boolean = true) {
         val rn = repoNode(repo)?.userObject as? RepoNode
         if (rn != null) { if (rn.loading) return; rn.loading = true }
@@ -272,9 +271,14 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         val n = repoNode(repo) ?: return
         val rn = n.userObject as RepoNode
         rn.loading = false
-        val before = rn.runs?.rows?.filter { it.running }?.map { it.id }?.toSet().orEmpty()
-        rn.runs = runs
         rn.error = error
+        if (runs == null && rn.runs != null) {
+            // a refresh that failed (no network, no token): the rows already shown stay, the reason goes to the status line
+            baseNote = "$repo: refresh failed: $error  ·  the rows are from the last answer"
+            status.text = statusLine()
+            return
+        }
+        rn.runs = runs
         if (runs != null) loaded[repo] = runs else loaded.remove(repo)
         if (runs != null) fillRepo(n, runs) else reconcile(n, listOf(NoteNode(error ?: "failed", true)))
         val first = !rn.shown
@@ -282,8 +286,7 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         if (first) tree.expandPath(TreePath(n.path))
         baseNote = if (runs != null) "$repo: ${runs.rows.size} of ${runs.total} runs" + (runs.path?.let { "  ·  text: Open Runs Text" } ?: "") else "$repo: $error"
         status.text = statusLine()
-        val finished = runs != null && runs.rows.any { !it.running && it.id in before }
-        if (runs != null && (user || finished)) archive(repo)
+        if (runs != null && user) archive(repo)
     }
 
     private fun fillRepo(n: DefaultMutableTreeNode, runs: CiRuns) {
@@ -326,17 +329,22 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
         val ro = node.userObject as RunNode
         ro.loading = false
         if (d == null) { reconcile(node, listOf(NoteNode(error ?: "failed", true))); return }
+        val wasRunning = ro.run.running
         ro.detail = d
         ro.run = d.run.copy(workflow = ro.run.workflow)
         model.nodeChanged(node)
-        val firstOpen = !ro.opened
-        ro.opened = true
+        val expanded = tree.isExpanded(TreePath(node.path))
+        val firstOpen = expanded && !ro.opened
+        if (expanded) ro.opened = true
+        if (wasRunning && !ro.run.running) archive(repo)
         val jobs = d.jobs
         if (jobs.isEmpty()) { reconcile(node, listOf(NoteNode("no jobs", false))); return }
         val firstRedJob = jobs.firstOrNull { it.state == CiState.RED }?.id
-        reconcile(node, jobs.map { JobNode(repo, ro.run, it, d) }) { j ->
+        reconcile(node, jobs.map { JobNode(repo, ro.run, it, d) })
+        // a job that runs (or the first red one) is opened once, when the run is open: the running step is in view; a run row the user has not opened is not unfolded
+        if (expanded) for (j in children(node)) {
             val jo = j.userObject as JobNode
-            if (jo.job.state == CiState.RUNNING || jo.job.id == firstRedJob) tree.expandPath(TreePath(j.path))
+            if ((jo.job.state == CiState.RUNNING || jo.job.id == firstRedJob) && ro.autoOpened.add(jo.job.id)) tree.expandPath(TreePath(j.path))
         }
         var firstRed: DefaultMutableTreeNode? = null
         for (j in children(node)) {
@@ -367,20 +375,16 @@ class CiPanel(private val project: Project) : JPanel(BorderLayout()), UiDataProv
     // the poll ---------------------------------------------------------------------------------------------------
 
     /**
-     * Every 5 s while the tab is showing: the expanded repositories with a run in progress reload their runs (an idle one every 15 s: a new push shows up), and an
-     * expanded running run reloads its jobs. Everything is reconciled in place. [force] runs it though the tab is not showing (tests).
+     * Every 5 s while the tab is showing: every run in progress of an expanded repository reloads its jobs (`ci.jobs` also answers the run's own row, so the run's
+     * status moves with it: queued, running, done) and the nodes are reconciled in place. A new run shows up on Refresh. [force] runs it though the tab is not showing
+     * (tests).
      */
     internal fun tick(force: Boolean) {
         if (!force && !isShowing) return
-        ticks++
         for (repoNode in children(root)) {
-            val rn = repoNode.userObject as RepoNode
-            val runs = rn.runs ?: continue
-            if (!tree.isExpanded(TreePath(repoNode.path))) continue
-            if (runs.rows.any { it.running } || ticks % 3 == 0) load(rn.name, false)
+            if ((repoNode.userObject as RepoNode).runs == null || !tree.isExpanded(TreePath(repoNode.path))) continue
             for (wf in children(repoNode)) for (runNode in children(wf)) {
-                val ro = runNode.userObject as? RunNode ?: continue
-                if (ro.run.running && ro.detail != null && tree.isExpanded(TreePath(runNode.path))) loadJobs(runNode)
+                if ((runNode.userObject as? RunNode)?.run?.running == true) loadJobs(runNode)
             }
         }
     }

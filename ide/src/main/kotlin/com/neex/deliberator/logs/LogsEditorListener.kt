@@ -14,7 +14,7 @@ class LogsEditorListener : EditorFactoryListener {
         MarkerService.getInstance(project).ensureLoaded()
         val matcher = LogMatcher.getInstance(project)
         if (LogFiles.isLog(vf)) { matcher.annotate(editor); LogLinks.getInstance(project).attach(editor) }
-        else { MarkerGutter.attach(editor, project, vf); if (LogLinks.wants(vf)) LogLinks.getInstance(project).attach(editor) }
+        else { MarkerGutter.attach(editor, project, vf); LogLinks.getInstance(project).attachIfLinkable(editor, vf) }
     }
 
     override fun editorReleased(event: EditorFactoryEvent) {

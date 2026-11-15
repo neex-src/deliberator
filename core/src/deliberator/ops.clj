@@ -98,6 +98,7 @@
     ci.local repo* workflow* job* worktree event env image session ws -> {path lines bytes sha target source follow exit conclusion dir workflow job event image docker-host endpoint}   [logs.line]   (M5.4: one job of a workflow with act on the runtime's Podman, Floci injected; a red job is a result)
     pr.open repo* n* github remote session ws     -> {repo n ref remote head-sha worktree{name path branch head created moved} github pr comments{path inline reviews conversation} checks{path count by-result rows}}   (M5.5: refs/pull/<n>/head into worktrees/<repo>/pr-<n>; reviews and comments as sessions/<k>/pr/*.txt)
     logs.insights groups* query* env since until name budget-ms limit session ws -> {query-id status bytes-scanned statistics rows path sha query-file raw}   [line]   (M4.3)
+    logs.linkable path* ws                         -> {path linkable kind}   (is this file one whose places can name code: a CI log or diff, a kept CI log, a run's output; the IDE asks, it does not guess from the path)
     logs.match path* markers ws                    -> {lines [{n marker-id}] path scanned}
     logs.refs path* session ws                     -> {path lines service unresolved refs [{n from to text kind [class method logger line col] targets [{file repo rel}]}]}   (decision 76: the spans of a log that name code, resolved to files of the attached checkouts)
     marker.add file* line* logger ws               -> [{id file line logger}]   (the marker list after the change)
@@ -1081,6 +1082,9 @@
   (let [ws (ws-of args)]
     (logrefs/scan ws (log-file ws args))))
 
+(defn- logs-linkable [_ args]
+  (logrefs/linkable (ws-of args) (:path args)))
+
 (defn- run-paths [^Path dir]
   {:run (str dir) :run-edn (str (.resolve dir "run.edn")) :result (str (.resolve dir "result.txt"))})
 
@@ -1568,6 +1572,9 @@
                 :doc "The places of a log that name source code, as clickable spans resolved to files of the ATTACHED checkouts: stack frames (at pkg.Cls.m(File.java:15), also Caused by: and the exception class itself), the logback logger:line token, and Node frames (at fn (file:///var/task/index.mjs:42:7)) mapped through a :node-lambda description (:repo, :module, :task-root default /var/task). A class that no checkout holds gives no ref. When the log is a service's own (log-service-<n>-<ts>.log, logs/services/service-<n>/) the description's repository is the only target if it holds the file; else every holder is a target. Pure over the file and the checkouts."
                 :args (ws-schema :path {:type :string :required true :doc "log file, absolute or relative to the session's logs/"}
                                  :session {:type :string :doc "session key for a relative path"})}
+   "logs.linkable" {:fn logs-linkable :class :read
+                    :doc "Whether a file is one whose places can name code and that the IDE should link although it is no .log: a CI log or CI diff of a session, a kept CI log, the output of a scenario run. Pure over the path."
+                    :args (ws-schema :path {:type :string :required true :doc "absolute path of the file"})}
    "marker.add" {:fn marker-add :class :mutate
                  :doc "Marks a source line (idempotent per file and line); answers all markers."
                  :args (ws-schema :file {:type :string :required true :doc "source file path"}
