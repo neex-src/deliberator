@@ -23,6 +23,8 @@
   (`https://github.com/o/r/actions/runs/123/job/456`, which also carries the repo and job)."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
+            [deliberator.cikept :as cikept]
+            [deliberator.cisteps :as cisteps]
             [deliberator.github :as gh]
             [deliberator.logfetch :as logfetch]
             [deliberator.repo :as repo]
@@ -125,7 +127,8 @@
   {:id (get r "id") :number (get r "run_number") :attempt (get r "run_attempt") :workflow (get r "name")
    :workflow-id (get r "workflow_id") :title (get r "display_title") :branch (get r "head_branch") :sha (get r "head_sha")
    :event (get r "event") :status (get r "status") :conclusion (get r "conclusion")
-   :created-at (get r "created_at") :url (get r "html_url")})
+   :created-at (get r "created_at") :started-at (get r "run_started_at") :updated-at (get r "updated_at") :url (get r "html_url")
+   :origin "github"})
 
 (defn- row-line [{:keys [id number conclusion status branch sha created-at title]}]
   (format "%-12s #%-6s %-12s %-24s %s %s  %s" id number (or conclusion status) (or branch "") (subs (str sha) 0 (min 7 (count (str sha))))
@@ -158,12 +161,15 @@
 (defn- job-row [j]
   {:id (get j "id") :name (get j "name") :status (get j "status") :conclusion (get j "conclusion")
    :started-at (get j "started_at") :completed-at (get j "completed_at") :run-id (get j "run_id") :attempt (get j "run_attempt")
-   :steps (mapv (fn [s] {:number (get s "number") :name (get s "name") :status (get s "status") :conclusion (get s "conclusion")})
+   :duration-s (cisteps/duration-s (get j "started_at") (get j "completed_at")) :url (get j "html_url") :runner (get j "runner_name")
+   :steps (mapv (fn [s] {:number (get s "number") :name (get s "name") :status (get s "status") :conclusion (get s "conclusion")
+                         :started-at (get s "started_at") :completed-at (get s "completed_at")
+                         :duration-s (cisteps/duration-s (get s "started_at") (get s "completed_at"))})
                 (get j "steps"))})
 
 (defn- run-jobs [c t run]
   (let [r (api! c (str "/repos/" (:owner t) "/" (:name t) "/actions/runs/" run "/jobs") {:per_page 100 :filter "latest"})]
-    {:jobs (mapv job-row (get (json-of r) "jobs")) :raw (:sha r)}))
+    {:jobs (mapv job-row (get (json-of r) "jobs")) :raw (:sha r) :body (:body r)}))
 
 (defn- pick-job
   "The job of `jobs` that `job` (an id, a name, or nil = the first failed one) names."
@@ -205,28 +211,197 @@
       (<= 200 (:status r) 299) (assoc r :api-sha (:sha r))
       :else (gh/error-for r (str "GET " path) (:auth c)))))
 
-(defn log!
+;; one run: kept, or fetched ---------------------------------------------------------------------------------------
+
+(def origin "github")
+
+(defn- finished? [run-row jobs]
+  (and (= "completed" (:status run-row)) (every? #(= "completed" (:status %)) jobs)))
+
+(defn- fetch-jobs-doc
+  "The jobs of a run whose row is known -> `{:run-row :jobs :final :attempt :raw {:run :jobs} :body}`."
+  [c t run-row run-sha]
+  (let [{:keys [jobs raw body]} (run-jobs c t (:id run-row))]
+    {:run-row run-row :jobs jobs :final (finished? run-row jobs) :attempt (or (:attempt run-row) 1)
+     :raw {:run run-sha :jobs raw} :body body}))
+
+(defn- fetch-doc!
+  "Run row (one GET) and its jobs (another): what GitHub says now."
+  [c t run]
+  (let [rr (api! c (str "/repos/" (:owner t) "/" (:name t) "/actions/runs/" run))]
+    (fetch-jobs-doc c t (run-row (json-of rr)) (:sha rr))))
+
+(defn- age-s [kept-at] (when kept-at (max 0 (- (.getEpochSecond (store/now)) (.getEpochSecond ^Instant kept-at)))))
+
+(defn- doc-result
+  "The `ci.jobs` answer (see the ns docs) of a kept manifest `m` and/or a fetched `doc`; writes the session's text view."
+  [ws session t {:keys [kept doc c]}]
+  (let [m kept
+        run-row (:run-row (or doc m))
+        jobs (cikept/enrich (or m {:jobs (:jobs doc)}))
+        attempt (or (:attempt m) (:attempt doc))
+        res {:repo (:slug t) :run (str (:id run-row)) :attempt attempt :origin origin :final (boolean m)
+             :source (if (and m (nil? doc)) :kept :fetched) :kept-at (:kept-at m) :age-s (age-s (:kept-at m))
+             :run-row run-row :jobs jobs :dir (:dir m) :raw (or (:raw doc) (:raw m)) :auth (:auth c)}
+        text (cisteps/jobs-text (assoc res :fetched-at (store/now)))
+        p (.resolve (ci-dir ws session) (str "jobs-" (safe (:slug t)) "-" (:run res) ".txt"))]
+    (store/write-bytes-atomic! p (.getBytes ^String text StandardCharsets/UTF_8))
+    (assoc res :path (str p))))
+
+(defn- keep-doc!
+  "Keeps a finished fetched run (a run in progress is never kept). -> the manifest, nil when not final."
+  [ws t doc]
+  (when (:final doc)
+    (let [m {:origin origin :repo (:slug t) :run (str (:id (:run-row doc))) :attempt (:attempt doc) :run-row (:run-row doc)
+             :jobs (:jobs doc) :raw (:raw doc) :kept-at (store/now)}]
+      (cikept/keep-run! ws m (:body doc) (cisteps/jobs-text (assoc m :final true :source :kept :fetched-at (:kept-at m)))))))
+
+(defn- run-source
+  "A kept run when there is one (no network, no token) unless `refresh`; else GitHub's answer, kept when the run is finished.
+  -> `{:kept m}` or `{:doc :c :kept m-or-nil}`."
+  [ws session t {:keys [attempt refresh]}]
+  (or (when-not refresh
+        (some->> (cikept/find-run ws origin (:slug t) (:run t) attempt) (hash-map :kept)))
+      (let [c (ctx ws session) doc (fetch-doc! c t (:run t))]
+        {:c c :doc doc :kept (keep-doc! ws t doc)})))
+
+(defn jobs!
   [ws {:keys [session] :as args}]
+  (let [t (target ws args)]
+    (doc-result ws session t (run-source ws session t args))))
+
+(defn- old-job? [job]
+  (when-let [x (:completed-at job)]
+    (< (.getEpochSecond (Instant/parse x)) (- (.getEpochSecond (store/now)) (* 80 86400)))))
+
+(defn- ensure-job-log!
+  "The kept manifest with the log of `job` kept (fetched once; nothing when it is). A job that never ran has no log (`:none`), one
+  GitHub dropped is `:gone`."
+  [ws session t src m job]
+  (if (cikept/log-state m (:id job))
+    m
+    (if (or (= "skipped" (:conclusion job)) (nil? (:started-at job)) (empty? (:steps job)))
+      (cikept/mark-log! m (:id job) :none)
+      (try
+        (let [{:keys [body sha]} (fetch-job-log (or (:c src) (ctx ws session)) t (:id job))
+              text (log-text body)]
+          (cikept/write-job-log! m job text sha (cisteps/cut (str/split-lines text) (:steps job))))
+        (catch clojure.lang.ExceptionInfo e
+          (if (and (#{:ci/log-not-available :ci/not-found} (:type (ex-data e))) (old-job? job))
+            (cikept/mark-log! m (:id job) :gone)
+            (throw e)))))))
+
+(defn- the-step [job step]
+  (let [s (cisteps/select-step (:steps job) step)]
+    (cond (nil? s) (fail :ci/no-step (str "no step " (pr-str step) " in job " (:name job))
+                         :known (mapv #(str (:number %) " " (:name %)) (:steps job)) :hint "a step's number or its name")
+          (= :ambiguous s) (fail :ci/no-step (str "several steps match " (pr-str step) " in job " (:name job))
+                                 :known (mapv #(str (:number %) " " (:name %)) (:steps job)) :hint "the step's number")
+          :else s)))
+
+(defn- step-info [s lines exact cut]
+  (-> (select-keys s [:number :name :status :conclusion :started-at :completed-at :duration-s])
+      (assoc :lines lines :exact exact :cut cut)))
+
+(defn- step-view-name [t run job s] (str (safe (:slug t)) "-" run "-" (safe (:name job)) "-" (:id job) "-step" (format "%02d" (long (:number s))) "-" (cisteps/slug (:name s)) ".log"))
+
+(defn log!
+  [ws {:keys [session step] :as args}]
   (let [t (target ws args)
-        c (ctx ws session)
-        {:keys [jobs raw]} (run-jobs c t (:run t))
-        job (pick-job jobs (:job t) (:run t))
-        _ (when (not= "completed" (:status job))
-            (fail :ci/log-not-available (str "job " (:name job) " is " (:status job) "; its log is published when it completes")
-                  :hint "dlb ci tail follows a running job"))
-        {:keys [body sha]} (fetch-job-log c t (:id job))
-        text (log-text body)
-        bytes (.getBytes text StandardCharsets/UTF_8)
-        same? (java.util.Arrays/equals ^bytes body bytes)
-        base (str (safe (:slug t)) "-" (:run t) "-" (safe (:name job)) "-" (:id job))
+        src (run-source ws session t args)
+        m (:kept src)
+        job (pick-job (if m (:jobs m) (:jobs (:doc src))) (:job t) (:run t))
         dir (ci-dir ws session)
-        p (if same?
-            (let [p (.resolve dir (str base ".log"))] (:path (store/link! ws sha p)))
-            (write-view! dir base ".log" bytes))]
-    {:path (str p) :lines (count (str/split-lines text)) :bytes (count body) :sha sha :repo (:slug t) :run (:run t)
-     :job (select-keys job [:id :name :status :conclusion :started-at :completed-at]) :conclusion (:conclusion job)
-     :other-failed (mapv :name (filter #(and (= "failure" (:conclusion %)) (not= (:id %) (:id job))) jobs))
-     :raw {:jobs raw :log sha} :auth (:auth c)}))
+        other-failed (fn [jobs] (mapv :name (filter #(and (= "failure" (:conclusion %)) (not= (:id %) (:id job))) jobs)))]
+    (if m
+      ;; a finished run: kept, served from the kept copy
+      (let [m (ensure-job-log! ws session t src m job)
+            l (get-in m [:logs (:id job)])
+            _ (case (:state l)
+                :none (fail :ci/log-not-available (str "job " (:name job) " never ran: it has no log") :hint "a skipped job has no log")
+                :gone (fail :ci/log-gone (str "GitHub no longer has the log of job " (:name job)) :hint "logs expire after 90 days; nothing was kept of this one")
+                nil)
+            s (when step (the-step (first (filter #(= (:id job) (:id %)) (:jobs m))) step))
+            st (when s (get-in l [:steps (:number s)]))
+            _ (when (and s (nil? st)) (fail :ci/no-step-log (str "step " (:number s) " " (:name s) " of job " (:name job) " has no log (" (cisteps/result s) ")")
+                                            :hint "a skipped step prints nothing"))
+            file (if s (cikept/step-path m (:id job) s) (cikept/job-log-path m (:id job)))
+            ^bytes bs (java.nio.file.Files/readAllBytes file)
+            base (if s (str/replace (step-view-name t (:run t) job s) #"\.log$" "") (str (safe (:slug t)) "-" (:run t) "-" (safe (:name job)) "-" (:id job)))
+            p (if (and (not s) (:sha l) (java.util.Arrays/equals bs ^bytes (store/raw-get ws (:sha l))))
+                (:path (store/link! ws (:sha l) (.resolve dir (str base ".log"))))      ; plain text already: the raw blob itself
+                (write-view! dir base ".log" bs))]
+        (cond-> {:path (str p) :lines (if s (:lines st) (:lines l)) :bytes (alength bs) :sha (:sha l) :repo (:slug t) :run (:run t)
+                 :job (select-keys job [:id :name :status :conclusion :started-at :completed-at]) :conclusion (:conclusion job)
+                 :other-failed (other-failed (:jobs m)) :raw {:jobs (:jobs (:raw m)) :log (:sha l)} :auth (:auth (:c src))
+                 :source (if (:doc src) :fetched :kept) :kept (str file) :kept-at (:kept-at m) :age-s (age-s (:kept-at m))}
+          s (assoc :step (step-info s (:lines st) (:exact st) (:cut st)))))
+      ;; a run still in progress: nothing is kept; a completed job's log is shown as it is now
+      (let [jobs (:jobs (:doc src))
+            c (:c src)
+            _ (when (not= "completed" (:status job))
+                (fail :ci/log-not-available (str "job " (:name job) " is " (:status job) "; its log is published when it completes")
+                      :hint "dlb ci tail follows a running job"))
+            {:keys [body sha]} (fetch-job-log c t (:id job))
+            text (log-text body)
+            lines (str/split-lines text)
+            s (when step (the-step job step))
+            cut (when s (get (cisteps/cut lines (:steps job)) (:number s)))
+            _ (when (and s (nil? cut)) (fail :ci/no-step-log (str "step " (:number s) " " (:name s) " has no log (" (cisteps/result s) ")")))
+            out (if s
+                  (.getBytes (str (when-not (:exact cut) (str cisteps/exact-note "\n")) (str/join "\n" (:lines cut)) "\n") StandardCharsets/UTF_8)
+                  (.getBytes text StandardCharsets/UTF_8))
+            base (str (safe (:slug t)) "-" (:run t) "-" (safe (:name job)) "-" (:id job))
+            p (if s
+                (write-view! dir (str/replace (step-view-name t (:run t) job s) #"\.log$" "") ".log" out)
+                (if (java.util.Arrays/equals ^bytes body out)
+                  (:path (store/link! ws sha (.resolve dir (str base ".log"))))
+                  (write-view! dir base ".log" out)))]
+        (cond-> {:path (str p) :lines (if s (count (:lines cut)) (count lines)) :bytes (count body) :sha sha :repo (:slug t) :run (:run t)
+                 :job (select-keys job [:id :name :status :conclusion :started-at :completed-at]) :conclusion (:conclusion job)
+                 :other-failed (other-failed jobs) :raw {:jobs (:jobs (:raw (:doc src))) :log sha} :auth (:auth c)
+                 :source :fetched :kept nil}
+          s (assoc :step (step-info s (count (:lines cut)) (:exact cut) (:cut cut))))))))
+
+;; archive: what is missing for the newest finished runs ---------------------------------------------------------------
+
+(defn archive!
+  "Keeps the jobs and the logs of the newest `limit` finished runs of `repo` that are not kept yet (one listing, then only what is missing)."
+  [ws {:keys [session limit] :as args}]
+  (let [t (parse-repo ws (:repo args))
+        c (ctx ws session)
+        limit (min 100 (max 1 (or limit 10)))
+        listing (api! c (str "/repos/" (:owner t) "/" (:name t) "/actions/runs") {:per_page limit :status "completed"})
+        rows (mapv run-row (get (json-of listing) "workflow_runs"))
+        new-runs (volatile! 0) new-logs (volatile! 0) already (volatile! 0)
+        failed (volatile! [])
+        lines (volatile! [])]
+    (doseq [row rows]
+      (try
+        (let [kept (cikept/find-run ws origin (:slug t) (str (:id row)) (:attempt row))
+              m (or kept (let [doc (fetch-jobs-doc c t row (:sha listing))]
+                           (when-let [m (keep-doc! ws t doc)] (vswap! new-runs inc) m)))]
+          (if-not m
+            (vswap! failed conj {:run (str (:id row)) :error "not finished"})
+            (let [had (cikept/complete? m)
+                  m (reduce (fn [m job]
+                              (if (cikept/log-state m (:id job))
+                                m
+                                (let [m2 (ensure-job-log! ws session t {:c c} m job)] (vswap! new-logs inc) m2)))
+                            m (:jobs m))]
+              (when (and kept had) (vswap! already inc))
+              (vswap! lines conj (str (:id row) " #" (:number row) " " (:conclusion row) " " (:branch row) " "
+                                      (count (:jobs m)) " jobs, logs " (count (filter #(= :kept (cikept/log-state m (:id %))) (:jobs m))) " kept"
+                                      (when-not kept ", new"))))))
+        (catch clojure.lang.ExceptionInfo e
+          (vswap! failed conj {:run (str (:id row)) :error (ex-message e)})
+          (when (#{:ci/unreachable :ci/rate-limited :ci/auth-required :ci/forbidden} (:type (ex-data e))) (throw e)))))
+    (let [text (str "# archive of " (:slug t) ": the newest " (count rows) " finished runs, " @new-runs " new, " @new-logs " logs fetched, "
+                    (count @failed) " failed, " (store/now) "\n" (str/join "\n" @lines) (when (seq @lines) "\n"))
+          p (.resolve (ci-dir ws session) (str "archive-" (safe (:slug t)) ".txt"))]
+      (store/write-bytes-atomic! p (.getBytes ^String text StandardCharsets/UTF_8))
+      {:repo (:slug t) :limit limit :checked (count rows) :new-runs @new-runs :new-logs @new-logs :already @already
+       :failed @failed :path (str p)})))
 
 ;; tail ----------------------------------------------------------------------------------------------------------
 
@@ -300,10 +475,19 @@
   [line]
   (reduce (fn [l [re rep]] (str/replace l re rep)) line normalisers))
 
+(defn- jobs-of
+  "The jobs of run `id`: the kept ones, else fetched (and kept when the run is finished)."
+  [ws c t id]
+  (if-let [m (cikept/find-run ws origin (:slug t) (str id) nil)]
+    (cikept/enrich m)
+    (let [doc (fetch-doc! c t (str id))]
+      (keep-doc! ws t doc)
+      (:jobs doc))))
+
 (defn- find-green
-  "The latest run before `red` of its workflow in which the job named `job-name` succeeded:
-  -> {:run id :job job-row :scanned n}. Same branch first, then any; `against` forces a run."
-  [c t red job-name against]
+  "The latest run before `red` of its workflow in which the job named `job-name` succeeded (and, with `step`, whose job has that step
+  succeeded): -> {:run id :job job-row :scanned n}. Same branch first, then any; `against` forces a run."
+  [ws c t red job-name against step-name]
   (let [wf (:workflow-id red)
         before (str "<" (:created-at red))
         runs (fn [branch]
@@ -311,41 +495,48 @@
                                                 {:per_page 20 :status "success" :created before :branch branch}))
                                  "workflow_runs")))
         cands (distinct (concat (runs (:branch red)) (runs nil)))
-        scanned (volatile! 0)]
+        scanned (volatile! 0)
+        good (fn [jobs]
+               (let [j (first (filter #(= job-name (:name %)) jobs))]
+                 (when (and j (= "success" (:conclusion j))
+                            (or (nil? step-name) (some #(and (= step-name (:name %)) (= "success" (:conclusion %))) (:steps j))))
+                   j)))]
     (or (if against
-          (let [{:keys [jobs]} (run-jobs c t against)
-                j (first (filter #(= job-name (:name %)) jobs))]
-            (when (and j (= "success" (:conclusion j))) {:run (str against) :job j :scanned 0}))
+          (when-let [j (good (jobs-of ws c t against))] {:run (str against) :job j :scanned 0})
           (some (fn [r]
                   (when (< @scanned 10)
                     (vswap! scanned inc)
-                    (let [{:keys [jobs]} (run-jobs c t (:id r))
-                          j (first (filter #(= job-name (:name %)) jobs))]
-                      (when (and j (= "success" (:conclusion j))) {:run (str (:id r)) :job j :scanned @scanned}))))
+                    (when-let [j (good (jobs-of ws c t (:id r)))] {:run (str (:id r)) :job j :scanned @scanned})))
                 (remove #(= (str (:id %)) (str (:id red))) cands)))
-        (fail :ci/no-green-run (str "no earlier successful run of the workflow has a green job " (pr-str job-name))
+        (fail :ci/no-green-run (str "no earlier successful run of the workflow has a green job " (pr-str job-name)
+                                    (when step-name (str " with a green step " (pr-str step-name))))
               :hint "pass against (a run id) to compare with a particular run"))))
 
 (defn diff!
-  [ws {:keys [session normalise against] :or {normalise true} :as args}]
+  [ws {:keys [session normalise against step] :or {normalise true} :as args}]
   (let [t (target ws args)
-        c (ctx ws session)
-        red-run (run-row (json-of (api! c (str "/repos/" (:owner t) "/" (:name t) "/actions/runs/" (:run t)))))
-        {:keys [jobs]} (run-jobs c t (:run t))
+        src (run-source ws session t {})
+        c (or (:c src) (ctx ws session))
+        red-run (:run-row (or (:doc src) (:kept src)))
+        jobs (if (:kept src) (cikept/enrich (:kept src)) (:jobs (:doc src)))
         job (pick-job jobs (:job t) (:run t))
-        _ (when-not (= "failure" (:conclusion job))
-            (fail :ci/not-failed (str "job " (:name job) " of run " (:run t) " is " (or (:conclusion job) (:status job)) ", not failed")
-                  :hint "ci.diff compares a failed job with the last green one"))
-        green (find-green c t red-run (:name job) (some-> against str))
-        red-log (log! ws {:repo (:slug t) :run (:run t) :job (str (:id job)) :session session})
-        green-log (log! ws {:repo (:slug t) :run (:run green) :job (str (:id (:job green))) :session session})
+        rstep (when step (the-step job step))
+        _ (when-not (= "failure" (if rstep (:conclusion rstep) (:conclusion job)))
+            (fail :ci/not-failed (str (if rstep (str "step " (:number rstep) " " (:name rstep) " of job ") "job ") (:name job) " of run " (:run t) " is "
+                                      (or (:conclusion (or rstep job)) (:status (or rstep job))) ", not failed")
+                  :hint "ci.diff compares a failed job (or step) with the last green one"))
+        green (find-green ws c t red-run (:name job) (some-> against str) (:name rstep))
+        gstep (when rstep (or (first (filter #(and (= (:name rstep) (:name %)) (= "success" (:conclusion %))) (:steps (:job green)))) rstep))
+        red-log (log! ws {:repo (:slug t) :run (:run t) :job (str (:id job)) :step (some-> rstep :number str) :session session})
+        green-log (log! ws {:repo (:slug t) :run (:run green) :job (str (:id (:job green))) :step (some-> gstep :number str) :session session})
         lines #(let [ls (str/split-lines (slurp %))] (if normalise (mapv normalise-line ls) (vec ls)))
         a (lines (:path green-log))
         b (lines (:path red-log))
-        la (str "green " (:slug t) " run " (:run green) " " (:name job))
-        lb (str "red " (:slug t) " run " (:run t) " " (:name job))
+        sfx (when rstep (str " step " (:number rstep) " " (:name rstep)))
+        la (str "green " (:slug t) " run " (:run green) " " (:name job) sfx)
+        lb (str "red " (:slug t) " run " (:run t) " " (:name job) sfx)
         d (render/unified a b la lb)
-        base (str "diff-" (safe (:slug t)) "-" (:run t) "-vs-" (:run green) "-" (safe (:name job)))
+        base (str "diff-" (safe (:slug t)) "-" (:run t) "-vs-" (:run green) "-" (safe (:name job)) (when rstep (str "-step" (:number rstep))))
         p (write-view! (ci-dir ws session) base ".diff"
                        (.getBytes ^String (if (str/blank? d) (str "# the logs are equal" (when normalise " after normalisation") "\n") d) StandardCharsets/UTF_8))]
     {:path (str p) :diff (let [ls (str/split-lines d)]
@@ -353,6 +544,7 @@
                              (str (str/join "\n" (take 300 ls)) "\n... " (- (count ls) 300) " more lines in " p "\n")
                              d))
      :truncated (> (count (str/split-lines d)) 300) :equal (str/blank? d) :normalised (boolean normalise) :repo (:slug t)
+     :step (when rstep (select-keys rstep [:number :name]))
      :red {:run (:run t) :job (:name job) :job-id (:id job) :log (:path red-log) :lines (count b)}
      :green {:run (:run green) :job (:name job) :job-id (:id (:job green)) :log (:path green-log) :lines (count a) :scanned (:scanned green)}
      :added (count (filter #(str/starts-with? % "+") (rest (rest (str/split-lines d)))))

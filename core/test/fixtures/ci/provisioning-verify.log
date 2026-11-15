@@ -1,0 +1,281 @@
+﻿2026-11-05T20:39:46.7264488Z Current runner version: '2.338.2'
+2026-11-05T20:39:46.7302343Z ##[group]Runner Image Provisioner
+2026-11-05T20:39:46.7303952Z Hosted Compute Agent
+2026-11-05T20:39:46.7305050Z Version: 20261028.624
+2026-11-05T20:39:46.7306379Z Commit: 54898b74c23fde5556c9b3c3a2290865feef0dfe
+2026-11-05T20:39:46.7307784Z Build Date: 2026-10-28T21:51:42Z
+2026-11-05T20:39:46.7309052Z Worker ID: {036f3fab-94f0-4f0f-a3de-be74c9b71b8a}
+2026-11-05T20:39:46.7310998Z Region: centralus
+2026-11-05T20:39:46.7311999Z Cloud: Azure
+2026-11-05T20:39:46.7313091Z ##[endgroup]
+2026-11-05T20:39:46.7315402Z ##[group]Operating System
+2026-11-05T20:39:46.7316512Z Ubuntu
+2026-11-05T20:39:46.7317670Z 24.04.5
+2026-11-05T20:39:46.7318580Z LTS
+2026-11-05T20:39:46.7319539Z ##[endgroup]
+2026-11-05T20:39:46.7320789Z ##[group]Runner Image
+2026-11-05T20:39:46.7321776Z Image: ubuntu-24.04
+2026-11-05T20:39:46.7322874Z Version: 20261101.360.1
+2026-11-05T20:39:46.7325037Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261101.360/images/ubuntu/Ubuntu2404-Readme.md
+2026-11-05T20:39:46.7328396Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261101.360
+2026-11-05T20:39:46.7330368Z ##[endgroup]
+2026-11-05T20:39:46.7332635Z ##[group]GITHUB_TOKEN Permissions
+2026-11-05T20:39:46.7335694Z Contents: read
+2026-11-05T20:39:46.7336780Z Metadata: read
+2026-11-05T20:39:46.7337733Z Packages: read
+2026-11-05T20:39:46.7338766Z ##[endgroup]
+2026-11-05T20:39:46.7342591Z Secret source: Actions
+2026-11-05T20:39:46.7344325Z Cache mode: write
+2026-11-05T20:39:46.7345934Z Prepare workflow directory
+2026-11-05T20:39:46.7853699Z Prepare all required actions
+2026-11-05T20:39:46.7928173Z Getting action download info
+2026-11-05T20:39:47.1148016Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-05T20:39:47.2567647Z Download action repository 'actions/setup-java@v4' (SHA:cf277c60eb25467037889841efdb72551f06f6c3)
+2026-11-05T20:39:47.9713269Z Complete job name: verify
+2026-11-05T20:39:48.0677999Z ##[group]Run actions/checkout@v4
+2026-11-05T20:39:48.0680040Z with:
+2026-11-05T20:39:48.0681060Z   repository: the-user/acme-provisioning
+2026-11-05T20:39:48.0689221Z   token: ***
+2026-11-05T20:39:48.0690448Z   ssh-strict: true
+2026-11-05T20:39:48.0691321Z   ssh-user: git
+2026-11-05T20:39:48.0692181Z   persist-credentials: true
+2026-11-05T20:39:48.0693109Z   clean: true
+2026-11-05T20:39:48.0694008Z   sparse-checkout-cone-mode: true
+2026-11-05T20:39:48.0695049Z   fetch-depth: 1
+2026-11-05T20:39:48.0695883Z   fetch-tags: false
+2026-11-05T20:39:48.0696720Z   show-progress: true
+2026-11-05T20:39:48.0697572Z   lfs: false
+2026-11-05T20:39:48.0698375Z   submodules: false
+2026-11-05T20:39:48.0699269Z   set-safe-directory: true
+2026-11-05T20:39:48.0700588Z   allow-unsafe-pr-checkout: false
+2026-11-05T20:39:48.0702277Z ##[endgroup]
+2026-11-05T20:39:48.6020508Z Syncing repository: the-user/acme-provisioning
+2026-11-05T20:39:48.6024909Z ##[group]Getting Git version info
+2026-11-05T20:39:48.6027466Z Working directory is '~/work/acme-provisioning/acme-provisioning'
+2026-11-05T20:39:48.6074959Z [command]/usr/bin/git version
+2026-11-05T20:39:48.6233589Z git version 2.56.0
+2026-11-05T20:39:48.6262638Z ##[endgroup]
+2026-11-05T20:39:48.6344557Z Temporarily overriding HOME='~/work/_temp/096879ce-2d9a-4783-b4a3-32c1b1988964' before making global git config changes
+2026-11-05T20:39:48.6350972Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-05T20:39:48.6366154Z [command]/usr/bin/git config --global --add safe.directory ~/work/acme-provisioning/acme-provisioning
+2026-11-05T20:39:48.6376537Z Deleting the contents of '~/work/acme-provisioning/acme-provisioning'
+2026-11-05T20:39:48.6382559Z ##[group]Initializing the repository
+2026-11-05T20:39:48.6386505Z [command]/usr/bin/git init ~/work/acme-provisioning/acme-provisioning
+2026-11-05T20:39:48.6640702Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-05T20:39:48.6645112Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-05T20:39:48.6649006Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-05T20:39:48.6652629Z hint: call:
+2026-11-05T20:39:48.6654188Z hint:
+2026-11-05T20:39:48.6656441Z hint: 	git config --global init.defaultBranch <name>
+2026-11-05T20:39:48.6663940Z hint:
+2026-11-05T20:39:48.6666238Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-05T20:39:48.6670450Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-05T20:39:48.6673464Z hint:
+2026-11-05T20:39:48.6675048Z hint: 	git branch -m <name>
+2026-11-05T20:39:48.6676964Z hint:
+2026-11-05T20:39:48.6679344Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-05T20:39:48.6684419Z Initialized empty Git repository in ~/work/acme-provisioning/acme-provisioning/.git/
+2026-11-05T20:39:48.6844475Z [command]/usr/bin/git remote add origin https://github.com/the-user/acme-provisioning
+2026-11-05T20:39:48.6851796Z ##[endgroup]
+2026-11-05T20:39:48.6855643Z ##[group]Disabling automatic garbage collection
+2026-11-05T20:39:48.6858172Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-05T20:39:48.6892838Z ##[endgroup]
+2026-11-05T20:39:48.6896197Z ##[group]Setting up auth
+2026-11-05T20:39:48.6923070Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-05T20:39:48.7027125Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-05T20:39:48.8983556Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-05T20:39:48.8994799Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-05T20:39:48.9002475Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-05T20:39:48.9007131Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-05T20:39:48.9013821Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-05T20:39:48.9019282Z ##[endgroup]
+2026-11-05T20:39:48.9021505Z ##[group]Fetching the repository
+2026-11-05T20:39:48.9025378Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +f217f62f1415dd4f1800b14d9814bf1e1c3ef008:refs/remotes/origin/main
+2026-11-05T20:39:49.2490325Z From https://github.com/the-user/acme-provisioning
+2026-11-05T20:39:49.2495711Z  * [new ref]         f217f62f1415dd4f1800b14d9814bf1e1c3ef008 -> origin/main
+2026-11-05T20:39:49.2504423Z ##[endgroup]
+2026-11-05T20:39:49.2507742Z ##[group]Determining the checkout info
+2026-11-05T20:39:49.2515255Z ##[endgroup]
+2026-11-05T20:39:49.2517834Z [command]/usr/bin/git sparse-checkout disable
+2026-11-05T20:39:49.2560033Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-05T20:39:49.2611401Z ##[group]Checking out the ref
+2026-11-05T20:39:49.2616967Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-11-05T20:39:49.2750351Z Switched to a new branch 'main'
+2026-11-05T20:39:49.2753280Z branch 'main' set up to track 'origin/main'.
+2026-11-05T20:39:49.2759542Z ##[endgroup]
+2026-11-05T20:39:49.2821112Z [command]/usr/bin/git log -1 --format=%H
+2026-11-05T20:39:49.2861166Z f217f62f1415dd4f1800b14d9814bf1e1c3ef008
+2026-11-05T20:39:49.3386521Z ##[group]Run actions/setup-java@v4
+2026-11-05T20:39:49.3387729Z with:
+2026-11-05T20:39:49.3388588Z   distribution: temurin
+2026-11-05T20:39:49.3389564Z   java-version: 21
+2026-11-05T20:39:49.3391391Z   cache: maven
+2026-11-05T20:39:49.3392294Z   java-package: jdk
+2026-11-05T20:39:49.3393237Z   check-latest: false
+2026-11-05T20:39:49.3394194Z   server-id: github
+2026-11-05T20:39:49.3395161Z   server-username: GITHUB_ACTOR
+2026-11-05T20:39:49.3396273Z   server-password: GITHUB_TOKEN
+2026-11-05T20:39:49.3397404Z   overwrite-settings: true
+2026-11-05T20:39:49.3398436Z   job-status: success
+2026-11-05T20:39:49.3407892Z   token: ***
+2026-11-05T20:39:49.3408805Z ##[endgroup]
+2026-11-05T20:39:49.5654526Z ##[warning]setup-java v4 is deprecated and will no longer receive updates. Please migrate to actions/setup-java@v5.
+2026-11-05T20:39:49.5675481Z (node:2096) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-05T20:39:49.5680948Z ##[group]Installed distributions
+2026-11-05T20:39:49.5687101Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-05T20:39:49.5708026Z Resolved Java 21.0.13+9 from tool-cache
+2026-11-05T20:39:49.5710444Z Setting Java 21.0.13+9 as the default
+2026-11-05T20:39:49.5712733Z Creating toolchains.xml for JDK version 21 from temurin
+2026-11-05T20:39:49.5766092Z Writing to ~/.m2/toolchains.xml
+2026-11-05T20:39:49.5771063Z 
+2026-11-05T20:39:49.5771809Z Java configuration:
+2026-11-05T20:39:49.5773374Z   Distribution: temurin
+2026-11-05T20:39:49.5774919Z   Version: 21.0.13+9
+2026-11-05T20:39:49.5777011Z   Path: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-05T20:39:49.5778759Z 
+2026-11-05T20:39:49.5780729Z ##[endgroup]
+2026-11-05T20:39:49.5826894Z Creating settings.xml with server-id: github
+2026-11-05T20:39:49.6277426Z Writing to ~/.m2/settings.xml
+2026-11-05T20:39:49.9063309Z (node:2096) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-11-05T20:39:49.9078572Z Cache hit for: setup-java-Linux-x64-maven-fdbc6e92f5ec1f60992437fb921973bd141c8c57f87da8d321195678d3b79042
+2026-11-05T20:39:51.1667097Z Received 74514315 of 74514315 (100.0%), 72.3 MBs/sec
+2026-11-05T20:39:51.1668502Z Cache Size: ~71 MB (74514315 B)
+2026-11-05T20:39:51.1712130Z [command]/usr/bin/tar -xf ~/work/_temp/958547c7-1dd3-4548-b6da-8b1e99cff387/cache.tzst -P -C ~/work/acme-provisioning/acme-provisioning --use-compress-program unzstd
+2026-11-05T20:39:51.4764514Z Cache restored successfully
+2026-11-05T20:39:51.4814194Z Cache restored from key: setup-java-Linux-x64-maven-fdbc6e92f5ec1f60992437fb921973bd141c8c57f87da8d321195678d3b79042
+2026-11-05T20:39:51.5192708Z ##[group]Run mvn -B verify
+2026-11-05T20:39:51.5193367Z [36;1mmvn -B verify[0m
+2026-11-05T20:39:51.5230104Z shell: /usr/bin/bash -e {0}
+2026-11-05T20:39:51.5230575Z env:
+2026-11-05T20:39:51.5231148Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-05T20:39:51.5232091Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-05T20:39:51.5232814Z ##[endgroup]
+2026-11-05T20:39:55.2911290Z [INFO] Scanning for projects...
+2026-11-05T20:39:55.5417479Z [INFO] Loaded 24375 auto-discovered prefixes for remote repository central (prefixes-central.txt)
+2026-11-05T20:39:56.0441414Z [INFO] 
+2026-11-05T20:39:56.0446710Z [INFO] ---------------------< com.acme:provisioning >----------------------
+2026-11-05T20:39:56.0674378Z [INFO] Building provisioning 0.1.0
+2026-11-05T20:39:56.0685557Z [INFO]   from pom.xml
+2026-11-05T20:39:56.0861794Z [INFO] --------------------------------[ jar ]---------------------------------
+2026-11-05T20:39:56.1870935Z [INFO] Loaded 64 auto-discovered prefixes for remote repository apache.snapshots (prefixes-apache.snapshots.txt)
+2026-11-05T20:39:58.1303734Z [INFO] 
+2026-11-05T20:39:58.1315600Z [INFO] --- resources:3.3.1:resources (default-resources) @ provisioning ---
+2026-11-05T20:39:58.2980383Z [INFO] Copying 1 resource from src/main/resources to target/classes
+2026-11-05T20:39:58.3201442Z [INFO] Copying 1 resource from src/main/resources to target/classes
+2026-11-05T20:39:58.3230805Z [INFO] 
+2026-11-05T20:39:58.3260787Z [INFO] --- compiler:3.13.0:compile (default-compile) @ provisioning ---
+2026-11-05T20:39:58.5208272Z [INFO] Recompiling the module because of changed source code.
+2026-11-05T20:39:58.5297546Z [INFO] Compiling 15 source files with javac [debug parameters release 21] to target/classes
+2026-11-05T20:40:00.8041021Z [INFO] 
+2026-11-05T20:40:00.8054039Z [INFO] --- resources:3.3.1:testResources (default-testResources) @ provisioning ---
+2026-11-05T20:40:00.8152213Z [INFO] skip non existing resourceDirectory ~/work/acme-provisioning/acme-provisioning/src/test/resources
+2026-11-05T20:40:00.8171018Z [INFO] 
+2026-11-05T20:40:00.8198529Z [INFO] --- compiler:3.13.0:testCompile (default-testCompile) @ provisioning ---
+2026-11-05T20:40:00.8321349Z [INFO] Recompiling the module because of changed dependency.
+2026-11-05T20:40:00.8361168Z [INFO] Compiling 4 source files with javac [debug parameters release 21] to target/test-classes
+2026-11-05T20:40:01.6252162Z [INFO] 
+2026-11-05T20:40:01.6290635Z [INFO] --- surefire:3.2.5:test (default-test) @ provisioning ---
+2026-11-05T20:40:01.9371857Z [INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+2026-11-05T20:40:02.0412491Z [INFO] 
+2026-11-05T20:40:02.0427943Z [INFO] -------------------------------------------------------
+2026-11-05T20:40:02.0428831Z [INFO]  T E S T S
+2026-11-05T20:40:02.0429982Z [INFO] -------------------------------------------------------
+2026-11-05T20:40:02.9441587Z [INFO] Running com.acme.provisioning.TimeoutsAndSimsTest
+2026-11-05T20:40:03.2132590Z [INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.208 s -- in com.acme.provisioning.TimeoutsAndSimsTest
+2026-11-05T20:40:03.2156194Z [INFO] Running com.acme.provisioning.IdmClientTest
+2026-11-05T20:40:03.9040401Z 20:40:03.854 [main] INFO com.acme.provisioning.IdmClient -- token for client acme-provisioning fetched, valid for 3600 s
+2026-11-05T20:40:03.9042422Z 20:40:03.866 [main] WARN com.acme.provisioning.IdmClient -- identity provider answered 401 for /openidm/managed/alpha_user/revoked-first, fetching a new token
+2026-11-05T20:40:03.9646081Z 20:40:03.912 [main] INFO com.acme.provisioning.IdmClient -- token for client acme-provisioning fetched, valid for 3600 s
+2026-11-05T20:40:04.0013570Z 20:40:03.971 [main] INFO com.acme.provisioning.IdmClient -- token for client acme-provisioning fetched, valid for 3600 s
+2026-11-05T20:40:04.1151959Z [INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.913 s -- in com.acme.provisioning.IdmClientTest
+2026-11-05T20:40:04.1191181Z [INFO] Running com.acme.provisioning.ProvisionerTest
+2026-11-05T20:40:04.1231407Z 20:40:04.073 [main] INFO com.acme.provisioning.Provisioner -- activation request received activationId=act-1 userId=u-1 simType=ESIM
+2026-11-05T20:40:04.1311406Z 20:40:04.073 [main] INFO com.acme.provisioning.Provisioner -- customer read plan=STANDARD-5G activeLines=1 customerNumber=BT-100001
+2026-11-05T20:40:04.1322441Z 20:40:04.074 [main] INFO com.acme.provisioning.Provisioner -- line quota allowed=true max=2 active=1
+2026-11-05T20:40:04.1331277Z 20:40:04.074 [main] INFO com.acme.provisioning.Provisioner -- SIM reserved activationId=act-1 iccid=8940006454048904028 msisdn=+447700900152
+2026-11-05T20:40:04.1351093Z 20:40:04.074 [main] INFO com.acme.provisioning.Provisioner -- timeout schedule scheduled act-1
+2026-11-05T20:40:04.1386751Z 20:40:04.074 [main] INFO com.acme.provisioning.Provisioner -- SimProvisioned put on the bus eventId=evt-1 activationId=act-1
+2026-11-05T20:40:04.1404649Z 20:40:04.075 [main] INFO com.acme.provisioning.Provisioner -- activation act-1 is ACTIVE invoice=BT-INV-1 amountCents=2513
+2026-11-05T20:40:04.1421024Z 20:40:04.078 [main] INFO com.acme.provisioning.Provisioner -- activation request received activationId=act-1 userId=u-1 simType=ESIM
+2026-11-05T20:40:04.1441024Z 20:40:04.080 [main] INFO com.acme.provisioning.Provisioner -- customer read plan=STANDARD-5G activeLines=1 customerNumber=BT-100001
+2026-11-05T20:40:04.1449469Z 20:40:04.080 [main] INFO com.acme.provisioning.Provisioner -- line quota allowed=true max=2 active=1
+2026-11-05T20:40:04.1451567Z 20:40:04.080 [main] INFO com.acme.provisioning.Provisioner -- SIM reserved activationId=act-1 iccid=8940006454048904028 msisdn=+447700900152
+2026-11-05T20:40:04.1453312Z 20:40:04.080 [main] INFO com.acme.provisioning.Provisioner -- timeout schedule scheduled act-1
+2026-11-05T20:40:04.1455326Z 20:40:04.080 [main] INFO com.acme.provisioning.Provisioner -- SimProvisioned put on the bus eventId=evt-1 activationId=act-1
+2026-11-05T20:40:04.1457367Z 20:40:04.080 [main] INFO com.acme.provisioning.Provisioner -- activation request received activationId=act-1 userId=u-1 simType=ESIM
+2026-11-05T20:40:04.1485170Z 20:40:04.080 [main] INFO com.acme.provisioning.Provisioner -- activation act-1 is already ACTIVE, nothing to do
+2026-11-05T20:40:04.1491775Z 20:40:04.085 [main] WARN com.acme.provisioning.Provisioner -- BillingActivated for activation act-1 which is TIMED_OUT: not changed
+2026-11-05T20:40:04.1513632Z 20:40:04.090 [main] INFO com.acme.provisioning.Provisioner -- activation request received activationId=act-1 userId=u-1 simType=ESIM
+2026-11-05T20:40:04.1941617Z 20:40:04.090 [main] INFO com.acme.provisioning.Provisioner -- customer read plan=STANDARD-5G activeLines=1 customerNumber=BT-100001
+2026-11-05T20:40:04.1991391Z 20:40:04.090 [main] INFO com.acme.provisioning.Provisioner -- line quota allowed=true max=2 active=1
+2026-11-05T20:40:04.1993392Z 20:40:04.091 [main] INFO com.acme.provisioning.Provisioner -- SIM reserved activationId=act-1 iccid=8940006454048904028 msisdn=+447700900152
+2026-11-05T20:40:04.2000323Z 20:40:04.091 [main] INFO com.acme.provisioning.Provisioner -- timeout schedule scheduled act-1
+2026-11-05T20:40:04.2002277Z 20:40:04.091 [main] INFO com.acme.provisioning.Provisioner -- SimProvisioned put on the bus eventId=evt-1 activationId=act-1
+2026-11-05T20:40:04.2004773Z 20:40:04.095 [main] INFO com.acme.provisioning.Provisioner -- activation request received activationId=act-1 userId=u-1 simType=ESIM
+2026-11-05T20:40:04.2008910Z 20:40:04.095 [main] INFO com.acme.provisioning.Provisioner -- customer read plan=STANDARD-5G activeLines=1 customerNumber=BT-100001
+2026-11-05T20:40:04.2018976Z 20:40:04.095 [main] INFO com.acme.provisioning.Provisioner -- line quota allowed=true max=2 active=1
+2026-11-05T20:40:04.2064905Z 20:40:04.096 [main] INFO com.acme.provisioning.Provisioner -- SIM reserved activationId=act-1 iccid=8940006454048904028 msisdn=+447700900152
+2026-11-05T20:40:04.2067125Z 20:40:04.096 [main] INFO com.acme.provisioning.Provisioner -- timeout schedule scheduled act-1
+2026-11-05T20:40:04.2107110Z 20:40:04.096 [main] INFO com.acme.provisioning.Provisioner -- SimProvisioned put on the bus eventId=evt-1 activationId=act-1
+2026-11-05T20:40:04.2131390Z 20:40:04.096 [main] INFO com.acme.provisioning.Provisioner -- activation request received activationId=act-1 userId=u-1 simType=ESIM
+2026-11-05T20:40:04.2133973Z 20:40:04.096 [main] INFO com.acme.provisioning.Provisioner -- customer read plan=STANDARD-5G activeLines=1 customerNumber=BT-100001
+2026-11-05T20:40:04.2144693Z 20:40:04.096 [main] INFO com.acme.provisioning.Provisioner -- line quota allowed=true max=2 active=1
+2026-11-05T20:40:04.2146397Z 20:40:04.096 [main] INFO com.acme.provisioning.Provisioner -- activation act-1 was provisioned before, carrying on with its SIM 8940006454048904028
+2026-11-05T20:40:04.2148004Z 20:40:04.096 [main] INFO com.acme.provisioning.Provisioner -- timeout schedule scheduled act-1
+2026-11-05T20:40:04.2149436Z 20:40:04.096 [main] INFO com.acme.provisioning.Provisioner -- SimProvisioned put on the bus eventId=evt-1 activationId=act-1
+2026-11-05T20:40:04.2151374Z 20:40:04.101 [main] INFO com.acme.provisioning.Provisioner -- activation request received activationId=act-1 userId=u-1 simType=ESIM
+2026-11-05T20:40:04.2153644Z 20:40:04.101 [main] INFO com.acme.provisioning.Provisioner -- customer read plan=STANDARD-5G activeLines=1 customerNumber=BT-100001
+2026-11-05T20:40:04.2155235Z 20:40:04.101 [main] INFO com.acme.provisioning.Provisioner -- line quota allowed=false max=2 active=2
+2026-11-05T20:40:04.2156670Z 20:40:04.101 [main] WARN com.acme.provisioning.Provisioner -- activation act-1 refused: customer BT-100001 has 2 of 2 lines
+2026-11-05T20:40:04.2158264Z 20:40:04.105 [main] INFO com.acme.provisioning.Provisioner -- activation request received activationId=act-404 userId=u-1 simType=ESIM
+2026-11-05T20:40:04.2160158Z 20:40:04.105 [main] WARN com.acme.provisioning.Provisioner -- activation act-404 is not in the table, the message is dropped
+2026-11-05T20:40:04.2161736Z [INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.037 s -- in com.acme.provisioning.ProvisionerTest
+2026-11-05T20:40:04.2162852Z [INFO] Running com.acme.provisioning.InboxTest
+2026-11-05T20:40:04.5223897Z Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+2026-11-05T20:40:04.6501606Z 20:40:04.645 [main] INFO com.acme.provisioning.Inbox -- BillingActivated received activationId=act-9
+2026-11-05T20:40:04.6520845Z 20:40:04.646 [main] INFO com.acme.provisioning.Provisioner -- activation act-9 is ACTIVE invoice=I-1 amountCents=100
+2026-11-05T20:40:04.6631695Z 20:40:04.657 [main] INFO com.acme.provisioning.Provisioner -- activation request received activationId=act-9 userId=u-9 simType=ESIM
+2026-11-05T20:40:04.6686230Z 20:40:04.657 [main] INFO com.acme.provisioning.Provisioner -- customer read plan=STANDARD-5G activeLines=1 customerNumber=BT-1
+2026-11-05T20:40:04.6738986Z 20:40:04.657 [main] INFO com.acme.provisioning.Provisioner -- line quota allowed=false max=2 active=2
+2026-11-05T20:40:04.6853396Z 20:40:04.657 [main] WARN com.acme.provisioning.Provisioner -- activation act-9 refused: customer BT-1 has 2 of 2 lines
+2026-11-05T20:40:04.6854688Z 20:40:04.667 [main] WARN com.acme.provisioning.Inbox -- message of an unknown kind dropped: {"hello":1}
+2026-11-05T20:40:04.6855928Z [INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.555 s -- in com.acme.provisioning.InboxTest
+2026-11-05T20:40:04.7381014Z [INFO] 
+2026-11-05T20:40:04.7440681Z [INFO] Results:
+2026-11-05T20:40:04.7471163Z [INFO] 
+2026-11-05T20:40:04.7473634Z [INFO] Tests run: 14, Failures: 0, Errors: 0, Skipped: 0
+2026-11-05T20:40:04.7474871Z [INFO] 
+2026-11-05T20:40:04.7475956Z [INFO] 
+2026-11-05T20:40:04.7478343Z [INFO] --- jar:3.4.2:jar (default-jar) @ provisioning ---
+2026-11-05T20:40:05.0436725Z [INFO] Building jar: ~/work/acme-provisioning/acme-provisioning/target/provisioning-0.1.0.jar
+2026-11-05T20:40:05.1461458Z [INFO] 
+2026-11-05T20:40:05.1500936Z [INFO] --- spring-boot:3.3.5:repackage (repackage) @ provisioning ---
+2026-11-05T20:40:05.1805861Z [INFO] Loaded 50 auto-discovered prefixes for remote repository ow2-snapshot (prefixes-ow2-snapshot.txt)
+2026-11-05T20:40:05.6476033Z [INFO] Replacing main artifact ~/work/acme-provisioning/acme-provisioning/target/provisioning-0.1.0.jar with repackaged archive, adding nested dependencies in BOOT-INF/.
+2026-11-05T20:40:05.6483522Z [INFO] The original artifact has been renamed to ~/work/acme-provisioning/acme-provisioning/target/provisioning-0.1.0.jar.original
+2026-11-05T20:40:05.6485322Z [INFO] ------------------------------------------------------------------------
+2026-11-05T20:40:05.6486221Z [INFO] BUILD SUCCESS
+2026-11-05T20:40:05.6486881Z [INFO] ------------------------------------------------------------------------
+2026-11-05T20:40:05.6487668Z [INFO] Total time:  10.410 s
+2026-11-05T20:40:05.6488250Z [INFO] Finished at: 2026-11-05T20:40:05Z
+2026-11-05T20:40:05.6489004Z [INFO] ------------------------------------------------------------------------
+2026-11-05T20:40:05.7007331Z Post job cleanup.
+2026-11-05T20:40:05.8589367Z (node:2248) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-05T20:40:05.8591175Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-05T20:40:05.8597758Z Cache hit occurred on the primary key setup-java-Linux-x64-maven-fdbc6e92f5ec1f60992437fb921973bd141c8c57f87da8d321195678d3b79042, not saving cache.
+2026-11-05T20:40:05.8863373Z Post job cleanup.
+2026-11-05T20:40:06.1138468Z [command]/usr/bin/git version
+2026-11-05T20:40:06.1310978Z git version 2.56.0
+2026-11-05T20:40:06.1425332Z Temporarily overriding HOME='~/work/_temp/992021e2-3505-4c20-8136-f0e6f769d823' before making global git config changes
+2026-11-05T20:40:06.1450760Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-05T20:40:06.1476487Z [command]/usr/bin/git config --global --add safe.directory ~/work/acme-provisioning/acme-provisioning
+2026-11-05T20:40:06.1540159Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-05T20:40:06.1611130Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-05T20:40:06.2060989Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-05T20:40:06.2110978Z http.https://github.com/.extraheader
+2026-11-05T20:40:06.2152269Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-05T20:40:06.2247542Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-05T20:40:06.2729933Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-05T20:40:06.2778424Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-05T20:40:06.3243892Z Cleaning up orphan processes
+2026-11-05T20:40:06.3611848Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-java@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

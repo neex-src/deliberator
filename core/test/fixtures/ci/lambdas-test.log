@@ -1,0 +1,352 @@
+﻿2026-11-05T20:39:48.5808346Z Current runner version: '2.338.2'
+2026-11-05T20:39:48.5831459Z ##[group]Runner Image Provisioner
+2026-11-05T20:39:48.5832510Z Hosted Compute Agent
+2026-11-05T20:39:48.5833177Z Version: 20261028.624
+2026-11-05T20:39:48.5833782Z Commit: 54898b74c23fde5556c9b3c3a2290865feef0dfe
+2026-11-05T20:39:48.5834533Z Build Date: 2026-10-28T21:51:42Z
+2026-11-05T20:39:48.5835197Z Worker ID: {40c9a323-1301-45c5-8f49-0dbefe555386}
+2026-11-05T20:39:48.5835870Z Region: centralus
+2026-11-05T20:39:48.5836416Z Cloud: Azure
+2026-11-05T20:39:48.5836929Z ##[endgroup]
+2026-11-05T20:39:48.5838321Z ##[group]Operating System
+2026-11-05T20:39:48.5839154Z Ubuntu
+2026-11-05T20:39:48.5839815Z 24.04.5
+2026-11-05T20:39:48.5840538Z LTS
+2026-11-05T20:39:48.5841406Z ##[endgroup]
+2026-11-05T20:39:48.5842215Z ##[group]Runner Image
+2026-11-05T20:39:48.5843208Z Image: ubuntu-24.04
+2026-11-05T20:39:48.5844007Z Version: 20261101.360.1
+2026-11-05T20:39:48.5845827Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261101.360/images/ubuntu/Ubuntu2404-Readme.md
+2026-11-05T20:39:48.5848178Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261101.360
+2026-11-05T20:39:48.5850021Z ##[endgroup]
+2026-11-05T20:39:48.5851895Z ##[group]GITHUB_TOKEN Permissions
+2026-11-05T20:39:48.5855318Z Contents: read
+2026-11-05T20:39:48.5856114Z Metadata: read
+2026-11-05T20:39:48.5857038Z Packages: read
+2026-11-05T20:39:48.5857956Z ##[endgroup]
+2026-11-05T20:39:48.5860552Z Secret source: Actions
+2026-11-05T20:39:48.5862270Z Cache mode: write
+2026-11-05T20:39:48.5863268Z Prepare workflow directory
+2026-11-05T20:39:48.6320182Z Prepare all required actions
+2026-11-05T20:39:48.6390657Z Getting action download info
+2026-11-05T20:39:48.9872959Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-05T20:39:49.0948808Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-11-05T20:39:49.3650434Z Complete job name: test
+2026-11-05T20:39:49.4385723Z ##[group]Run actions/checkout@v4
+2026-11-05T20:39:49.4386586Z with:
+2026-11-05T20:39:49.4387143Z   repository: the-user/acme-lambdas
+2026-11-05T20:39:49.4390998Z   token: ***
+2026-11-05T20:39:49.4392017Z   ssh-strict: true
+2026-11-05T20:39:49.4392532Z   ssh-user: git
+2026-11-05T20:39:49.4393059Z   persist-credentials: true
+2026-11-05T20:39:49.4393619Z   clean: true
+2026-11-05T20:39:49.4394154Z   sparse-checkout-cone-mode: true
+2026-11-05T20:39:49.4394743Z   fetch-depth: 1
+2026-11-05T20:39:49.4395228Z   fetch-tags: false
+2026-11-05T20:39:49.4395715Z   show-progress: true
+2026-11-05T20:39:49.4396242Z   lfs: false
+2026-11-05T20:39:49.4396710Z   submodules: false
+2026-11-05T20:39:49.4397284Z   set-safe-directory: true
+2026-11-05T20:39:49.4397840Z   allow-unsafe-pr-checkout: false
+2026-11-05T20:39:49.4398609Z ##[endgroup]
+2026-11-05T20:39:49.7678691Z Syncing repository: the-user/acme-lambdas
+2026-11-05T20:39:49.7682456Z ##[group]Getting Git version info
+2026-11-05T20:39:49.7683969Z Working directory is '~/work/acme-lambdas/acme-lambdas'
+2026-11-05T20:39:49.7687476Z [command]/usr/bin/git version
+2026-11-05T20:39:49.7689232Z git version 2.56.0
+2026-11-05T20:39:49.7695708Z ##[endgroup]
+2026-11-05T20:39:49.7716811Z Temporarily overriding HOME='~/work/_temp/744b1fb2-a576-42ad-82be-8eeaad290f9c' before making global git config changes
+2026-11-05T20:39:49.8934092Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-05T20:39:49.8941451Z [command]/usr/bin/git config --global --add safe.directory ~/work/acme-lambdas/acme-lambdas
+2026-11-05T20:39:49.8946119Z Deleting the contents of '~/work/acme-lambdas/acme-lambdas'
+2026-11-05T20:39:49.8948882Z ##[group]Initializing the repository
+2026-11-05T20:39:49.8950952Z [command]/usr/bin/git init ~/work/acme-lambdas/acme-lambdas
+2026-11-05T20:39:49.8953579Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-05T20:39:49.8955696Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-05T20:39:49.8957348Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-05T20:39:49.8961672Z hint: call:
+2026-11-05T20:39:49.8962618Z hint:
+2026-11-05T20:39:49.8963742Z hint: 	git config --global init.defaultBranch <name>
+2026-11-05T20:39:49.8964882Z hint:
+2026-11-05T20:39:49.8966200Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-05T20:39:49.8967895Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-05T20:39:49.8969205Z hint:
+2026-11-05T20:39:49.8970110Z hint: 	git branch -m <name>
+2026-11-05T20:39:49.8971569Z hint:
+2026-11-05T20:39:49.8973188Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-05T20:39:49.8975182Z Initialized empty Git repository in ~/work/acme-lambdas/acme-lambdas/.git/
+2026-11-05T20:39:49.8978774Z [command]/usr/bin/git remote add origin https://github.com/the-user/acme-lambdas
+2026-11-05T20:39:49.8982620Z ##[endgroup]
+2026-11-05T20:39:49.8984134Z ##[group]Disabling automatic garbage collection
+2026-11-05T20:39:49.8985449Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-05T20:39:49.8989068Z ##[endgroup]
+2026-11-05T20:39:49.8990900Z ##[group]Setting up auth
+2026-11-05T20:39:49.8993226Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-05T20:39:49.8998175Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-05T20:39:49.9004987Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-05T20:39:49.9010154Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-05T20:39:49.9206807Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-05T20:39:49.9246744Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-05T20:39:49.9452503Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-05T20:39:49.9496709Z ##[endgroup]
+2026-11-05T20:39:49.9498893Z ##[group]Fetching the repository
+2026-11-05T20:39:49.9516721Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +510e3f15aab4b7792e4f10df30fb6ef9773cd94f:refs/remotes/origin/main
+2026-11-05T20:39:50.3275880Z From https://github.com/the-user/acme-lambdas
+2026-11-05T20:39:50.3278846Z  * [new ref]         510e3f15aab4b7792e4f10df30fb6ef9773cd94f -> origin/main
+2026-11-05T20:39:50.3285138Z ##[endgroup]
+2026-11-05T20:39:50.3287831Z ##[group]Determining the checkout info
+2026-11-05T20:39:50.3290845Z ##[endgroup]
+2026-11-05T20:39:50.3292402Z [command]/usr/bin/git sparse-checkout disable
+2026-11-05T20:39:50.3353284Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-05T20:39:50.3390233Z ##[group]Checking out the ref
+2026-11-05T20:39:50.3393749Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-11-05T20:39:50.3473648Z Switched to a new branch 'main'
+2026-11-05T20:39:50.3478942Z branch 'main' set up to track 'origin/main'.
+2026-11-05T20:39:50.3487026Z ##[endgroup]
+2026-11-05T20:39:50.3524945Z [command]/usr/bin/git log -1 --format=%H
+2026-11-05T20:39:50.3549440Z 510e3f15aab4b7792e4f10df30fb6ef9773cd94f
+2026-11-05T20:39:50.3941546Z ##[group]Run actions/setup-node@v4
+2026-11-05T20:39:50.3942951Z with:
+2026-11-05T20:39:50.3943959Z   node-version: 20
+2026-11-05T20:39:50.3945001Z   cache: npm
+2026-11-05T20:39:50.3946038Z   always-auth: false
+2026-11-05T20:39:50.3947132Z   check-latest: false
+2026-11-05T20:39:50.3957406Z   token: ***
+2026-11-05T20:39:50.3958405Z ##[endgroup]
+2026-11-05T20:39:50.5468582Z Attempting to download 20...
+2026-11-05T20:39:50.5675110Z (node:2206) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-05T20:39:50.5679877Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-05T20:39:51.4843475Z Acquiring 20.20.2 - x64 from https://github.com/actions/node-versions/releases/download/20.20.2-23521894959/node-20.20.2-linux-x64.tar.gz
+2026-11-05T20:39:52.0543351Z Extracting ...
+2026-11-05T20:39:52.0668989Z [command]/usr/bin/tar xz --strip 1 --warning=no-unknown-keyword --overwrite -C ~/work/_temp/6607b363-7e74-4994-afcb-8f2b64df3e81 -f ~/work/_temp/ca55d065-ae92-4764-badb-4d40d525c3a6
+2026-11-05T20:39:53.2082932Z Adding to the cache ...
+2026-11-05T20:39:55.9811035Z ##[group]Environment details
+2026-11-05T20:39:56.2462887Z node: v20.20.2
+2026-11-05T20:39:56.2463800Z npm: 10.8.2
+2026-11-05T20:39:56.2464396Z yarn: 1.22.22
+2026-11-05T20:39:56.2465225Z ##[endgroup]
+2026-11-05T20:39:56.2475448Z [command]/opt/hostedtoolcache/node/20.20.2/x64/bin/npm config get cache
+2026-11-05T20:39:56.3503086Z ~/.npm
+2026-11-05T20:39:56.5122471Z Cache hit for: node-cache-Linux-x64-npm-4d300553f37be97306f7cf729ec32f9f785e33d0e536ce31b442d6e7b6be054c
+2026-11-05T20:39:56.5244043Z (node:2206) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-11-05T20:39:56.7298692Z Received 53165 of 53165 (100.0%), 0.8 MBs/sec
+2026-11-05T20:39:56.7301794Z Cache Size: ~0 MB (53165 B)
+2026-11-05T20:39:56.7323164Z [command]/usr/bin/tar -xf ~/work/_temp/a61c1a11-d13a-495b-bf30-44858e9776b0/cache.tzst -P -C ~/work/acme-lambdas/acme-lambdas --use-compress-program unzstd
+2026-11-05T20:39:56.7424854Z Cache restored successfully
+2026-11-05T20:39:56.7429165Z Cache restored from key: node-cache-Linux-x64-npm-4d300553f37be97306f7cf729ec32f9f785e33d0e536ce31b442d6e7b6be054c
+2026-11-05T20:39:56.7608687Z ##[group]Run npm ci
+2026-11-05T20:39:56.7609109Z [36;1mnpm ci[0m
+2026-11-05T20:39:56.7630252Z shell: /usr/bin/bash -e {0}
+2026-11-05T20:39:56.7630656Z ##[endgroup]
+2026-11-05T20:39:57.2662313Z 
+2026-11-05T20:39:57.2678871Z added 1 package, and audited 2 packages in 434ms
+2026-11-05T20:39:57.2679308Z 
+2026-11-05T20:39:57.2679538Z 1 package is looking for funding
+2026-11-05T20:39:57.2680049Z   run `npm fund` for details
+2026-11-05T20:39:57.2680254Z 
+2026-11-05T20:39:57.2680449Z found 0 vulnerabilities
+2026-11-05T20:39:57.2755506Z ##[group]Run npm test
+2026-11-05T20:39:57.2755896Z [36;1mnpm test[0m
+2026-11-05T20:39:57.2770204Z shell: /usr/bin/bash -e {0}
+2026-11-05T20:39:57.2770624Z ##[endgroup]
+2026-11-05T20:39:57.3863056Z 
+2026-11-05T20:39:57.3864325Z > acme-lambdas@0.1.0 test
+2026-11-05T20:39:57.3865448Z > node --test test/
+2026-11-05T20:39:57.3865918Z 
+2026-11-05T20:39:57.4252927Z TAP version 13
+2026-11-05T20:39:58.2463645Z # 2026-11-05T20:39:58.244Z INFO  acme-authorizer [c-1] token accepted sub=a0000000-0000-4000-8000-000000000001 client=acme-app path=/activations
+2026-11-05T20:39:58.2492941Z # 2026-11-05T20:39:58.246Z WARN  acme-authorizer [c-1] no bearer token path=/activations
+2026-11-05T20:39:58.2512321Z # 2026-11-05T20:39:58.247Z WARN  acme-authorizer [c-1] no bearer token path=/activations
+2026-11-05T20:39:58.2513604Z # Subtest: a valid token is accepted and its subject becomes context.userId
+2026-11-05T20:39:58.2515059Z ok 1 - a valid token is accepted and its subject becomes context.userId
+2026-11-05T20:39:58.2515729Z   ---
+2026-11-05T20:39:58.2529613Z   duration_ms: 10.265056
+2026-11-05T20:39:58.2542379Z   ...
+2026-11-05T20:39:58.2561742Z # Subtest: no Authorization header is refused
+2026-11-05T20:39:58.2567462Z ok 2 - no Authorization header is refused
+2026-11-05T20:39:58.2597941Z   ---
+2026-11-05T20:39:58.2605460Z   duration_ms: 0.436368
+2026-11-05T20:39:58.2608418Z   ...
+2026-11-05T20:39:58.2609381Z # Subtest: a header that is not a bearer token is refused
+2026-11-05T20:39:58.2610349Z ok 3 - a header that is not a bearer token is refused
+2026-11-05T20:39:58.2611079Z   ---
+2026-11-05T20:39:58.2612002Z   duration_ms: 0.398928
+2026-11-05T20:39:58.2612617Z   ...
+2026-11-05T20:39:58.2614128Z # 2026-11-05T20:39:58.251Z WARN  acme-authorizer [c-1] token refused code=ERR_JWS_SIGNATURE_VERIFICATION_FAILED reason=signature verification failed path=/activations
+2026-11-05T20:39:58.2615705Z # Subtest: a token signed by another key is refused
+2026-11-05T20:39:58.2616640Z ok 4 - a token signed by another key is refused
+2026-11-05T20:39:58.2617456Z   ---
+2026-11-05T20:39:58.2618142Z   duration_ms: 4.543421
+2026-11-05T20:39:58.2618745Z   ...
+2026-11-05T20:39:58.2620186Z # 2026-11-05T20:39:58.254Z WARN  acme-authorizer [c-1] token refused code=ERR_JWT_EXPIRED reason="exp" claim timestamp check failed path=/activations
+2026-11-05T20:39:58.2621884Z # Subtest: an expired token is refused
+2026-11-05T20:39:58.2622670Z ok 5 - an expired token is refused
+2026-11-05T20:39:58.2623378Z   ---
+2026-11-05T20:39:58.2623938Z   duration_ms: 2.516434
+2026-11-05T20:39:58.2624601Z   ...
+2026-11-05T20:39:58.2626150Z # 2026-11-05T20:39:58.256Z WARN  acme-authorizer [c-1] token refused code=ERR_JWT_CLAIM_VALIDATION_FAILED reason=unexpected "aud" claim value path=/activations
+2026-11-05T20:39:58.2627597Z # Subtest: a token of another audience is refused
+2026-11-05T20:39:58.2628544Z ok 6 - a token of another audience is refused
+2026-11-05T20:39:58.2629232Z   ---
+2026-11-05T20:39:58.2629790Z   duration_ms: 3.899547
+2026-11-05T20:39:58.2630411Z   ...
+2026-11-05T20:39:58.2632002Z # 2026-11-05T20:39:58.260Z WARN  acme-authorizer [c-1] token refused code=ERR_JWT_CLAIM_VALIDATION_FAILED reason=unexpected "iss" claim value path=/activations
+2026-11-05T20:39:58.2634206Z # 2026-11-05T20:39:58.261Z WARN  acme-authorizer [c-1] token refused code=ERR_JWS_INVALID reason=JWS Protected Header is invalid path=/activations
+2026-11-05T20:39:58.2635642Z # Subtest: a token of another issuer is refused
+2026-11-05T20:39:58.2636475Z ok 7 - a token of another issuer is refused
+2026-11-05T20:39:58.2637194Z   ---
+2026-11-05T20:39:58.2637769Z   duration_ms: 2.138024
+2026-11-05T20:39:58.2638374Z   ...
+2026-11-05T20:39:58.2639460Z # Subtest: garbage after *** refused
+2026-11-05T20:39:58.2649643Z ok 8 - garbage after *** refused
+2026-11-05T20:39:58.2650598Z   ---
+2026-11-05T20:39:58.2651651Z   duration_ms: 0.671771
+2026-11-05T20:39:58.2652314Z   ...
+2026-11-05T20:39:58.3122453Z # 2026-11-05T20:39:58.310Z INFO  activation-intake [c-9] activation stored activationId=act-1234 userId=u-1 status=REQUESTED simType=PHYSICAL
+2026-11-05T20:39:58.3133173Z # 2026-11-05T20:39:58.311Z INFO  activation-intake [c-9] activation announced on the provisioning inbox activationId=act-1234
+2026-11-05T20:39:58.3153041Z # 2026-11-05T20:39:58.313Z INFO  activation-intake [c-9] activation stored activationId=act-1234 userId=u-1 status=REQUESTED simType=ESIM
+2026-11-05T20:39:58.3155181Z # 2026-11-05T20:39:58.314Z INFO  activation-intake [c-9] activation announced on the provisioning inbox activationId=act-1234
+2026-11-05T20:39:58.3160459Z # 2026-11-05T20:39:58.315Z INFO  activation-intake [c-9] activation stored activationId=act-1234 userId=u-1 status=REQUESTED simType=ESIM
+2026-11-05T20:39:58.3163941Z # 2026-11-05T20:39:58.316Z INFO  activation-intake [c-9] activation announced on the provisioning inbox activationId=act-1234
+2026-11-05T20:39:58.3171821Z # 2026-11-05T20:39:58.316Z WARN  activation-intake [c-9] unknown simType simType=TELEPATHY userId=u-1
+2026-11-05T20:39:58.3176980Z # 2026-11-05T20:39:58.316Z WARN  activation-intake [c-9] bad request body reason=the body must be a JSON object userId=u-1
+2026-11-05T20:39:58.3178849Z # 2026-11-05T20:39:58.317Z WARN  activation-intake [c-9] bad request body reason=Expected property name or '}' in JSON at position 1 userId=u-1
+2026-11-05T20:39:58.3186487Z # 2026-11-05T20:39:58.317Z ERROR activation-intake [c-9] request reached the integration without an authorizer context
+2026-11-05T20:39:58.3188254Z # 2026-11-05T20:39:58.318Z INFO  activation-intake [c-9] activation stored activationId=act-1234 userId=u-1 status=REQUESTED simType=ESIM
+2026-11-05T20:39:58.3190345Z # 2026-11-05T20:39:58.318Z ERROR activation-intake [c-9] could not announce the activation activationId=act-1234 error=Error reason=queue down status=undefined
+2026-11-05T20:39:58.3228841Z # Subtest: 202: stored as REQUESTED and announced with the correlation attribute
+2026-11-05T20:39:58.3240865Z ok 9 - 202: stored as REQUESTED and announced with the correlation attribute
+2026-11-05T20:39:58.3270413Z   ---
+2026-11-05T20:39:58.3292248Z   duration_ms: 3.602988
+2026-11-05T20:39:58.3296462Z   ...
+2026-11-05T20:39:58.3297654Z # Subtest: the customer is the token's subject, whatever the body says
+2026-11-05T20:39:58.3298954Z ok 10 - the customer is the token's subject, whatever the body says
+2026-11-05T20:39:58.3299949Z   ---
+2026-11-05T20:39:58.3300511Z   duration_ms: 0.385803
+2026-11-05T20:39:58.3301518Z   ...
+2026-11-05T20:39:58.3302201Z # Subtest: an empty body means an eSIM
+2026-11-05T20:39:58.3302847Z ok 11 - an empty body means an eSIM
+2026-11-05T20:39:58.3303586Z   ---
+2026-11-05T20:39:58.3304146Z   duration_ms: 1.007217
+2026-11-05T20:39:58.3304718Z   ...
+2026-11-05T20:39:58.3305575Z # Subtest: 400 for an unknown simType, a non-object body, a bad number; nothing is stored
+2026-11-05T20:39:58.3306857Z ok 12 - 400 for an unknown simType, a non-object body, a bad number; nothing is stored
+2026-11-05T20:39:58.3307702Z   ---
+2026-11-05T20:39:58.3308269Z   duration_ms: 0.776236
+2026-11-05T20:39:58.3308938Z   ...
+2026-11-05T20:39:58.3309629Z # Subtest: 401 without an authorizer context
+2026-11-05T20:39:58.3310513Z ok 13 - 401 without an authorizer context
+2026-11-05T20:39:58.3311134Z   ---
+2026-11-05T20:39:58.3311954Z   duration_ms: 0.393521
+2026-11-05T20:39:58.3312635Z   ...
+2026-11-05T20:39:58.3313436Z # Subtest: 502 when the announcement fails; the row stays for the reaper
+2026-11-05T20:39:58.3314752Z ok 14 - 502 when the announcement fails; the row stays for the reaper
+2026-11-05T20:39:58.3315578Z   ---
+2026-11-05T20:39:58.3316147Z   duration_ms: 1.206826
+2026-11-05T20:39:58.3316749Z   ...
+2026-11-05T20:39:58.3818692Z # 2026-11-05T20:39:58.380Z INFO  letter-renderer [act-1] letter rendered from=act-1.txt to=act-1.html bytes=210
+2026-11-05T20:39:58.3827969Z # 2026-11-05T20:39:58.382Z INFO  letter-renderer [act-1] not a letter, left alone key=act-1.html
+2026-11-05T20:39:58.3903217Z # Subtest: render: the first line is the heading, the key-value lines a table, the rest paragraphs
+2026-11-05T20:39:58.3913025Z ok 15 - render: the first line is the heading, the key-value lines a table, the rest paragraphs
+2026-11-05T20:39:58.3925145Z   ---
+2026-11-05T20:39:58.3932375Z   duration_ms: 1.455647
+2026-11-05T20:39:58.3946278Z   ...
+2026-11-05T20:39:58.3947380Z # Subtest: render escapes the letter's words
+2026-11-05T20:39:58.3949095Z ok 16 - render escapes the letter's words
+2026-11-05T20:39:58.3949763Z   ---
+2026-11-05T20:39:58.3950408Z   duration_ms: 0.173608
+2026-11-05T20:39:58.3950945Z   ...
+2026-11-05T20:39:58.3951773Z # Subtest: htmlKey: only .txt keys are letters
+2026-11-05T20:39:58.3952539Z ok 17 - htmlKey: only .txt keys are letters
+2026-11-05T20:39:58.3953147Z   ---
+2026-11-05T20:39:58.3953803Z   duration_ms: 0.209738
+2026-11-05T20:39:58.3954454Z   ...
+2026-11-05T20:39:58.3955039Z # Subtest: decodeKey undoes the S3 event encoding
+2026-11-05T20:39:58.3962278Z ok 18 - decodeKey undoes the S3 event encoding
+2026-11-05T20:39:58.3963315Z   ---
+2026-11-05T20:39:58.3963915Z   duration_ms: 0.242381
+2026-11-05T20:39:58.3964504Z   ...
+2026-11-05T20:39:58.3965551Z # Subtest: renderLetters reads the text, writes the page next to it, ignores what is not a letter
+2026-11-05T20:39:58.3966921Z ok 19 - renderLetters reads the text, writes the page next to it, ignores what is not a letter
+2026-11-05T20:39:58.3968154Z   ---
+2026-11-05T20:39:58.3968693Z   duration_ms: 2.311624
+2026-11-05T20:39:58.3969269Z   ...
+2026-11-05T20:39:58.4372036Z # 2026-11-05T20:39:58.436Z INFO  notify [c-1] letter written detailType=SimProvisioned activationId=act-1 key=act-1.txt
+2026-11-05T20:39:58.4391567Z # 2026-11-05T20:39:58.438Z INFO  notify [] letter written detailType=ActivationTimedOut activationId=act-2 key=act-2.timeout.txt
+2026-11-05T20:39:58.4398889Z # 2026-11-05T20:39:58.438Z INFO  notify [] no letter for this event detailType=BillingActivated activationId=act-2
+2026-11-05T20:39:58.4400865Z # 2026-11-05T20:39:58.439Z ERROR notify [] message is not an event reason=Unexpected token '<', "<<<" is not valid JSON
+2026-11-05T20:39:58.4422855Z # 2026-11-05T20:39:58.440Z WARN  reaper [c-1] activation timed out activationId=act-1 previousStatus=REQUESTED
+2026-11-05T20:39:58.4427394Z # 2026-11-05T20:39:58.440Z WARN  reaper [c-1] activation timed out activationId=act-1 previousStatus=PROVISIONED
+2026-11-05T20:39:58.4448358Z # 2026-11-05T20:39:58.441Z INFO  reaper [c-1] nothing to do activationId=act-1 status=ACTIVE
+2026-11-05T20:39:58.4450291Z # 2026-11-05T20:39:58.442Z INFO  reaper [c-1] nothing to do activationId=act-1 status=REJECTED_QUOTA
+2026-11-05T20:39:58.4451946Z # 2026-11-05T20:39:58.442Z INFO  reaper [c-1] nothing to do activationId=act-1 status=TIMED_OUT
+2026-11-05T20:39:58.4453360Z # 2026-11-05T20:39:58.443Z WARN  reaper [] unknown activation activationId=nope
+2026-11-05T20:39:58.4500015Z # Subtest: notify writes the SimProvisioned letter under <activationId>.txt
+2026-11-05T20:39:58.4525530Z ok 20 - notify writes the SimProvisioned letter under <activationId>.txt
+2026-11-05T20:39:58.4555490Z   ---
+2026-11-05T20:39:58.4562210Z   duration_ms: 2.923163
+2026-11-05T20:39:58.4563198Z   ...
+2026-11-05T20:39:58.4564336Z # Subtest: notify writes an apology for ActivationTimedOut and nothing for BillingActivated
+2026-11-05T20:39:58.4566939Z ok 21 - notify writes an apology for ActivationTimedOut and nothing for BillingActivated
+2026-11-05T20:39:58.4568039Z   ---
+2026-11-05T20:39:58.4568649Z   duration_ms: 0.450725
+2026-11-05T20:39:58.4569424Z   ...
+2026-11-05T20:39:58.4570219Z # Subtest: notify fails (so SNS retries) on a message that is not JSON
+2026-11-05T20:39:58.4571403Z ok 22 - notify fails (so SNS retries) on a message that is not JSON
+2026-11-05T20:39:58.4577701Z   ---
+2026-11-05T20:39:58.4578410Z   duration_ms: 0.735215
+2026-11-05T20:39:58.4578988Z   ...
+2026-11-05T20:39:58.4579844Z # Subtest: reaper times out an unfinished activation and announces it
+2026-11-05T20:39:58.4580915Z ok 23 - reaper times out an unfinished activation and announces it
+2026-11-05T20:39:58.4581901Z   ---
+2026-11-05T20:39:58.4582762Z   duration_ms: 1.460947
+2026-11-05T20:39:58.4583338Z   ...
+2026-11-05T20:39:58.4584067Z # Subtest: reaper leaves finished activations alone
+2026-11-05T20:39:58.4584904Z ok 24 - reaper leaves finished activations alone
+2026-11-05T20:39:58.4585502Z   ---
+2026-11-05T20:39:58.4586097Z   duration_ms: 1.312818
+2026-11-05T20:39:58.4586650Z   ...
+2026-11-05T20:39:58.4587329Z # Subtest: reaper on an unknown activation does nothing
+2026-11-05T20:39:58.4588249Z ok 25 - reaper on an unknown activation does nothing
+2026-11-05T20:39:58.4588886Z   ---
+2026-11-05T20:39:58.4589505Z   duration_ms: 0.615889
+2026-11-05T20:39:58.4590110Z   ...
+2026-11-05T20:39:58.4591052Z # Subtest: marshal and unmarshal round-trip strings, numbers and booleans, and drop nulls
+2026-11-05T20:39:58.4592606Z ok 26 - marshal and unmarshal round-trip strings, numbers and booleans, and drop nulls
+2026-11-05T20:39:58.4593524Z   ---
+2026-11-05T20:39:58.4594108Z   duration_ms: 0.438299
+2026-11-05T20:39:58.4594669Z   ...
+2026-11-05T20:39:58.4595436Z # Subtest: a log line has the correlation id in brackets
+2026-11-05T20:39:58.4596309Z ok 27 - a log line has the correlation id in brackets
+2026-11-05T20:39:58.4597086Z   ---
+2026-11-05T20:39:58.4597611Z   duration_ms: 0.4205
+2026-11-05T20:39:58.4598170Z   ...
+2026-11-05T20:39:58.4640164Z 1..27
+2026-11-05T20:39:58.4640961Z # tests 27
+2026-11-05T20:39:58.4642583Z # suites 0
+2026-11-05T20:39:58.4643175Z # pass 27
+2026-11-05T20:39:58.4643853Z # fail 0
+2026-11-05T20:39:58.4644418Z # cancelled 0
+2026-11-05T20:39:58.4645158Z # skipped 0
+2026-11-05T20:39:58.4645743Z # todo 0
+2026-11-05T20:39:58.4646368Z # duration_ms 1048.550494
+2026-11-05T20:39:58.4827968Z Post job cleanup.
+2026-11-05T20:39:58.6038594Z (node:2333) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-05T20:39:58.6040342Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-05T20:39:58.6043743Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-4d300553f37be97306f7cf729ec32f9f785e33d0e536ce31b442d6e7b6be054c, not saving cache.
+2026-11-05T20:39:58.6187774Z Post job cleanup.
+2026-11-05T20:39:58.7176034Z [command]/usr/bin/git version
+2026-11-05T20:39:58.7222568Z git version 2.56.0
+2026-11-05T20:39:58.7294668Z Temporarily overriding HOME='~/work/_temp/700cdf27-a67f-498a-86af-1c5b908294c6' before making global git config changes
+2026-11-05T20:39:58.7312652Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-05T20:39:58.7314033Z [command]/usr/bin/git config --global --add safe.directory ~/work/acme-lambdas/acme-lambdas
+2026-11-05T20:39:58.7368538Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-05T20:39:58.7436414Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-05T20:39:58.7793403Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-05T20:39:58.7865540Z http.https://github.com/.extraheader
+2026-11-05T20:39:58.7934721Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-05T20:39:58.8018650Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-05T20:39:58.8682020Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-05T20:39:58.8740385Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-05T20:39:58.9207582Z Cleaning up orphan processes
+2026-11-05T20:39:58.9516806Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

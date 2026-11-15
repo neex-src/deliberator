@@ -19,20 +19,50 @@ import com.neex.deliberator.workspace.WorkspaceService
 
 /** What the CI view's gestures do with a [CiOpen]; shared by the tree's double-click and the actions. */
 object CiController {
-    /** The default action on a run (red: diff, running: follow, else log). Starts a background task. */
-    fun open(project: Project, sel: CiSelection) = Ui.background(project, "Deliberator: ${sel.repo} run ${sel.run.id}", {
-        handle(project, CiOps.getInstance(project).openDefault(sel.repo, sel.run))
-    })
+    /**
+     * Enter or a double-click. A step opens its own log, a job its log (a job that still runs is followed); a red step or job gets its diff from the action
+     * (Diff Against Last Green), not from Enter. A run keeps its default: red: the diff against the last green run, running: follow, else its log.
+     */
+    fun open(project: Project, sel: CiSelection) = when {
+        sel.step != null || sel.job != null -> log(project, sel)
+        else -> Ui.background(project, "Deliberator: ${sel.repo} run ${sel.run.id}", { handle(project, CiOps.getInstance(project).openDefault(sel.repo, sel.run)) })
+    }
 
-    /** Open the log of a job the user names (a chooser of the run's jobs). */
-    fun jobLog(project: Project, sel: CiSelection) = pick(project, sel, CiDefault.LOG)
+    /** Open Log: the step's lines, the job's log, or (a run) the log of a job the user names. */
+    fun log(project: Project, sel: CiSelection) = when {
+        sel.step != null -> Ui.background(project, "Deliberator: step ${sel.step.number} of ${sel.job?.name}", {
+            val job = sel.job!!.id
+            handle(project, try {
+                CiOps.getInstance(project).log(sel.repo, sel.run.id, job, sel.step.number.toString())
+            } catch (e: DaemonException) {
+                // a job that still runs has no log yet: its console follows it
+                if (e.type == "ci/log-not-available" && sel.job.state == CiState.RUNNING) CiOpen.Follow(sel.repo, sel.run.id, job) else throw e
+            })
+        })
+        sel.job != null -> Ui.background(project, "Deliberator: ${sel.job.name}", { handle(project, CiOps.getInstance(project).openJob(sel.repo, sel.run.id, sel.job.id, CiDefault.LOG)) })
+        else -> pick(project, sel, CiDefault.LOG)
+    }
 
-    /** The diff of a job against its last green run. */
-    fun diff(project: Project, sel: CiSelection) =
-        if (sel.run.red) Ui.background(project, "Deliberator: diff run ${sel.run.id}", { handle(project, CiOps.getInstance(project).diff(sel.repo, sel.run.id)) })
-        else pick(project, sel, CiDefault.DIFF)
+    /** Diff Against Last Green: the failed step's lines (or the job's log) against the same of the last green run. */
+    fun diff(project: Project, sel: CiSelection) = when {
+        sel.step != null -> Ui.background(project, "Deliberator: diff step ${sel.step.number}", { handle(project, CiOps.getInstance(project).diff(sel.repo, sel.run.id, sel.job!!.id, sel.step.number.toString())) })
+        sel.job != null -> Ui.background(project, "Deliberator: diff ${sel.job.name}", { handle(project, CiOps.getInstance(project).diff(sel.repo, sel.run.id, sel.job.id)) })
+        sel.run.red -> Ui.background(project, "Deliberator: diff run ${sel.run.id}", { handle(project, CiOps.getInstance(project).diff(sel.repo, sel.run.id)) })
+        else -> pick(project, sel, CiDefault.DIFF)
+    }
 
-    fun follow(project: Project, sel: CiSelection) = pick(project, sel, CiDefault.FOLLOW)
+    fun follow(project: Project, sel: CiSelection) =
+        if (sel.job != null) handleLater(project, CiOpen.Follow(sel.repo, sel.run.id, sel.job.id)) else pick(project, sel, CiDefault.FOLLOW)
+
+    /** Where the CI system shows the row (the run, the job, the step's place in the job). */
+    fun browse(project: Project, sel: CiSelection) {
+        val url = sel.url()
+        if (url == null) Ui.notify(project, "CI", "This run has no page of its own.", NotificationType.WARNING) else com.intellij.ide.BrowserUtil.browse(url)
+    }
+
+    fun copy(sel: CiSelection) = com.intellij.openapi.ide.CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(sel.text()))
+
+    private fun handleLater(project: Project, o: CiOpen) = Ui.background(project, "Deliberator: follow", { handle(project, o) })
 
     private fun pick(project: Project, sel: CiSelection, how: CiDefault) = Ui.background(project, "Deliberator: jobs of run ${sel.run.id}", {
         val names = CiOps.getInstance(project).jobNames(sel.repo, sel.run.id)
@@ -66,33 +96,61 @@ abstract class CiAction : AnAction(), DumbAware {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
     open val needsRun: Boolean get() = true
 
+    /** Whether the action applies to the selected row (a red step has a diff, a finished job has nothing to follow). */
+    open fun enabledFor(sel: CiSelection): Boolean = true
+
     override fun update(e: AnActionEvent) {
         val p = e.project
         e.presentation.isEnabledAndVisible = p != null
-        if (p != null) e.presentation.isEnabled = WorkspaceService.getInstance(p).ws != null && (!needsRun || e.getData(CiPanel.SELECTION) != null)
+        if (p != null) {
+            val sel = e.getData(CiPanel.SELECTION)
+            e.presentation.isEnabled = WorkspaceService.getInstance(p).ws != null && (!needsRun || (sel != null && enabledFor(sel)))
+        }
     }
 
     override fun actionPerformed(e: AnActionEvent) {
         val p = e.project ?: return
         val sel = e.getData(CiPanel.SELECTION)
-        if (needsRun && sel == null) { Ui.notify(p, "CI", "Select a run in the CI tab.", NotificationType.WARNING); return }
+        if (needsRun && sel == null) { Ui.notify(p, "CI", "Select a run, job or step in the CI tab.", NotificationType.WARNING); return }
         go(p, sel, e.getData(CiPanel.PANEL))
     }
 
     abstract fun go(project: Project, sel: CiSelection?, panel: CiPanel?)
 }
 
-/** `deliberator.ci.open`: the default action of the run. */
+/** `deliberator.ci.open`: the default action of the row. */
 class CiOpenAction : CiAction() { override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) = CiController.open(project, sel!!) }
 
-/** `deliberator.ci.jobLog` */
-class CiJobLogAction : CiAction() { override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) = CiController.jobLog(project, sel!!) }
+/** `deliberator.ci.jobLog` (Open Log): a step's lines, a job's log, or a job of the run to choose. */
+class CiJobLogAction : CiAction() { override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) = CiController.log(project, sel!!) }
 
-/** `deliberator.ci.diff` */
-class CiDiffAction : CiAction() { override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) = CiController.diff(project, sel!!) }
+/** `deliberator.ci.diff`: against the last green run; a job or a step must be red, a run is asked for its job. */
+class CiDiffAction : CiAction() {
+    override fun enabledFor(sel: CiSelection) = when {
+        sel.step != null -> sel.step.state == CiState.RED
+        sel.job != null -> sel.job.state == CiState.RED
+        else -> true
+    }
+    override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) = CiController.diff(project, sel!!)
+}
 
-/** `deliberator.ci.follow` */
-class CiFollowAction : CiAction() { override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) = CiController.follow(project, sel!!) }
+/** `deliberator.ci.follow`: a job or a run that is in progress. */
+class CiFollowAction : CiAction() {
+    override fun enabledFor(sel: CiSelection) = when {
+        sel.job != null -> sel.job.state == CiState.RUNNING || sel.job.state == CiState.QUEUED
+        else -> sel.run.running
+    }
+    override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) = CiController.follow(project, sel!!)
+}
+
+/** `deliberator.ci.browser`: the run, job or step on the page of the CI system (a URL: nothing is asked of it). */
+class CiBrowserAction : CiAction() {
+    override fun enabledFor(sel: CiSelection) = sel.url() != null
+    override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) = CiController.browse(project, sel!!)
+}
+
+/** `deliberator.ci.copy`: the row as text (a run with its jobs and steps). */
+class CiCopyAction : CiAction() { override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) = CiController.copy(sel!!) }
 
 /** `deliberator.ci.runsText`: the text file `ci.runs` wrote for the selected repository. */
 class CiRunsTextAction : CiAction() {

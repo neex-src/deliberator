@@ -1,0 +1,160 @@
+﻿2026-11-05T21:00:19.0031408Z Current runner version: '2.338.2'
+2026-11-05T21:00:19.0046641Z Runner name: 'acme-box-identity'
+2026-11-05T21:00:19.0047641Z Runner group name: 'Default'
+2026-11-05T21:00:19.0049017Z Machine name: 'claude'
+2026-11-05T21:00:19.0057869Z ##[group]GITHUB_TOKEN Permissions
+2026-11-05T21:00:19.0062934Z Contents: read
+2026-11-05T21:00:19.0064884Z Metadata: read
+2026-11-05T21:00:19.0066773Z ##[endgroup]
+2026-11-05T21:00:19.0071373Z Secret source: Actions
+2026-11-05T21:00:19.0074950Z Cache mode: write
+2026-11-05T21:00:19.0077703Z Prepare workflow directory
+2026-11-05T21:00:19.0977786Z Prepare all required actions
+2026-11-05T21:00:19.1067172Z Getting action download info
+2026-11-05T21:00:19.6320271Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-05T21:00:20.2716407Z Complete job name: apply
+2026-11-05T21:00:20.3591302Z ##[group]Run actions/checkout@v4
+2026-11-05T21:00:20.3592155Z with:
+2026-11-05T21:00:20.3592643Z   repository: the-user/acme-identity
+2026-11-05T21:00:20.3597503Z   token: ***
+2026-11-05T21:00:20.3597944Z   ssh-strict: true
+2026-11-05T21:00:20.3598384Z   ssh-user: git
+2026-11-05T21:00:20.3598833Z   persist-credentials: true
+2026-11-05T21:00:20.3599327Z   clean: true
+2026-11-05T21:00:20.3599777Z   sparse-checkout-cone-mode: true
+2026-11-05T21:00:20.3600306Z   fetch-depth: 1
+2026-11-05T21:00:20.3600745Z   fetch-tags: false
+2026-11-05T21:00:20.3601199Z   show-progress: true
+2026-11-05T21:00:20.3601649Z   lfs: false
+2026-11-05T21:00:20.3602065Z   submodules: false
+2026-11-05T21:00:20.3602520Z   set-safe-directory: true
+2026-11-05T21:00:20.3603030Z   allow-unsafe-pr-checkout: false
+2026-11-05T21:00:20.3603800Z env:
+2026-11-05T21:00:20.3604284Z   FRODO_HOST: http://sling.localhost:8090/am
+2026-11-05T21:00:20.3604880Z   FRODO_REALM: alpha
+2026-11-05T21:00:20.3605907Z   PING_WORK: ~/projects/acme-identity/.scratch/runner/_work/acme-identity/acme-identity/.scratch/ping
+2026-11-05T21:00:20.3606953Z ##[endgroup]
+2026-11-05T21:00:20.4659805Z Syncing repository: the-user/acme-identity
+2026-11-05T21:00:20.4661640Z ##[group]Getting Git version info
+2026-11-05T21:00:20.4662710Z Working directory is '~/projects/acme-identity/.scratch/runner/_work/acme-identity/acme-identity'
+2026-11-05T21:00:20.4664119Z [command]/usr/bin/git version
+2026-11-05T21:00:20.4664627Z git version 2.56.0
+2026-11-05T21:00:20.4676750Z ##[endgroup]
+2026-11-05T21:00:20.4686468Z Copying '~/.gitconfig' to '~/projects/acme-identity/.scratch/runner/_work/_temp/386f648f-5753-4a09-8b78-5c0a39d496bc/.gitconfig'
+2026-11-05T21:00:20.4695577Z Temporarily overriding HOME='~/projects/acme-identity/.scratch/runner/_work/_temp/386f648f-5753-4a09-8b78-5c0a39d496bc' before making global git config changes
+2026-11-05T21:00:20.4697395Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-05T21:00:20.4699703Z [command]/usr/bin/git config --global --add safe.directory ~/projects/acme-identity/.scratch/runner/_work/acme-identity/acme-identity
+2026-11-05T21:00:20.4738099Z [command]/usr/bin/git config --local --get remote.origin.url
+2026-11-05T21:00:20.4759717Z https://github.com/the-user/acme-identity
+2026-11-05T21:00:20.4775323Z ##[group]Removing previously created refs, to avoid conflicts
+2026-11-05T21:00:20.4778790Z [command]/usr/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+2026-11-05T21:00:20.4800290Z refs/heads/main
+2026-11-05T21:00:20.4810325Z [command]/usr/bin/git checkout --detach
+2026-11-05T21:00:20.4842199Z HEAD is now at a0b0eed Merge pull request #11 from the-user/esv-3-225256
+2026-11-05T21:00:20.4884964Z [command]/usr/bin/git branch --delete --force main
+2026-11-05T21:00:20.4910846Z Deleted branch main (was a0b0eed).
+2026-11-05T21:00:20.4947791Z ##[endgroup]
+2026-11-05T21:00:20.4951267Z [command]/usr/bin/git submodule status
+2026-11-05T21:00:20.5230198Z ##[group]Cleaning the repository
+2026-11-05T21:00:20.5235692Z [command]/usr/bin/git clean -ffdx
+2026-11-05T21:00:20.5331212Z Removing .scratch/
+2026-11-05T21:00:20.5341647Z [command]/usr/bin/git reset --hard HEAD
+2026-11-05T21:00:20.5376126Z HEAD is now at a0b0eed Merge pull request #11 from the-user/esv-3-225256
+2026-11-05T21:00:20.5379456Z ##[endgroup]
+2026-11-05T21:00:20.5381333Z ##[group]Disabling automatic garbage collection
+2026-11-05T21:00:20.5386118Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-05T21:00:20.5413312Z ##[endgroup]
+2026-11-05T21:00:20.5414060Z ##[group]Setting up auth
+2026-11-05T21:00:20.5421745Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-05T21:00:20.5457388Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-05T21:00:20.5741696Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-05T21:00:20.5775688Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-05T21:00:20.6063767Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-05T21:00:20.6098613Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-05T21:00:20.6401263Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-05T21:00:20.6440588Z ##[endgroup]
+2026-11-05T21:00:20.6442050Z ##[group]Fetching the repository
+2026-11-05T21:00:20.6448897Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +65a95c7bb92a7673ba2ecf4bc1ad3d9cbc253c53:refs/remotes/origin/main
+2026-11-05T21:00:21.1902858Z From https://github.com/the-user/acme-identity
+2026-11-05T21:00:21.1909052Z  + a0b0eed...65a95c7 65a95c7bb92a7673ba2ecf4bc1ad3d9cbc253c53 -> origin/main  (forced update)
+2026-11-05T21:00:21.1912530Z ##[endgroup]
+2026-11-05T21:00:21.1913951Z ##[group]Determining the checkout info
+2026-11-05T21:00:21.1915513Z ##[endgroup]
+2026-11-05T21:00:21.1916197Z [command]/usr/bin/git sparse-checkout disable
+2026-11-05T21:00:21.1969626Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-05T21:00:21.2012080Z ##[group]Checking out the ref
+2026-11-05T21:00:21.2016748Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-11-05T21:00:21.2081653Z Warning: you are leaving 1 commit behind, not connected to
+2026-11-05T21:00:21.2083293Z any of your branches:
+2026-11-05T21:00:21.2084021Z 
+2026-11-05T21:00:21.2084690Z   a0b0eed Merge pull request #11 from the-user/esv-3-225256
+2026-11-05T21:00:21.2086148Z 
+2026-11-05T21:00:21.2087046Z If you want to keep it by creating a new branch, this may be a good time
+2026-11-05T21:00:21.2088252Z to do so with:
+2026-11-05T21:00:21.2088844Z 
+2026-11-05T21:00:21.2089284Z  git branch <new-branch-name> a0b0eed
+2026-11-05T21:00:21.2089991Z 
+2026-11-05T21:00:21.2090402Z Switched to a new branch 'main'
+2026-11-05T21:00:21.2091522Z branch 'main' set up to track 'origin/main'.
+2026-11-05T21:00:21.2093654Z ##[endgroup]
+2026-11-05T21:00:21.2140004Z [command]/usr/bin/git log -1 --format=%H
+2026-11-05T21:00:21.2179282Z 65a95c7bb92a7673ba2ecf4bc1ad3d9cbc253c53
+2026-11-05T21:00:21.2604993Z ##[group]Run bb frodo:install
+2026-11-05T21:00:21.2605693Z [36;1mbb frodo:install[0m
+2026-11-05T21:00:21.2624552Z shell: /usr/bin/bash -e {0}
+2026-11-05T21:00:21.2625045Z env:
+2026-11-05T21:00:21.2625614Z   FRODO_HOST: http://sling.localhost:8090/am
+2026-11-05T21:00:21.2626130Z   FRODO_REALM: alpha
+2026-11-05T21:00:21.2626877Z   PING_WORK: ~/projects/acme-identity/.scratch/runner/_work/acme-identity/acme-identity/.scratch/ping
+2026-11-05T21:00:21.2627679Z ##[endgroup]
+2026-11-05T21:00:21.8571038Z 
+2026-11-05T21:00:21.8571849Z added 1 package in 513ms
+2026-11-05T21:00:21.8786288Z ##[group]Run bb ci/ping.bb apply
+2026-11-05T21:00:21.8787868Z [36;1mbb ci/ping.bb apply[0m
+2026-11-05T21:00:21.8813532Z shell: /usr/bin/bash -e {0}
+2026-11-05T21:00:21.8814712Z env:
+2026-11-05T21:00:21.8815960Z   FRODO_HOST: http://sling.localhost:8090/am
+2026-11-05T21:00:21.8816747Z   FRODO_REALM: alpha
+2026-11-05T21:00:21.8817448Z   PING_WORK: ~/projects/acme-identity/.scratch/runner/_work/acme-identity/acme-identity/.scratch/ping
+2026-11-05T21:00:21.8818211Z ##[endgroup]
+2026-11-05T21:00:21.9269197Z valid: 10 JSON files under tenant/ are in Frodo's form and every reference resolves
+2026-11-05T21:00:21.9270636Z  import ESVs -> http://sling.localhost:8090/am
+2026-11-05T21:00:24.1900916Z    ~/projects/acme-identity/.scratch/runner/_work/acme-identity/biro
+2026-11-05T21:00:24.1902514Z    crat-identity/tenant/global/variable/esv-max-lines-per-customer.variable.json
+2026-11-05T21:00:24.1904403Z    ✔ Finished importing 1 variables from 1 files.
+2026-11-05T21:00:24.1906324Z  import scripts -> http://sling.localhost:8090/am
+2026-11-05T21:00:25.8013468Z    crat-identity/tenant/realm/root-alpha/script/Acme-session-facts.script.json:
+2026-11-05T21:00:25.8014965Z     Imported 0 scripts.
+2026-11-05T21:00:25.8016845Z    ⚠ ~/projects/acme-identity/.scratch/runner/_work/acme-identity/acme-identity/tenant/realm/root-alpha/script/Acme-session-facts.script.json: Imported 0 scripts.
+2026-11-05T21:00:25.8017908Z  import IDM -> http://sling.localhost:8090/am
+2026-11-05T21:00:27.5268895Z    ◠ Importing config entities from ~/projects/acme-identity/.scratch/ru
+2026-11-05T21:00:27.5270032Z    nner/_work/acme-identity/acme-identity/tenant/global/idm...
+2026-11-05T21:00:27.5270858Z    ✔ Imported config entities
+2026-11-05T21:00:27.5271512Z  import journeys -> http://sling.localhost:8090/am
+2026-11-05T21:00:29.8855792Z    ◜ Resolving alpha realm dependencies
+2026-11-05T21:00:29.8856374Z    ✔ Resolved all alpha realm dependencies.
+2026-11-05T21:00:29.8857021Z    • Finished importing alpha realm journeys
+2026-11-05T21:00:29.8859254Z  export ESVs <- http://sling.localhost:8090/am
+2026-11-05T21:00:31.5312623Z  export scripts <- http://sling.localhost:8090/am
+2026-11-05T21:00:33.2231016Z  export IDM <- http://sling.localhost:8090/am
+2026-11-05T21:00:34.9710148Z  export journeys <- http://sling.localhost:8090/am
+2026-11-05T21:00:36.9111995Z 
+2026-11-05T21:00:36.9112574Z ==== APPLIED: the live tenant equals main again ====
+2026-11-05T21:00:36.9113458Z ESVs: live at once on sling. A real tenant needs `frodo esv apply` (it restarts the tenant) before a changed ESV is read.
+2026-11-05T21:00:36.9286031Z Post job cleanup.
+2026-11-05T21:00:37.0171373Z [command]/usr/bin/git version
+2026-11-05T21:00:37.0207834Z git version 2.56.0
+2026-11-05T21:00:37.0237410Z Copying '~/.gitconfig' to '~/projects/acme-identity/.scratch/runner/_work/_temp/38c45b8e-259a-4570-93fb-26e16470f111/.gitconfig'
+2026-11-05T21:00:37.0246552Z Temporarily overriding HOME='~/projects/acme-identity/.scratch/runner/_work/_temp/38c45b8e-259a-4570-93fb-26e16470f111' before making global git config changes
+2026-11-05T21:00:37.0247616Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-05T21:00:37.0251146Z [command]/usr/bin/git config --global --add safe.directory ~/projects/acme-identity/.scratch/runner/_work/acme-identity/acme-identity
+2026-11-05T21:00:37.0286892Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-05T21:00:37.0321308Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-05T21:00:37.0603867Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-05T21:00:37.0626025Z http.https://github.com/.extraheader
+2026-11-05T21:00:37.0636459Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-05T21:00:37.0668944Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-05T21:00:37.0954305Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-05T21:00:37.0983552Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-05T21:00:37.1489630Z Cleaning up orphan processes
+2026-11-05T21:00:37.1910537Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

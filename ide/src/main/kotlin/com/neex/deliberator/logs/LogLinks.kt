@@ -131,6 +131,19 @@ class LogLinks(private val project: Project) : Disposable {
 
     // lifecycle ---------------------------------------------------------------------------------------
 
+    /**
+     * A file that is not a `.log` may still be one whose places name code (a CI diff, a kept CI log, a run's output): the DAEMON says (`logs.linkable`), off the
+     * EDT; the IDE does not guess from the path. Attaches when it is.
+     */
+    fun attachIfLinkable(editor: Editor, vf: VirtualFile) {
+        val svc = WorkspaceService.getInstance(project)
+        if (svc.ws == null) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val yes = try { svc.call("logs.linkable", JsonObject().apply { addProperty("path", vf.path) }).resultObject().get("linkable")?.asBoolean == true } catch (e: Exception) { false }
+            if (yes) ApplicationManager.getApplication().invokeLater({ if (!editor.isDisposed && !project.isDisposed) attach(editor) }, ModalityState.nonModal())
+        }
+    }
+
     /** Starts linking [editor] (a log): mouse, hover, document changes; first answer asked at once. EDT. */
     fun attach(editor: Editor) {
         if (editor.getUserData(KEY) != null) return
@@ -341,13 +354,6 @@ class LogLinks(private val project: Project) : Disposable {
         private const val TIP_MS = 350
         private const val REFRESH_MS = 20_000L
         fun getInstance(project: Project): LogLinks = project.getService(LogLinks::class.java)
-
-        /** Files whose places can name code: a log (see [LogFiles]) and what a scenario run wrote (`runs/<id>/result.txt`, `runs/<id>/steps/...`). */
-        fun wants(file: VirtualFile): Boolean {
-            if (LogFiles.isLog(file)) return true
-            val p = file.path
-            return p.contains("/sessions/") && p.contains("/runs/") && (file.name == "result.txt" || p.contains("/steps/"))
-        }
     }
 }
 

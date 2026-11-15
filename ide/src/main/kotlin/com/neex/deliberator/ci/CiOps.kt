@@ -7,6 +7,12 @@ import com.neex.deliberator.daemon.DaemonException
 import com.neex.deliberator.run.ScnRunner
 import com.neex.deliberator.workspace.WorkspaceService
 
+/** What `ci.archive` did for a repository, for the status line. */
+data class CiArchive(val repo: String, val checked: Int, val newRuns: Int, val newLogs: Int, val failed: Int) {
+    fun text(): String = if (newRuns == 0 && newLogs == 0 && failed == 0) "$repo: the newest $checked finished runs are kept"
+    else "$repo: kept $newRuns new runs and $newLogs logs of the newest $checked finished runs" + (if (failed > 0) ", $failed failed" else "")
+}
+
 /** What opening a run (or a job) comes to; the view acts on it. */
 sealed interface CiOpen {
     /** A text file the daemon wrote: the diff, or the job's log. */
@@ -39,37 +45,51 @@ class CiOps(private val project: Project) {
             "branch" to branch?.takeIf { it.isNotBlank() })).resultObject())
     }
 
-    /**
-     * The job names of a run. There is no op that lists them; `ci.log` of a job nothing is called answers `ci/no-job` with every name in `known`, and
-     * that is read here (a run with no jobs is an empty list). If the daemon grows `ci.jobs` this is the one place to change.
-     */
-    fun jobNames(repo: String, run: String): List<String> {
+    /** `ci.jobs`: the jobs of [run] with their steps. A finished run is answered from the kept copy (no network); [attempt] keeps a rerun apart from its first attempt. */
+    fun jobs(repo: String, run: String, attempt: Int? = null, refresh: Boolean = false): CiRunDetail {
         session()
-        return try {
-            svc.call("ci.log", args("repo" to repo, "run" to run, "job" to NO_SUCH_JOB))
-            emptyList()
-        } catch (e: DaemonException) {
-            when (e.type) { "ci/no-job" -> e.known; "ci/no-jobs" -> emptyList(); else -> throw e }
-        }
+        return Ci.parseJobs(svc.call("ci.jobs", args("repo" to repo, "run" to run, "attempt" to attempt?.toString(), "refresh" to (if (refresh) true else null))).resultObject())
     }
 
-    /** `ci.log` of a job (default: the run's first failed job): the path of the log as text. A job that runs has none yet (`ci/log-not-available`). */
-    fun log(repo: String, run: String, job: String? = null): CiOpen.Text {
+    /** The job names of a run (from [jobs]; a run with no jobs is an empty list). */
+    fun jobNames(repo: String, run: String): List<String> = jobs(repo, run).jobs.map { it.name }
+
+    /** `ci.archive`: keeps the jobs and logs of the newest [limit] finished runs of [repo] that are not kept yet. */
+    fun archive(repo: String, limit: Int): CiArchive {
         session()
-        val r = svc.call("ci.log", args("repo" to repo, "run" to run, "job" to job)).resultObject()
-        val j = r.getAsJsonObject("job")
+        val r = svc.call("ci.archive", args("repo" to repo, "limit" to limit)).resultObject()
+        fun n(k: String) = r.get(k)?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+        return CiArchive(repo, n("checked"), n("new-runs"), n("new-logs"), r.getAsJsonArray("failed")?.size() ?: 0)
+    }
+
+    /** `ci.log` of a job (default: the run's first failed job), or of one [step] of it (number or name): the path of the log as text. A job that runs has none yet (`ci/log-not-available`). */
+    fun log(repo: String, run: String, job: String? = null, step: String? = null): CiOpen.Text {
+        session()
+        val r = svc.call("ci.log", args("repo" to repo, "run" to run, "job" to job, "step" to step)).resultObject()
+        val j = r.get("job") as? JsonObject
         val name = j?.get("name")?.takeIf { it.isJsonPrimitive }?.asString ?: job ?: "job"
         val others = r.getAsJsonArray("other-failed")?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString }.orEmpty()
-        return CiOpen.Text(path(r), "log of $name (run $run)", others.takeIf { it.isNotEmpty() }?.let { "also failed: " + it.joinToString(", ") })
+        val st = r.get("step") as? JsonObject
+        val stepName = st?.let { "${it.get("number")?.asString} ${it.get("name")?.asString}" }
+        val kept = r.get("source")?.takeIf { it.isJsonPrimitive }?.asString?.removePrefix(":") == "kept"
+        val age = r.get("age-s")?.takeIf { it.isJsonPrimitive }?.asLong
+        val inexact = st?.get("exact")?.takeIf { it.isJsonPrimitive }?.asBoolean == false
+        val note = listOfNotNull(
+            if (kept && age != null) "kept copy, fetched ${Ci.age(age)}" else null,
+            if (inexact) "cut by time, not exact: the first line says so" else null,
+            others.takeIf { it.isNotEmpty() }?.let { "also failed: " + it.joinToString(", ") },
+        ).joinToString("; ").ifEmpty { null }
+        return CiOpen.Text(path(r), (if (stepName != null) "log of step $stepName of $name" else "log of $name") + " (run $run)", note)
     }
 
-    /** `ci.diff`: the failed job's log against the last green run of the same job, as a unified diff text file. */
-    fun diff(repo: String, run: String, job: String? = null): CiOpen.Text {
+    /** `ci.diff`: the failed job's log (or one failed [step] of it) against the last green run of the same job, as a unified diff text file. */
+    fun diff(repo: String, run: String, job: String? = null, step: String? = null): CiOpen.Text {
         session()
-        val r = svc.call("ci.diff", args("repo" to repo, "run" to run, "job" to job)).resultObject()
-        val green = r.getAsJsonObject("green")?.get("run")?.takeIf { it.isJsonPrimitive }?.asString
+        val r = svc.call("ci.diff", args("repo" to repo, "run" to run, "job" to job, "step" to step)).resultObject()
+        val green = (r.get("green") as? JsonObject)?.get("run")?.takeIf { it.isJsonPrimitive }?.asString
         val added = r.get("added")?.takeIf { it.isJsonPrimitive }?.asInt
-        return CiOpen.Text(path(r), "diff of run $run against the green run ${green ?: "?"}",
+        val st = (r.get("step") as? JsonObject)?.let { "step ${it.get("number")?.asString} ${it.get("name")?.asString} of " } ?: ""
+        return CiOpen.Text(path(r), "diff of ${st}run $run against the green run ${green ?: "?"}",
             if (r.get("equal")?.takeIf { it.isJsonPrimitive }?.asBoolean == true) "the logs are equal after normalisation" else added?.let { "$it lines only in the red run" })
     }
 

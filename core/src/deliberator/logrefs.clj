@@ -275,3 +275,18 @@
                    (reduce #(conj! %1 (ref-of n line %2)) refs ok)
                    (+ unresolved (- (count ss) (count ok)))))
           {:path p :lines (dec n) :service (:name svc) :refs (persistent! refs) :unresolved unresolved})))))
+
+(defn linkable
+  "What the daemon says about a file the IDE opened (the IDE never guesses from a path): `{:path :linkable bool :kind}`. A text file of the
+  workspace whose places can name code, other than a `.log` (which the IDE links by its extension): a CI log or CI diff of a session
+  (`sessions/<k>/ci/`), a kept CI log (`ci/`), the output of a scenario run (`sessions/<k>/runs/<id>/result.txt`, `.../steps/...`)."
+  [ws path]
+  (let [p (.normalize (.toAbsolutePath (Path/of (str path) (make-array String 0))))
+        root (.normalize (.toAbsolutePath (store/path ws)))
+        parts (when (.startsWith p root) (vec (map str (.relativize root p))))
+        kind (cond (nil? parts) nil
+                   (= "ci" (first parts)) :ci
+                   (and (= "sessions" (first parts)) (= "ci" (nth parts 2 nil)) (re-find #"\.(log|diff|txt)$" (last parts))) :ci
+                   (and (= "sessions" (first parts)) (= "runs" (nth parts 2 nil))
+                        (or (= "result.txt" (last parts)) (some #{"steps"} (drop 3 parts)))) :run-output)]
+    {:path (str p) :linkable (some? kind) :kind kind}))
