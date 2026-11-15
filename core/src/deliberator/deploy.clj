@@ -432,8 +432,10 @@
           (let [mx (apply max-key #(.toEpochMilli ^Instant %) (map :at fresh))]
             (swap! lstate assoc-in [:since key] mx)
             (swap! lstate assoc-in [:seen key] (into (if (= mx last-at) seen-at #{}) (comp (filter #(= mx (:at %))) (map :text)) fresh))))))
-    (let [st @lstate]
-      {:entries (vec (sort-by (juxt (comp #(.toEpochMilli ^Instant %) :at)) (mapcat val (:lines st))))
+    (let [st @lstate
+          valid (set (concat (for [s sources :when (= :cloudwatch (:kind s))] [:cw (:group s) (:stream s)])
+                             (for [s sources :when (= :container (:kind s))] [:container (:container s)])))]
+      {:entries (vec (sort-by (juxt (comp #(.toEpochMilli ^Instant %) :at)) (mapcat val (select-keys (:lines st) valid))))
        :notes (vec (concat (vals (:notes st))
                            (for [s sources :when (= :none (:kind s))] (:reason s))
                            (for [[k _] (:capped st)] (str "capped at " log-cap " lines: " (pr-str (vec (rest k)))))))
@@ -715,7 +717,8 @@
           (do (Thread/sleep (long poll-ms)) (recur dep-id grace (inc patience)))
           (if (and (nil? dep-id) (nil? deployment) (terminal? (:row d)) (< (System/currentTimeMillis) wait-until) (not (cancelled?)))
             ;; `deploy follow` right after a deploy was sent: the newest one may still be the one before it
-            (do (when (compare-and-set! waiting false true)
+            (do (reset! lstate {})   ; what was read for the finished one is not this deployment's
+                (when (compare-and-set! waiting false true)
                   (line! :status (str (:id (:row d)) " is finished; waiting up to " (quot wait-ms 1000) " s for a newer deployment") (store/now)))
                 (Thread/sleep (long (min poll-ms 1000)))
                 (recur nil 0 0))
