@@ -58,6 +58,9 @@
     config.refresh env path ws                     -> {env fetched-at parameters secrets path copy raw errors}
     deployed.refresh env ws                        -> {env fetched-at services ecs lambda deployments path text raw errors}   (M4.2: ECS, Lambda, CodeDeploy into cache/<env>/deployed.edn)
     deployed.show env service ws                   -> {env fetched-at age-ms age services count path text}   (from the cache only, never AWS)
+    deploy.list service* env limit ws              -> {env service cluster kind source count rows path table notes absent errors}   (cicd-aws 04: the deployments of an ECS service or the versions of a Lambda, newest first)
+    deploy.show service* deployment env cached ws  -> {path body deployment status rollout-state revision-before revision-after image-before image-after git-sha run-id tasks lines}   (ONE text file: header, events, tasks, container logs)
+    deploy.follow service* deployment env timeout ws -> {path deployment status rollout-state ended}   [deploy.line]   (the same file growing until the rollout ends)
     audit.show session ws                          -> {path exists scope session count outcomes confirmed lines [{n at env service op outcome confirmation reason}]}   (the audit.log of a session, else of the workspace; the IDE opens `path` and highlights `lines`)
     runtime.ensure ws infra-only timeout-ms        -> status   [runtime.pulling runtime.starting runtime.ready]
     runtime.status ws                              -> {ws podman containers}
@@ -113,6 +116,7 @@
             [clojure.string :as str]
             [deliberator.aws :as aws]
             [deliberator.config :as config]
+            [deliberator.deploy :as deploy]
             [deliberator.deployed :as deployed]
             [deliberator.insights :as insights]
             [deliberator.ecsfollow :as ecsfollow]
@@ -1007,6 +1011,27 @@
 (defn- deployed-show [_ {:keys [env service] :as args}]
   (deployed/show (ws-of args) (or env "local") {:service service}))
 
+(defn- deploy-list [ctx {:keys [service env limit] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (verify-remote! ctx ws env-name)
+    (deploy/list! ws env-name service (cond-> {} limit (assoc :limit limit)))))
+
+(defn- deploy-show [ctx {:keys [service deployment env cached] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (when-not cached (verify-remote! ctx ws env-name))
+    (deploy/show! ws env-name service {:deployment deployment :cached cached})))
+
+(defn- deploy-follow [ctx {:keys [service deployment env timeout wait] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")
+        counter (:follows (:daemon ctx))]   ; an active follow is work in flight (hello :runs)
+    (verify-remote! ctx ws env-name)
+    (when counter (swap! counter inc))
+    (try
+      (deploy/follow! ws env-name service (cond-> {:deployment deployment :emit! (:emit! ctx) :cancelled? (:cancelled? ctx)}
+                                            timeout (assoc :timeout-ms (* 1000 (long timeout)))
+                                            wait (assoc :wait-ms (* 1000 (long wait)))))
+      (finally (when counter (swap! counter dec))))))
+
 (defn- audit-show [_ {:keys [session] :as args}]
   (let [ws (ws-of args)
         ctx {:ws ws :session session}
@@ -1246,6 +1271,25 @@
                     :doc "What was deployed when last fetched, from the cache only (never AWS), with its age; service narrows to one name (or cluster/name). deployed.refresh fetches again."
                     :args (ws-schema :service {:type :string :positional true :doc "service or function name, or cluster/name; default all"}
                                      :env {:type :string :doc "environment name; default local"})}
+   "deploy.list" {:fn deploy-list :class :mutate
+                  :doc "The deployments of an ECS service (newest first): id, status, rollout state and reason, started, finished, revision and image before -> after, the commit and CI run of the revision (task definition tags git-sha and run-id). From ECS's service-deployment calls, else (the call is not there or not allowed) the service's deployments from DescribeServices; plus the CodeDeploy deployments of its group where the account has CodeDeploy. For a Lambda function: its versions and last update. Read calls only, every response persisted raw; writes cache/<env>/deploy/<cluster>/<service>/list.txt."
+                  :args (ws-schema :service {:type :string :required true :doc "ECS service (name or cluster/name) or Lambda function"}
+                                   :env {:type :string :doc "environment name; default local"}
+                                   :limit {:type :int :doc "at most this many deployments; default 20"})}
+   "deploy.show" {:fn deploy-show :class :mutate
+                   :doc "ONE text file for a deployment (default the newest): the header (status, rollout, window, revision and image before -> after, commit and CI run), the service's events inside the deployment's window, the tasks it started and replaced (stop code, reason, exit codes) and the log lines of the started tasks' containers in time order, each line naming its container (CloudWatch from the task definition's awslogs options; on a local environment the runtime's container logs). cache/<env>/deploy/<cluster>/<service>/<deployment>.txt. cached answers from that file with its age, no AWS call. Read calls only."
+                   :args (ws-schema :service {:type :string :required true :doc "ECS service (name or cluster/name) or Lambda function"}
+                                    :deployment {:type :string :positional true :doc "ecs-svc/<n>, <n>, a service-deployment ARN or a CodeDeploy id; default the newest"}
+                                    :env {:type :string :doc "environment name; default local"}
+                                    :cached {:type :bool :doc "the file of the last show, from disk, with its age"})}
+   "deploy.follow" {:fn deploy-follow :class :mutate
+                     :doc "The deploy text of a rollout while it runs: the same file rewritten after every change, every new event, task state and log line streamed as deploy.line; ends when the rollout completes or fails (a rollout that keeps starting tasks that die is failing after three) or after timeout seconds; a failure ends with the stop reasons and the container's last lines. Quiet polls: an unchanged answer is persisted once."
+                     :events ["deploy.line"]
+                     :args (ws-schema :service {:type :string :required true :doc "ECS service (name or cluster/name)"}
+                                      :deployment {:type :string :positional true :doc "ecs-svc/<n> ...; default the newest"}
+                                      :env {:type :string :doc "environment name; default local"}
+                                      :timeout {:type :int :doc "stop following after this many seconds; default 900"}
+                                      :wait {:type :int :doc "when the newest deployment is already finished and none was named, wait this many seconds for a newer one (a follow started right after a deploy was sent); default 20"})}
    "service.list" {:fn service-list :class :read
                    :args (ws-schema :env {:type :string :doc "environment whose topology gives the mode; default local"})
                    :doc "The services of the workspace with kind, repository, module, ports, image, mode (local, external with its url, off) and runtime status, their runtime container and the log/ target of the environment for them (log-target, e.g. log/service-a, and log, its value: a container or a CloudWatch group)."}
@@ -1550,7 +1594,7 @@
       (call-provider op ctx args)
       (let [args (validate-args op (:args entry) args)]
         (when (and (contains? (:args entry) :ws)
-                   (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (str/starts-with? op "fake.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
+                   (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (str/starts-with? op "deploy.") (str/starts-with? op "fake.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
                        (and (= :read (:class entry)) (not (#{"scenario.parse" "op.tools"} op)))))
           (require-workspace! (:ws args)))
         (when (agent? ctx)
