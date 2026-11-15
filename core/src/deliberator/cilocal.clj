@@ -28,6 +28,7 @@
             [clojure.string :as str]
             [deliberator.cilocalrun :as lr]
             [deliberator.ciworkflow :as ciwf]
+            [deliberator.ecsrecord :as ecsrecord]
             [deliberator.env :as env]
             [deliberator.git :as git]
             [deliberator.logfetch :as logfetch]
@@ -225,20 +226,23 @@
     (into {} (when (Files/isDirectory d (make-array java.nio.file.LinkOption 0))
                (for [^java.io.File f (.listFiles (.toFile d)) :when (str/ends-with? (.getName f) ".edn")
                      :let [r (store/read-edn (.toPath f))] :when r]
-                 [(or (:service r) (str/replace (.getName f) #"\.edn$" "")) (select-keys r [:revision :image :cluster :service])])))))
+                 [(or (:service r) (str/replace (.getName f) #"\.edn$" "")) (select-keys r [:revision :image :cluster :service :deployed :held :image-id])])))))
 
 (defn- deploy-report
-  "Lines for the end of the log: every ECS-bound service whose revision changed during the run, the image it now runs, whether the runtime's store has it,
-  and the way back to the dev container."
-  [ws pc before]
+  "Lines for the end of the log: every ECS-bound service whose revision changed during the run, the image it now runs and whether it IS the revision's image
+  (the watch's record: piece 02b), and the way back to the dev container (`dlb service dev NAME`). The watch looks at ECS every second: it gets two to see the
+  revision."
+  [ws before]
+  (when (seq (snapshot-revisions ws)) (Thread/sleep 2500))
   (let [after (snapshot-revisions ws)]
     (vec (mapcat (fn [[svc a]]
                    (when (and (:revision a) (not= (:revision a) (:revision (get before svc))))
-                     (let [img (:image a) in? (and img (try (podman/image-exists? pc img) (catch Exception _ false)))]
-                       [(str "[deliberator] " svc " is now on revision " (:revision a) (when img (str ", image " img))
-                             (cond (nil? img) "" in? " (in the runtime's image store: the service runs it)"
-                                   :else " (NOT in the runtime's image store: the service keeps its dev container)"))
-                        (str "[deliberator] `dlb service dev " svc "` goes back to the dev container (it stays until the next revision).")])))
+                     [(str "[deliberator] " svc " is now on revision " (:revision a) (when (:image a) (str ", image " (:image a)) )
+                           (cond (nil? (:image a)) ""
+                                 (ecsrecord/deployed? a) ": the service runs that image"
+                                 (:held a) " (in the runtime's store, held on the dev container until the next revision)"
+                                 :else " (not in the runtime's store: the service keeps its dev container)"))
+                      (str "[deliberator] `dlb service dev " svc "` goes back to the dev container (it stays until the next revision).")]))
                  (sort-by key after)))))
 
 (defn run!
@@ -349,7 +353,7 @@
             st (swap! state lr/finish-state (assoc w :jobs jobs) cancelled?)
             jobs-conclusion (lr/run-conclusion (:jobs st))
             conclusion (cond cancelled? "cancelled" (and (zero? exit) (= "success" jobs-conclusion)) "success" :else "failure")
-            report (when (= "success" conclusion) (deploy-report ws pc revisions-before))]
+            report (when (= "success" conclusion) (deploy-report ws revisions-before))]
         (doseq [l report] (wlines! runlog l))
         (persist! true conclusion)
         (when emit! (emit! {:event "ci.run" :run (str "local-" n) :number n :status "completed" :conclusion conclusion :workflow wf-name :on event}))
