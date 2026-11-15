@@ -221,3 +221,20 @@ jobs:
           (is (not= ::hung r) "the request returned after the cancel")
           (is (= "cancelled" (:conclusion r)) (pr-str (select-keys r [:conclusion :exit]))))
         (is (= before (set (act-containers))) "no act container is left behind")))))
+
+(deftest workflows-are-read-with-a-yaml-parser-and-agree-with-act
+  (tu/with-temp-home
+    (let [dir (repo-dir (tu/temp-home))
+          ws (first (cl/workflows dir))]
+      (is (= "fixture" (:name ws)))
+      (is (= ".github/workflows/fixture.yml" (:file ws)))
+      (is (= ["workflow_dispatch"] (:events ws)))
+      (is (= [{:name "code" :type nil :default "0" :description "exit code of the flaky job" :options nil :required false}] (:inputs ws)))
+      (is (= #{["flaky" 0 []] ["say" 0 []] ["slow" 0 []] ["boom" 1 ["say"]]} (set (map (juxt :id :stage :needs) (:jobs ws)))))
+      (is (= "boom" (:id (last (:jobs ws)))) "needs order: a job after the one it needs")
+      (testing "act -l is only a cross-check: the same jobs, the same stages"
+        (let [r (sh/sh "act" "-l" "-W" (:path ws) :dir dir)]
+          (if-not (zero? (:exit r))
+            (fu/skip! "ci-local" "act -l is not runnable here")
+            (let [rows (for [l (rest (str/split-lines (:out r))) :let [[stage id] (str/split (str/trim l) #"\s+")] :when (re-matches #"\d+" (str stage))] [id (parse-long stage)])]
+              (is (= (set rows) (set (map (juxt :id :stage) (:jobs ws))))))))))))

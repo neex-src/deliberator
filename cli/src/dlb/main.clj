@@ -50,6 +50,7 @@
     (and ok (map? result) (contains? result :status) (contains? result :steps)) (if (= "ok" (:status result)) 0 1)
     (and ok (map? result) (false? (:equal result))) 1
     (and ok (map? result) (failed-check? op result)) 1
+    (and ok (map? result) (:run result) (contains? result :exit) (not= "success" (:conclusion result))) 1      ; a local run that is not green (ci.local)
     ok 0
     (= "confirm-required" (:type error)) 1
     :else 2)))

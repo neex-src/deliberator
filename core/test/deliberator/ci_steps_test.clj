@@ -220,3 +220,34 @@
       (is (= :ci (:kind (k (:kept r)))) "a kept log")
       (is (false? (:linkable (k "/etc/hostname"))))
       (is (false? (:linkable (k (str (store/path "w" "sessions" "S1" "notes.txt")))))))))
+
+(deftest the-runs-listing-is-kept-answered-at-once-and-without-the-network-01a
+  (with-github [srv state]
+    (let [r1 (call "ci.runs" {:repo "acme/widgets"})
+          keptf (.resolve (store/path "w" "ci" "github" "acme-widgets") "runs.edn")]
+      (is (= :fetched (:source r1)))
+      (is (= [300 295] (mapv :id (:rows r1))))
+      (is (every? #(= [] (:notes %)) (:rows r1)) "each row carries what a deploy knows of its commit (none here)")
+      (is (java.nio.file.Files/isRegularFile keptf (make-array java.nio.file.LinkOption 0)) "the listing is kept at workspace level")
+      (let [before (n-requests srv)
+            c (call "ci.runs" {:repo "acme/widgets" :cached true})]
+        (is (= :kept (:source c)))
+        (is (number? (:age-s c)))
+        (is (= [300 295] (mapv :id (:rows c))))
+        (is (= before (n-requests srv)) "cached asks nobody"))
+      (testing "GitHub unreachable: the kept listing, marked stale, with the reason"
+        (store/write-edn! (store/path "w" "github.edn") {:token-source :none :api "http://127.0.0.1:1"})
+        (let [s (call "ci.runs" {:repo "acme/widgets"})]
+          (is (true? (:stale s)))
+          (is (= :kept (:source s)))
+          (is (str/includes? (:error s) "cannot reach"))
+          (is (= [300 295] (mapv :id (:rows s))))))
+      (testing "a poll keeps one overwritten text view, not a stamped file per call"
+        (store/write-edn! (store/path "w" "github.edn") {:token-source :none :api (fake/base srv)})
+        (let [p1 (call "ci.runs" {:repo "acme/widgets" :poll true}) p2 (call "ci.runs" {:repo "acme/widgets" :poll true})]
+          (is (= (:path p1) (:path p2)))
+          (is (str/ends-with? (:path p1) "-latest.txt")))))))
+
+(deftest a-repository-with-neither-github-nor-local-runs-is-a-typed-error
+  (with-github [srv state]
+    (is (= :ci/bad-repo (try (call "ci.runs" {:repo "not a repo"}) nil (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))))

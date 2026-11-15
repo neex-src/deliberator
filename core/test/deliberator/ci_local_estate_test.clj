@@ -37,7 +37,7 @@
           _ (call "deployed.refresh" {:ws ws :env "local"})
           before (service-of (deployed/cached ws "local"))
           events (atom [])
-          r (call "ci.local" {:ws ws :repo root :workflow "estate/.github/workflows/deploy.yml" :job "deploy" :session sess} events)
+          r (call "ci.local" {:ws ws :repo root :workflow "estate/.github/workflows/deploy.yml" :session sess} events)
           text (slurp (:path r))]
       (is (some? before) "the estate's service A is in the local environment (terraform applied)")
       (testing "the pipeline ran green, both jobs, output kept as text and streamed"
@@ -66,6 +66,6 @@
               (is (= (str "estate/service-a:" tag) (:image (first (:containerDefinitions td)))))
               (is (= "estate-service-a" (:family td)))))))
       (testing "act left nothing behind"
-        (is (empty? (filter #(str/starts-with? (str/replace (str (first (:Names %))) #"^/" "") "act-")
+        (is (empty? (filter #(get (:Labels %) (keyword "deliberator.ci-run"))
                             (podman/list-containers (podman/client (podman/default-endpoint)) :all true))))))
     (fu/skip! "the-estates-workflow-deploys-service-a-through-codedeploy" "set ESTATE_WS=<ws> (after bb estate:up --ws <ws>) and DELIBERATOR_HOME")))
