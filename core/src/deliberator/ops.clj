@@ -1021,14 +1021,15 @@
     (when-not cached (verify-remote! ctx ws env-name))
     (deploy/show! ws env-name service {:deployment deployment :cached cached})))
 
-(defn- deploy-follow [ctx {:keys [service deployment env timeout] :as args}]
+(defn- deploy-follow [ctx {:keys [service deployment env timeout wait] :as args}]
   (let [ws (ws-of args) env-name (or env "local")
         counter (:follows (:daemon ctx))]   ; an active follow is work in flight (hello :runs)
     (verify-remote! ctx ws env-name)
     (when counter (swap! counter inc))
     (try
       (deploy/follow! ws env-name service (cond-> {:deployment deployment :emit! (:emit! ctx) :cancelled? (:cancelled? ctx)}
-                                            timeout (assoc :timeout-ms (* 1000 (long timeout)))))
+                                            timeout (assoc :timeout-ms (* 1000 (long timeout)))
+                                            wait (assoc :wait-ms (* 1000 (long wait)))))
       (finally (when counter (swap! counter dec))))))
 
 (defn- audit-show [_ {:keys [session] :as args}]
@@ -1287,7 +1288,8 @@
                      :args (ws-schema :service {:type :string :required true :doc "ECS service (name or cluster/name)"}
                                       :deployment {:type :string :positional true :doc "ecs-svc/<n> ...; default the newest"}
                                       :env {:type :string :doc "environment name; default local"}
-                                      :timeout {:type :int :doc "stop following after this many seconds; default 900"})}
+                                      :timeout {:type :int :doc "stop following after this many seconds; default 900"}
+                                      :wait {:type :int :doc "when the newest deployment is already finished and none was named, wait this many seconds for a newer one (a follow started right after a deploy was sent); default 20"})}
    "service.list" {:fn service-list :class :read
                    :args (ws-schema :env {:type :string :doc "environment whose topology gives the mode; default local"})
                    :doc "The services of the workspace with kind, repository, module, ports, image, mode (local, external with its url, off) and runtime status, their runtime container and the log/ target of the environment for them (log-target, e.g. log/service-a, and log, its value: a container or a CloudWatch group)."}

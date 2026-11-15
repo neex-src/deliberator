@@ -90,7 +90,7 @@
                   (is (= body (:body c))) (is (:age c))))))
           (testing "follow of a finished rollout shows it and ends"
             (let [lines (atom [])
-                  r (d/follow! "default" rem-name (str cluster "/app") {:emit! #(swap! lines conj (:text %)) :poll-ms 200 :timeout-ms 20000})]
+                  r (d/follow! "default" rem-name (str cluster "/app") {:emit! #(swap! lines conj (:text %)) :poll-ms 200 :timeout-ms 20000 :wait-ms 0})]
               (is (= :completed (:ended r)))
               (is (some #(str/includes? % "app v2 started") @lines))
               (is (some #(str/includes? % "== rollout COMPLETED") @lines))))

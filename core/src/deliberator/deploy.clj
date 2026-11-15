@@ -670,12 +670,15 @@
           (for [e (take-last 20 (:entries log))] (str (t-str (:at e)) " [" (:container e) (when (:task e) (str "/" (:task e))) "] " (:text e)))))
 
 (defn- new-items
-  "What `d` has that `seen` (a set of keys) has not: -> `[[at text kind key] ...]` sorted by time."
-  [d seen]
+  "What `d` has that `seen` (a set of keys) has not: -> `[[at text kind key] ...]` sorted by time. A task shows at its creation the first time it
+  is seen, and at the instant the change was seen afterwards."
+  [d seen now]
   (->> (concat (for [e (:events d)] [(:at e) (str (t-str (:at e)) " event  " (:message e)) :event [:event (:id e) (:message e)]])
-               (for [t (concat (:started d) (:replaced d))]
-                 [(or (:stopped t) (:created t))
-                  (str (t-str (or (:stopped t) (:created t))) " task   " (short-id (:id t)) " rev " (:revision t) " " (:last-status t)
+               (for [t (concat (:started d) (:replaced d))
+                     :let [first? (not-any? #(and (= :task (first %)) (= (:id t) (second %))) seen)
+                           at (cond first? (or (:created t) now) (:stopped t) (:stopped t) :else now)]]
+                 [at
+                  (str (t-str at) " task   " (short-id (:id t)) " rev " (:revision t) " " (:last-status t)
                        (when (:stop-code t) (str "  " (:stop-code t) ": " (:stopped-reason t))))
                   :task [:task (:id t) (:last-status t)]])
                (let [n (volatile! {})]
@@ -688,7 +691,7 @@
 
 (defn follow!
   "See the namespace docstring. Opts: `:deployment :emit! :cancelled? :poll-ms :timeout-ms`. -> `{:path :deployment :status :rollout-state :ended :lines}`."
-  [ws env-name service-spec {:keys [deployment emit! cancelled? poll-ms timeout-ms] :or {poll-ms default-poll-ms timeout-ms default-timeout-ms}}]
+  [ws env-name service-spec {:keys [deployment emit! cancelled? poll-ms timeout-ms wait-ms] :or {poll-ms default-poll-ms timeout-ms default-timeout-ms wait-ms 20000}}]
   (let [cancelled? (or cancelled? (constantly false))
         emit! (or emit! (fn [_]))
         ctx (ctx-of ws env-name (atom {}))
@@ -700,7 +703,9 @@
         deadline (+ (System/currentTimeMillis) timeout-ms)
         line! (fn [kind text at] (emit! {:event "deploy.line" :kind (name kind) :text text :at (str at)}))
         last-text (atom nil)
-        announced (atom false)]
+        announced (atom false)
+        waiting (atom false)
+        wait-until (+ (System/currentTimeMillis) wait-ms)]
     (loop [dep-id deployment grace 0 patience 0]
       (let [d (try (collect! ctx target dep-id lstate {:limit 5})
                    (catch clojure.lang.ExceptionInfo e
@@ -708,9 +713,15 @@
                      (if (and (= :deploy/not-found (:type (ex-data e))) (nil? dep-id) (< patience 3)) ::wait (throw e))))]
         (if (= ::wait d)
           (do (Thread/sleep (long poll-ms)) (recur dep-id grace (inc patience)))
+          (if (and (nil? dep-id) (nil? deployment) (terminal? (:row d)) (< (System/currentTimeMillis) wait-until) (not (cancelled?)))
+            ;; `deploy follow` right after a deploy was sent: the newest one may still be the one before it
+            (do (when (compare-and-set! waiting false true)
+                  (line! :status (str (:id (:row d)) " is finished; waiting up to " (quot wait-ms 1000) " s for a newer deployment") (store/now)))
+                (Thread/sleep (long (min poll-ms 1000)))
+                (recur nil 0 0))
           (let [row (:row d)
                 text (render-show d)
-                items (new-items d @seen)]
+                items (new-items d @seen (store/now))]
             (when (not= text @last-text)
               (write-text! (show-path ws env-name (:cluster d) (:service d) (:id row)) text)
               (store/write-edn! (.resolveSibling (show-path ws env-name (:cluster d) (:service d) (:id row)) (str (slug (:id row)) ".edn"))
@@ -728,7 +739,7 @@
                               (> (System/currentTimeMillis) deadline) :timeout)]
               (cond
                 ;; one more look: the last log lines come a moment after the rollout ends, and ECS writes "has reached a steady state" after it
-                (and done? (not fail?) (= :completed ended) (< grace 25)
+                (and done? (not fail?) (= :completed ended) (< grace 40)
                      (or (< grace 1) (not-any? #(str/includes? (str (:message %)) "steady state") (:events d))))
                 (do (Thread/sleep 3000) (recur (:id row) (inc grace) 0))
                 (and done? (not fail?) (zero? grace) (not= :completed ended))
@@ -745,7 +756,7 @@
                       (write-text! p (str (render-show d) "\n" summary "\n" (str/join "\n" fl) "\n"))))
                   {:path (str (show-path ws env-name (:cluster d) (:service d) (:id row))) :deployment (:id row) :status (:status row)
                    :rollout-state (:rollout-state row) :ended ended :tasks (count (:started d)) :lines (count (:entries (:log d))) :follow true})
-                :else (do (Thread/sleep (long poll-ms)) (recur (:id row) grace 0))))))))))
+                :else (do (Thread/sleep (long poll-ms)) (recur (:id row) grace 0)))))))))))
 
 ;; --- the seam for ci.* -------------------------------------------------------------------------------------------------
 
