@@ -48,6 +48,8 @@ class DaemonOpProcessHandler(
     private val record = StringBuilder()
     private val pending = StringBuilder()
     @Volatile private var live = false
+    /** Hears every event that is not a console line (`ci.run`, `ci.step` of a local run): name and payload. */
+    @Volatile var onEvent: ((String, JsonObject) -> Unit)? = null
 
     /** Everything printed (tests, and a late reader). */
     @Synchronized fun transcript(): String = record.toString()
@@ -72,6 +74,7 @@ class DaemonOpProcessHandler(
             print("> $op ${args.entrySet().joinToString(" ") { "${it.key}=${it.value.asString}" }}")
             val c = WorkspaceService.getInstance(project).start(op, args, true) { ev ->
                 if (ev.name == "logs.line") ev.json.get("text")?.takeIf { it.isJsonPrimitive }?.asString?.let { print(it) }
+                else onEvent?.let { f -> runCatching { f(ev.name, ev.json) } }
             }
             call = c
             if (stopped.get()) c.cancel()
@@ -131,7 +134,7 @@ class DaemonPathFilter(private val project: Project) : Filter {
 
 /** Shows [handler]'s output as a closable tab of the Deliberator tool window, with a Stop button; starts it. EDT. */
 object CiConsoles {
-    fun show(project: Project, handler: DaemonOpProcessHandler): Content? {
+    fun show(project: Project, handler: DaemonOpProcessHandler, select: Boolean = true): Content? {
         val tw = ToolWindowManager.getInstance(project).getToolWindow("Deliberator") ?: return null
         val console: ConsoleView = TextConsoleBuilderFactory.getInstance().createBuilder(project).apply { addFilter(DaemonPathFilter(project)) }.console
         console.attachToProcess(handler)
@@ -151,8 +154,7 @@ object CiConsoles {
         content.setDisposer(console)
         content.putUserData(HANDLER, handler)
         tw.contentManager.addContent(content)
-        tw.contentManager.setSelectedContent(content)
-        tw.activate(null)
+        if (select) { tw.contentManager.setSelectedContent(content); tw.activate(null) }
         handler.begin()
         return content
     }
@@ -160,6 +162,6 @@ object CiConsoles {
     val HANDLER = com.intellij.openapi.util.Key.create<DaemonOpProcessHandler>("deliberator.ci.handler")
 
     /** [show] from any thread. */
-    fun showLater(project: Project, handler: DaemonOpProcessHandler) =
-        ApplicationManager.getApplication().invokeLater({ show(project, handler) }, ModalityState.nonModal())
+    fun showLater(project: Project, handler: DaemonOpProcessHandler, select: Boolean = true) =
+        ApplicationManager.getApplication().invokeLater({ show(project, handler, select) }, ModalityState.nonModal())
 }

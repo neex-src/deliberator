@@ -9,7 +9,9 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.dsl.listCellRenderer.textListCellRenderer
 import com.neex.deliberator.actions.WorkspaceAction
@@ -25,6 +27,7 @@ object CiController {
      */
     fun open(project: Project, sel: CiSelection) = when {
         sel.step != null || sel.job != null -> log(project, sel)
+        sel.run.local && sel.run.running -> Ui.notify(project, "CI: ${sel.run.tag}", "The run is in progress on this machine: open it to see its jobs and steps move; a step's log opens when the step has ended.")
         else -> Ui.background(project, "Deliberator: ${sel.repo} run ${sel.run.id}", { handle(project, CiOps.getInstance(project).openDefault(sel.repo, sel.run)) })
     }
 
@@ -137,6 +140,7 @@ class CiDiffAction : CiAction() {
 /** `deliberator.ci.follow`: a job or a run that is in progress. */
 class CiFollowAction : CiAction() {
     override fun enabledFor(sel: CiSelection) = when {
+        sel.run.local -> false      // a local run's steps move in the tree; its console is a tab of its own
         sel.job != null -> sel.job.state == CiState.RUNNING || sel.job.state == CiState.QUEUED
         else -> sel.run.running
     }
@@ -189,6 +193,142 @@ class CiRemoveRepoAction : CiAction() {
     }
 }
 
+/** Starts, remembers and cancels the local runs of this session (the Stop of their console, from the tree). */
+object CiLocal {
+    private val handlers = java.util.concurrent.ConcurrentHashMap<String, DaemonOpProcessHandler>()
+
+    /** `ci.local` of [workflowFile] (relative to the checkout [repo] names) as decided in [spec]; the console is a tab, the tree shows the run on top of its workflow. */
+    fun start(project: Project, repo: String, workflowFile: String, spec: CiLocalSpec, selectConsole: Boolean = false) = Ui.background(project, "Deliberator: ci local $workflowFile", {
+        val h = CiOps.getInstance(project).local(repo, workflowFile, spec.job, spec.event, spec.inputs)
+        wire(project, repo, h)
+        CiConsoles.showLater(project, h, selectConsole)
+    })
+
+    /** Makes [h] a local run of this IDE: it is remembered (so the tree can cancel it) while it runs, and the tree shows its row at the start and at the end. */
+    fun wire(project: Project, repo: String, h: DaemonOpProcessHandler) {
+        h.onEvent = { name, json ->
+            if (name == "ci.run") {
+                val id = json.get("run")?.takeIf { it.isJsonPrimitive }?.asString
+                val status = json.get("status")?.takeIf { it.isJsonPrimitive }?.asString
+                if (id != null && status == "in_progress") {
+                    handlers["$repo|$id"] = h
+                    ApplicationManager.getApplication().invokeLater({ CiPanel.of(project)?.reveal(repo, id) }, ModalityState.any())
+                } else if (id != null) {
+                    handlers.remove("$repo|$id")
+                    ApplicationManager.getApplication().invokeLater({ CiPanel.of(project)?.load(repo, false) }, ModalityState.any())
+                }
+            }
+        }
+    }
+
+    fun cancellable(repo: String, runId: String) = handlers["$repo|$runId"]?.let { !it.isProcessTerminated } ?: false
+    fun cancel(repo: String, runId: String) { handlers["$repo|$runId"]?.destroyProcess() }
+}
+
+/** The Run Locally dialog: the event, one job or all, the dispatch inputs with their types and defaults (a choice is a combo box, a boolean a check box). */
+class RunLocallyDialog(project: Project, private val wf: CiWorkflow, preJob: String? = null) : DialogWrapper(project) {
+    private val event = javax.swing.JComboBox((wf.events.ifEmpty { listOf("workflow_dispatch") }).toTypedArray()).also { if ("workflow_dispatch" in wf.events) it.selectedItem = "workflow_dispatch" }
+    private val job = javax.swing.JComboBox((listOf(ALL) + wf.jobs.map { it.id }).toTypedArray()).also { c -> preJob?.let { c.selectedItem = it } }
+    private val fields = LinkedHashMap<String, javax.swing.JComponent>()
+
+    init { title = "Run ${wf.name} Locally"; init() }
+
+    override fun createCenterPanel(): javax.swing.JComponent {
+        val p = javax.swing.JPanel(java.awt.GridBagLayout())
+        var row = 0
+        fun add(label: String, c: javax.swing.JComponent, hint: String? = null) {
+            p.add(javax.swing.JLabel(label), java.awt.GridBagConstraints().apply { gridx = 0; gridy = row; anchor = java.awt.GridBagConstraints.WEST; insets = java.awt.Insets(2, 0, 2, 8) })
+            p.add(c, java.awt.GridBagConstraints().apply { gridx = 1; gridy = row; fill = java.awt.GridBagConstraints.HORIZONTAL; weightx = 1.0; insets = java.awt.Insets(2, 0, 2, 0) })
+            hint?.takeIf { it.isNotBlank() }?.let { row++; p.add(com.intellij.ui.components.JBLabel(it).apply { foreground = com.intellij.util.ui.UIUtil.getContextHelpForeground() }, java.awt.GridBagConstraints().apply { gridx = 1; gridy = row; anchor = java.awt.GridBagConstraints.WEST }) }
+            row++
+        }
+        add("Event:", event)
+        add("Job:", job, "all jobs run in needs order; one job runs with the jobs it needs")
+        for (i in wf.inputs) {
+            val c: javax.swing.JComponent = when {
+                i.options.isNotEmpty() -> javax.swing.JComboBox(i.options.toTypedArray()).also { b -> i.default?.let { d -> b.selectedItem = d } }
+                i.type == "boolean" -> javax.swing.JCheckBox().also { it.isSelected = i.default == "true" }
+                else -> javax.swing.JTextField(i.default ?: "", 24)
+            }
+            fields[i.name] = c
+            add(i.name + (if (i.required) " *" else "") + ":", c, i.description)
+        }
+        return p
+    }
+
+    override fun doValidate(): ValidationInfo? {
+        if (event.selectedItem != "workflow_dispatch") return null
+        for (i in wf.inputs) {
+            val c = fields[i.name]
+            if (i.required && c is javax.swing.JTextField && c.text.isBlank()) return ValidationInfo("${i.name} is required", c)
+        }
+        return null
+    }
+
+    fun spec(): CiLocalSpec {
+        val ev = event.selectedItem as String
+        val inputs = if (ev == "workflow_dispatch") fields.mapValues { (_, c) ->
+            when (c) { is javax.swing.JComboBox<*> -> c.selectedItem.toString(); is javax.swing.JCheckBox -> c.isSelected.toString(); is javax.swing.JTextField -> c.text; else -> "" }
+        }.filter { it.value.isNotEmpty() } else emptyMap()
+        return CiLocalSpec(ev, (job.selectedItem as String).takeIf { it != ALL }, inputs)
+    }
+
+    companion object { const val ALL = "(all jobs)" }
+}
+
+/** `deliberator.ci.runLocally`: the selected workflow row (a workflow of a checkout, with or without runs) runs on this machine, as decided in the dialog. */
+class RunLocallyAction : AnAction(), DumbAware {
+    override fun getActionUpdateThread() = ActionUpdateThread.BGT
+    override fun update(e: AnActionEvent) {
+        val p = e.project
+        val w = e.getData(CiPanel.WORKFLOW)?.workflow
+        e.presentation.isEnabledAndVisible = p != null
+        if (p != null) e.presentation.isEnabled = WorkspaceService.getInstance(p).ws != null && w != null && w.error == null
+    }
+    override fun actionPerformed(e: AnActionEvent) {
+        val p = e.project ?: return
+        val sel = e.getData(CiPanel.WORKFLOW) ?: run { Ui.notify(p, "CI", "Select a workflow in the CI tab.", NotificationType.WARNING); return }
+        val wf = sel.workflow ?: run { Ui.notify(p, "CI", "${sel.name} has no workflow file in a checkout of this workspace.", NotificationType.WARNING); return }
+        val d = RunLocallyDialog(p, wf)
+        if (d.showAndGet()) CiLocal.start(p, sel.repo, wf.file, d.spec())
+    }
+}
+
+/** `deliberator.ci.cancelLocal`: stops the selected local run that this IDE started (the daemon kills act and removes its containers). */
+class CiCancelLocalAction : CiAction() {
+    override fun enabledFor(sel: CiSelection) = sel.run.local && sel.run.running && CiLocal.cancellable(sel.repo, sel.run.id)
+    override fun go(project: Project, sel: CiSelection?, panel: CiPanel?) { CiLocal.cancel(sel!!.repo, sel.run.id) }
+}
+
+/**
+ * `deliberator.ci.localWorkflow`: the whole workflow of the file in the editor (every job in needs order, the Run Locally dialog for the event and the inputs);
+ * next to Run Job Locally in the editor popup.
+ */
+class RunWorkflowLocallyAction : WorkspaceAction() {
+    override fun update(e: AnActionEvent) {
+        super.update(e)
+        val vf = e.getData(CommonDataKeys.VIRTUAL_FILE)
+        val workflow = vf != null && WorkflowFiles.locate(vf.path) != null
+        e.presentation.isVisible = e.project != null && (workflow || e.place != com.intellij.openapi.actionSystem.ActionPlaces.EDITOR_POPUP)
+        e.presentation.isEnabled = e.presentation.isEnabled && workflow
+    }
+    override fun perform(project: Project, svc: WorkspaceService) {}
+    override fun actionPerformed(e: AnActionEvent) {
+        val p = e.project ?: return
+        val vf = e.getData(CommonDataKeys.VIRTUAL_FILE)
+        val loc = vf?.let { WorkflowFiles.locate(it.path) }
+        if (vf == null || loc == null) { Ui.notify(p, "Run workflow locally", "Open a workflow file (.github/workflows/*.yml) first.", NotificationType.WARNING); return }
+        Ui.background(p, "Deliberator: ci workflows ${vf.name}", {
+            val wf = CiOps.getInstance(p).workflows(loc.first).firstOrNull { it.path == vf.path || it.file.endsWith(loc.second) }
+            ApplicationManager.getApplication().invokeLater({
+                if (wf == null || wf.error != null) { Ui.notify(p, "Run workflow locally", "${vf.name}: ${wf?.error ?: "not a workflow the daemon could read"}", NotificationType.WARNING); return@invokeLater }
+                val d = RunLocallyDialog(p, wf)
+                if (d.showAndGet()) CiLocal.start(p, loc.first, wf.file, d.spec(), selectConsole = true)
+            }, ModalityState.nonModal())
+        })
+    }
+}
+
 /**
  * `deliberator.ci.local` (M5.4): the workflow job at the caret of a workflow file (`.github/workflows/NAME.yml`) (a chooser when the caret is not in one) runs locally with
  * `ci.local`: act on the runtime's container engine with the local environment's endpoint; the output is a console tab, the result its last line.
@@ -221,8 +361,6 @@ class RunJobLocallyAction : WorkspaceAction() {
 
     companion object {
         /** `ci.local` into a console tab; the session is asked for first (off the EDT). */
-        fun run(project: Project, dir: String, workflow: String, job: String) = Ui.background(project, "Deliberator: ci local $workflow:$job", {
-            CiConsoles.showLater(project, CiOps.getInstance(project).local(dir, workflow, job))
-        })
+        fun run(project: Project, dir: String, workflow: String, job: String) = CiLocal.start(project, dir, workflow, CiLocalSpec(null, job, emptyMap()), selectConsole = true)
     }
 }

@@ -26,9 +26,13 @@ class GithubStandIn : AutoCloseable {
     /** Run 210 and its job are done (success) from now on: the run "moves from running to done". */
     @Volatile var runningFinished = false
     fun finishRunning() { runningFinished = true }
+    /** A new run (222, a push) shows up in the listing from now on: 01a's poll must find it without a click. */
+    @Volatile var newRun = false
+    @Volatile var rateRemaining = 4990
 
     private class Run(val id: Int, val number: Int, val branch: String, val status: String, val conclusion: String?, val created: String, val title: String)
-    private val allRuns get() = listOf(
+    private val allRuns get() = listOfNotNull(
+        if (newRun) Run(220, 22, "feat", "completed", "success", "2026-10-10T12:00:00Z", "pushed meanwhile") else null,
         if (runningFinished) Run(210, 21, "feat", "completed", "success", "2026-10-10T11:00:00Z", "wip 3") else Run(210, 21, "feat", "in_progress", null, "2026-10-10T11:00:00Z", "wip 3"),
         Run(200, 20, "feat", "completed", "failure", "2026-10-10T10:00:00Z", "wip"),
         Run(195, 19, "feat", "completed", "success", "2026-10-10T09:00:00Z", "wip 2"),
@@ -39,6 +43,7 @@ class GithubStandIn : AutoCloseable {
         200 to listOf(2001 to "test (ubuntu)", 2002 to "lint"),
         195 to listOf(1951 to "test (ubuntu)", 1952 to "lint"),
         190 to listOf(1901 to "test (ubuntu)"),
+        220 to listOf(2201 to "test (ubuntu)"),
     )
     private val failing = setOf(2001)
 
@@ -133,7 +138,7 @@ class GithubStandIn : AutoCloseable {
     private fun reply(ex: HttpExchange, status: Int, body: String, type: String = "text/plain") {
         val bs = body.toByteArray()
         ex.responseHeaders.add("Content-Type", type)
-        ex.responseHeaders.add("X-RateLimit-Remaining", "4990")
+        ex.responseHeaders.add("X-RateLimit-Remaining", rateRemaining.toString())
         ex.sendResponseHeaders(status, bs.size.toLong())
         ex.responseBody.use { it.write(bs) }
     }
