@@ -1,0 +1,70 @@
+(ns deliberator.ecsrecord
+  "A workspace service bound to an ECS service of the `local` environment (cicd-aws piece 02): the
+  binding, and the service's own record of what the watch (`deliberator.ecsfollow`) saw and did.
+
+  The binding is the description's `:ecs {:cluster \"acme\" :service \"acme-billing\"}`. The record is
+  `<ws>/ecs/<service>.edn`: `{:cluster :service :desired :taskdef <arn> :revision \"fam:3\" :image :environment :secrets
+  :applied {:desired :taskdef} :seen-at :action :error}`. `:desired`, `:taskdef` and the revision's entries are what the
+  ECS record said when last read; `:applied` is what the container side was last brought to (the watch acts on a
+  difference to it, so a daemon restart changes nothing); `:action` is the last thing done, with its reason.
+
+  This namespace holds only what the runtime, the service ops and the watch share: reading and writing the record, the
+  per-workspace lock that serialises the watch's reconciling with a start or stop by hand, the services at desired 0 (not
+  desired as containers) and the description with the followed revision's environment and secrets laid over it."
+  (:require [clojure.string :as str]
+            [deliberator.store :as store]))
+
+(defn binding-of
+  "`{:cluster :service}` of a description bound to an ECS service, else nil."
+  [desc]
+  (let [e (:ecs desc)]
+    (when (and (map? e) (string? (:cluster e)) (string? (:service e))) (select-keys e [:cluster :service]))))
+
+(defn parse-binding
+  "\"cluster/service\" -> `{:cluster :service}`; \"none\" -> `:none`; anything else nil."
+  [s]
+  (let [s (str/trim (str s))]
+    (if (= "none" s)
+      :none
+      (let [[c n & more] (str/split s #"/")]
+        (when (and (seq c) (seq n) (empty? more)) {:cluster c :service n})))))
+
+(defn path [ws name] (store/path ws "ecs" (str (store/safe-name name) ".edn")))
+
+(defn read-record [ws name] (store/read-edn (path ws name)))
+
+(defn write-record! [ws name rec] (store/write-edn! (path ws name) rec))
+
+(defonce ^:private locks (atom {}))
+
+(defn lock-of
+  "The monitor of workspace `ws`: the watch's reconciling and a start or stop by hand never run at once."
+  [ws]
+  (let [k (store/ws-name ws)]
+    (get (swap! locks update k #(or % (Object.))) k)))
+
+(defn zero-services
+  "Names of the described services bound to an ECS service whose record says desired 0: their containers are not desired."
+  [ws descs]
+  (into #{} (comp (filter binding-of)
+                  (filter #(= 0 (:desired (read-record ws (:name %))))))
+        descs))
+
+(defn revision-text
+  "`revision 3 · <image> (not used: ...)` for a record, nil without a revision."
+  [rec kind]
+  (when-let [r (:revision rec)]
+    (str "revision " (last (str/split r #":")) (when (:image rec) (str " · " (:image rec)))
+         (when (:image rec)
+           (str " (not used: " (if (= :container kind) "the description's image runs" "dev container") ")")))))
+
+(defn overlay
+  "`desc` with the followed revision's environment and secrets laid over it: a Spring service takes them whole as its
+  `:taskdef` entries, a `:container` merges the environment over its `:env` (it has no secrets). No record: `desc`."
+  [ws desc]
+  (let [rec (when (binding-of desc) (read-record ws (:name desc)))]
+    (if-not (and rec (map? (:environment rec)))
+      desc
+      (if (= :container (:kind desc))
+        (update desc :env #(into (or % {}) (:environment rec)))
+        (update desc :taskdef #(assoc (or % {}) :environment (:environment rec) :secrets (or (:secrets rec) {})))))))

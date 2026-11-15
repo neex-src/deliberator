@@ -37,7 +37,7 @@
     provider.list                                  -> [{name status file command log [pid started-at ops restarts error]}]   (M6.5: <home>/providers/*.edn, never starts one; a provider's operations are <name>.<op>, see deliberator.provider)
     provider.stop name*                            -> {name stopped}   (the next call to it starts it again)
     runtime.sync-env ws                            -> {ws path}
-    service.adopt path* taskdef name jdwp ws       -> {name created path repo module from}
+    service.adopt path* taskdef name jdwp ecs ws       -> {name created path repo module from}
     service.list env ws                            -> [{name kind repo module port jdwp image mode [url] status container [log-target log]}]
     topology.show env* ws                          -> {env services hash}
     topology.set env* name* mode* url container-url log-container fake ws -> as show + {dependents}
@@ -48,6 +48,7 @@
     fake.commit name* repo* recording dir ws       -> {name from dir exchanges report}   (a scrubbed copy into a repository)
     service.show name* ws                          -> the description + {status container runtime}
     service.status name ws                         -> [{name status health detail container since drift}]
+    service.events ws                              -> {cancelled}   [service.started service.stopped runtime.*]   (streams the ECS watch of the workspace until cancelled)
     service.build name* ws                         -> {artifact bytes took-ms log sha}   [service.build.line]
     service.start name* secrets-from confirm ws    -> {name status container port jdwp}   [runtime.* service.started]
     service.stop name* ws                          -> {name status container}   [service.stopped]
@@ -114,6 +115,7 @@
             [deliberator.config :as config]
             [deliberator.deployed :as deployed]
             [deliberator.insights :as insights]
+            [deliberator.ecsfollow :as ecsfollow]
             [deliberator.env :as env]
             [deliberator.fake :as fake]
             [deliberator.generate :as generate]
@@ -584,8 +586,20 @@
 
 (defn- runtime-sync-env [_ args] (runtime/sync-env! (ws-of args)))
 
-(defn- service-adopt [_ {:keys [path taskdef name jdwp] :as args}]
-  (service/adopt! (ws-of args) {:path path :taskdef taskdef :name name :jdwp jdwp}))
+(defn- service-adopt [_ {:keys [path taskdef name jdwp ecs] :as args}]
+  (service/adopt! (ws-of args) (cond-> {:path path :taskdef taskdef :name name :jdwp jdwp} ecs (assoc :ecs ecs))))
+
+(defn- service-events
+  "Streams the events of the ECS watch (`service.started`/`service.stopped` with their reason, the runtime.* events of its reconciling) of
+  the workspace until cancelled or the client leaves."
+  [ctx args]
+  (let [wsn (store/ws-name (ws-of args))
+        done (promise)
+        id (ecsfollow/subscribe! (fn [ev] (when (= wsn (:ws ev)) ((:emit! ctx) (dissoc ev :ws)))))]
+    ((:on-cancel! ctx) (fn [] (deliver done true)))
+    (try (loop [] (when (and ((:alive? ctx)) (not ((:cancelled? ctx))) (not (realized? done))) (deref done 500 nil) (recur)))
+         (finally (ecsfollow/unsubscribe! id)))
+    {:cancelled (boolean ((:cancelled? ctx)))}))
 (defn- config-chain [_ {:keys [name env] :as args}] (config/chain (ws-of args) name (or env "local")))
 (declare verify-account!)
 
@@ -1208,7 +1222,12 @@
                     :args (ws-schema :path {:type :string :required true :doc "absolute path of the service's module directory"}
                                      :taskdef {:type :string :doc "absolute path of a file holding the rendered ECS container definitions (JSON)"}
                                      :name {:type :string :doc "service name; default the description's, else the container name without service-"}
-                                     :jdwp {:type :int :doc "JDWP container port (overrides the description)"})}
+                                     :jdwp {:type :int :doc "JDWP container port (overrides the description)"}
+                                     :ecs {:type :string :doc "bind the service to an ECS service of the local environment, cluster/service (decision 84: the container then follows its desired count and task definition revision); none unbinds; without it the module's :ecs or the earlier binding stands"})}
+   "service.events" {:fn service-events :class :read
+                     :doc "Streams the events of the ECS watch of the workspace until cancelled or the client leaves: service.started and service.stopped (name, container, reason: ecs desired 0, ecs desired N, ecs revision family:N) of the services bound to an ECS service, and the runtime events of the reconciling they cause."
+                     :events ["service.started" "service.stopped" "runtime.pulling" "runtime.starting" "runtime.ready"]
+                     :args (ws-schema)}
    "config.chain" {:fn config-chain :class :read
                    :doc "The configuration chain of a service, offline: every ${X} / ${X:default} placeholder of its module's application*.properties|yml, the task definition entry that supplies it (environment or secrets; line in taskdef.json.tftpl, declaration in main.tf) and the SSM parameter or secret it points at, from the cached snapshot of env (config.refresh). broken lists placeholders without an entry and entries whose parameter is missing; unresolved the valueFroms that are template expressions."
                    :args (ws-schema :name {:type :string :required true :doc "service name from service.list"}

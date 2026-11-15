@@ -51,6 +51,7 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [deliberator.aws :as aws]
+            [deliberator.ecsrecord :as ecsrecord]
             [deliberator.env :as env]
             [deliberator.fakes :as fakes]
             [deliberator.podman :as podman]
@@ -240,19 +241,27 @@
   (merge (:containers cfg)
          (into {} (for [d (description/list ws) :when (description/runnable? d)]
                     [(description/role (:name d))
-                     (merge-spec (topology/render-spec ws (description/->spec ws d) (:depends d))
+                     (merge-spec (topology/render-spec ws (description/->spec ws (ecsrecord/overlay ws d)) (:depends d))
                                  (get-in cfg [:services (:name d)]))]))
          ;; the HTTP fakes (M6.6): one role per declared fake that records or replays
          (into {} (for [f (fakes/list ws) :when (fakes/active? f)]
                     [(fakes/role (:name f)) (fakes/->spec ws f)]))))
 
+(defn ecs-stopped-roles
+  "Role labels of the described services bound to an ECS service of the `local` environment whose record says desired 0
+  (`deliberator.ecsfollow`): their containers are not desired either."
+  [ws]
+  (let [zero (ecsrecord/zero-services ws (filter description/runnable? (description/list ws)))]
+    (into #{} (map #(role-name (description/role (:name %)))) zero)))
+
 (defn topology-stopped-roles
-  "Role labels (\"service-a\") of the described services whose mode in the `local` environment is not local:
-  their containers are not desired, `ensure!` stops (keeps) them."
+  "Role labels (\"service-a\") of the described services whose mode in the `local` environment is not local, or whose bound
+  ECS service is at desired 0: their containers are not desired, `ensure!` stops (keeps) them."
   [ws]
   (let [off (topology/not-local ws)]
-    (into #{} (comp (filter #(and (off (:name %)) (description/runnable? %)))
-                    (map #(role-name (description/role (:name %)))))
+    (into (ecs-stopped-roles ws)
+          (comp (filter #(and (off (:name %)) (description/runnable? %)))
+                (map #(role-name (description/role (:name %)))))
           (description/list ws))))
 
 (defn effective-containers
@@ -671,7 +680,7 @@
                ctr (podman/list-containers c :all true :labels (assoc (ws-labels ws) "deliberator.role" role))
                :when (= "running" (:State ctr))]
          (podman/stop! c (:Id ctr))
-         (emit sink {:event "runtime.stopped" :role role :name (first (:Names ctr)) :reason "topology"})))
+         (emit sink {:event "runtime.stopped" :role role :name (first (:Names ctr)) :reason (if ((ecs-stopped-roles ws) role) "ecs desired 0" "topology")})))
      (doseq [d ds] (ensure-image! c d sink))
      ;; infrastructure first, then the services that need it (their secrets live in Floci)
      (doseq [group ((juxt remove filter) :service? ds)
@@ -744,6 +753,14 @@
     (when ctr
       (podman/stop! c (:Id ctr))
       (first (:Names ctr)))))
+
+(defn role-container
+  "The container of `role` of `ws` as Podman lists it (`:State`, `:Names`, `:Id`), nil when there is none or no runtime.edn.
+  Quiet: the call is not persisted (the ECS watch asks every second)."
+  [ws role]
+  (when-let [cfg (read-config ws)]
+    (first (podman/list-containers (podman-client ws cfg :persist? false) :all true
+                                   :labels (assoc (ws-labels ws) "deliberator.role" role)))))
 
 (defn remove-role!
   "Stops and removes the container of `role` (label, e.g. \"fake-a\") of `ws`. -> the container name removed, nil when there is none."

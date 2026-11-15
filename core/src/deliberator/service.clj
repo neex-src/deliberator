@@ -19,6 +19,8 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [deliberator.ecsfollow :as ecsfollow]
+            [deliberator.ecsrecord :as ecsrecord]
             [deliberator.env :as env]
             [deliberator.process :as process]
             [deliberator.repo :as repo]
@@ -57,10 +59,13 @@
   "Writes `services/<name>.edn` from the module at `path` (absolute directory): its `deliberator-service.edn`,
   else derived from the rendered Terraform task definition in file `taskdef` (JSON container definitions, the
   `task_definitions` entry). `taskdef` also supplies the description's `:taskdef :environment/:secrets`.
+  `ecs` (cluster/service, or `none`) binds the service to an ECS service of the `local` environment; the module's
+  `:ecs` key does the same, a re-adopt without either keeps the binding.
   `name` and `jdwp` override. The `local` environment is pointed at the service afterwards.
   -> `{:name :created :path :repo :module :from}`."
-  [ws {:keys [path taskdef name jdwp]}]
-  (let [module (io/file (str path))
+  [ws {:keys [path taskdef name jdwp ecs]}]
+  (let [eb (when ecs (or (ecsrecord/parse-binding ecs) (fail :bad-args "ecs must be cluster/service, or none to unbind" :problems ["ecs"])))
+        module (io/file (str path))
         _ (when-not (.isAbsolute module) (fail :bad-args "service.adopt: path must be absolute" :problems ["path"]))
         _ (when-not (.isDirectory module)
             (fail :service/module-not-found (str "no module directory " path) :hint "the absolute path of the service's module"))
@@ -76,6 +81,9 @@
                                       :hint "add a deliberator-service.edn to the module, or pass taskdef (a rendered task definition)"))
         r (repo-of ws module)
         base (cond-> base name (assoc :name name) jdwp (assoc :jdwp jdwp))
+        old-ecs (:ecs (description/read ws (:name base)))   ; a re-adopt without an ecs word keeps the binding
+        base (let [b (cond (= :none eb) nil eb eb (:ecs base) (:ecs base) :else old-ecs)]
+               (if b (assoc base :ecs b) (dissoc base :ecs)))
         desc (-> base
                  (assoc :repo (:name r)
                         :module (if r (let [rel (str (.relativize (.toPath (io/file (:path r))) (.toRealPath (.toPath module) (make-array LinkOption 0))))]
@@ -88,6 +96,7 @@
         created (not (.exists (.toFile (description/path ws (:name desc)))))]
     (description/write! ws desc)
     (runtime/sync-env! ws)
+    (ecsfollow/poke!)
     {:name (:name desc) :created created :path (str (description/path ws (:name desc)))
      :repo (:repo desc) :module (:module desc) :from (clojure.core/name from)}))
 
@@ -119,14 +128,26 @@
   (let [st (staging/read-state ws (:name desc))]
     (when (and st row (= (:container st) (:id row))) st)))
 
+(defn- ecs-view
+  "What a row says about the ECS service a description is bound to: `{:cluster :service :desired :revision :image :text [:note] [:error]}`;
+  `:text` is `revision N · image (not used: ...)`, `:note` says one container runs whatever the count."
+  [desc rec]
+  (let [b (ecsrecord/binding-of desc)]
+    (cond-> (merge b (select-keys rec [:desired :revision :image :action :error]))
+      (ecsrecord/revision-text rec (:kind desc)) (assoc :text (ecsrecord/revision-text rec (:kind desc)))
+      (and (:desired rec) (> (:desired rec) 1)) (assoc :note "one container runs whatever the desired count"))))
+
 (defn- status-row [ws desc rows]
-  (let [row (when (map? rows) (get rows (role-label (:name desc))))
+  (let [ecs-rec (when (ecsrecord/binding-of desc) (ecsrecord/read-record ws (:name desc)))
+        row (when (map? rows) (get rows (role-label (:name desc))))
         mode (topo-mode ws (:name desc))
         st (if (and (not= :local mode) (= :running (:state row)) (nil? (:health row))) "running" (status-of row))
         ;; not desired by the topology: "off"/"external" once its container is down, still the real status
         ;; (and drift) while the next reconcile has not stopped it
         st (if (and (not= :local mode) (not= rows :unreachable) (not= "running" st) (not= "unhealthy" st) (not= "starting" st))
-             (clojure.core/name mode) st)]
+             (clojure.core/name mode) st)
+        ;; bound to an ECS service whose record says 0: not running is "stopped (ecs desired 0)"
+        st (if (and (= 0 (:desired ecs-rec)) (#{"stopped" "absent"} st)) "stopped (ecs desired 0)" st)]
     (cond-> {:name (:name desc)
              :status (if (= rows :unreachable) "unreachable" st)}
       (not= :local mode) (assoc :topology (clojure.core/name mode)
@@ -137,7 +158,8 @@
       (:name row) (assoc :container (:name row))
       (:since row) (assoc :since (str (:since row)))
       (and (some? (:drift? row)) (= :local mode)) (assoc :drift (boolean (:drift? row)))
-      (:count (reload-state ws desc row)) (assoc :reload-count (:count (reload-state ws desc row))))))
+      (:count (reload-state ws desc row)) (assoc :reload-count (:count (reload-state ws desc row)))
+      (ecsrecord/binding-of desc) (assoc :ecs (ecs-view desc ecs-rec)))))
 
 (defn status
   "`[{:name :status [:health :detail :container :since :drift]}]` for `name` or every service."
@@ -182,6 +204,7 @@
                                                     (store/container-name ws (role-label (:name d))))})
                        (#{:external :fake} (:mode ent)) (assoc :url (:url ent))
                        (= :fake (:mode ent)) (assoc :fake (:fake ent))
+                       (ecsrecord/binding-of d) (assoc :ecs (:ecs (status-row ws d rows)))
                        ;; the `log/` target of the environment for this service (a container or a CloudWatch group), M6.4
                        (get targets (keyword "log" (role-label (:name d))))
                        (assoc :log-target (str "log/" (role-label (:name d)))
@@ -339,6 +362,11 @@
             :hint "only spring-boot and container services start here"))
     (description/module-dir ws d)
     ;; nothing is fetched before token 2 was consumed (the gate returns the refs only then)
+    ;; bound to an ECS service at desired 0: a start by hand writes the record (UpdateService 1), the record stays the truth
+    (when-let [b (ecsrecord/binding-of d)]
+      (locking (ecsrecord/lock-of ws)
+        (when-let [lv (ecsfollow/live ws b)]
+          (when (= 0 (:desired lv)) (ecsfollow/set-desired! ws name b 1 lv)))))
     (let [values (when refs (runtime/fetch-secrets ws secrets-from refs))]
       (runtime/ensure! ws (cond-> {:sink sink :only [(role-label name)]}
                             timeout-ms (assoc :timeout-ms timeout-ms)
@@ -348,17 +376,29 @@
       r))))
 
 (defn stop!
-  "Stops the container and keeps it (so `start!` reuses it). -> `{:name :status :container}`; no container is `absent`."
+  "Stops the container and keeps it (so `start!` reuses it). -> `{:name :status :container}`; no container is `absent`. A service bound to
+  an ECS service first writes the record (UpdateService desired 0): the record stays the truth."
   [ws name {:keys [sink]}]
   (let [d (require-description ws name)
+        _ (when-let [b (ecsrecord/binding-of d)]
+            (locking (ecsrecord/lock-of ws)
+              (when-let [lv (ecsfollow/live ws b)]
+                (when (pos? (:desired lv)) (ecsfollow/set-desired! ws name b 0 lv)))))
         c (runtime/stop-role! ws (role-label name))]
     (when (and c sink) (sink {:event "service.stopped" :name name :container c}))
     (cond-> {:name name :status (if c "stopped" "absent")} c (assoc :container c))))
 
 (defn restart!
-  "Stop, then start (a rebuilt jar or a changed description recreates the container)."
+  "Stop, then start (a rebuilt jar or a changed description recreates the container). It never writes an ECS record: a service bound
+  to an ECS service at desired 0 is refused with the reason, at 1 or more only the container is recreated."
   [ws name opts]
+  (when-let [b (ecsrecord/binding-of (require-description ws name))]
+    (when (= 0 (:desired (ecsfollow/live ws b)))
+      (fail :service/ecs-desired-zero
+            (str "service " name " is at desired count 0 in ECS service " (:cluster b) "/" (:service b) " of environment local: restart does not change the record")
+            :service name :hint (str "dlb service start " name " sets the count to 1, or UpdateService it"))))
   (if (:secrets-from opts)
     (start! ws name opts)   ; a start with secrets always recreates the container; stopping first would strand the service between the two confirmations
-    (do (stop! ws name opts)
+    (do (let [c (runtime/stop-role! ws (role-label name))]   ; the container only: the record stays
+          (when (and c (:sink opts)) ((:sink opts) {:event "service.stopped" :name name :container c})))
         (start! ws name opts))))
