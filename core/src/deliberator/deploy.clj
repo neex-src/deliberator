@@ -764,22 +764,27 @@
   (and (string? want) (string? have) (>= (count want) 7)
        (or (str/starts-with? have want) (str/starts-with? want have))))
 
-(defn by-commit
-  "The deployments that carry commit `sha` (the full commit or a prefix of at least 7 characters, either way round), newest first, from the
-  caches only: `[{:env :cluster :service :revision :deployment :status :started :run-id :git-sha :current?}]`. The current revision of a service
-  appears once, as `:current? true`, unless a deployment row of the same revision is cached too."
-  [ws sha]
-  (let [rows (filter #(sha-match? sha (:git-sha %)) (cache-rows ws))
+(defn- newest-distinct
+  "`rows` newest first; the current revision of a service is dropped when a cached deployment of the same revision is there."
+  [rows]
+  (let [rows (vals (reduce (fn [m r] (assoc m ((juxt :env :cluster :service :deployment :revision :current?) r) r)) {} rows))   ; list.edn and <id>.edn both know a deployment
         hist (remove :current? rows)
         covered (set (map (juxt :env :cluster :service :revision) hist))]
     (->> (concat hist (remove #(covered ((juxt :env :cluster :service :revision) %)) (filter :current? rows)))
          (sort-by #(- (.toEpochMilli ^Instant (or (:started %) Instant/EPOCH))))
          vec)))
 
+(defn by-commit
+  "The deployments that carry commit `sha` (the full commit or a prefix of at least 7 characters, either way round), newest first, from the
+  caches only: `[{:env :cluster :service :revision :deployment :status :started :run-id :git-sha :current?}]`. The current revision of a service
+  appears once, as `:current? true`, unless a deployment row of the same revision is cached too."
+  [ws sha]
+  (newest-distinct (filter #(sha-match? sha (:git-sha %)) (cache-rows ws))))
+
 (defn by-run-id
   "As `by-commit` for a CI run id (exact match)."
   [ws run-id]
-  (vec (filter #(= (str run-id) (str (:run-id %))) (cache-rows ws))))
+  (newest-distinct (filter #(= (str run-id) (str (:run-id %))) (cache-rows ws))))
 
 (defn commit-notes
   "`[\"deployed to aws: acme-billing revision 12\" ...]` for commit `sha`: one per service and revision, newest first."
