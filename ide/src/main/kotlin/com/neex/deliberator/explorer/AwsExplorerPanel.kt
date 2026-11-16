@@ -347,7 +347,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
             // the tree was rebuilt by the kinds' refresh: what was open stays open, what was selected stays selected (the EventBridge subtree is the same nodes)
             root.depthFirstEnumeration().toList().map { it as DefaultMutableTreeNode }.forEach { n ->
                 val k = pathKey(javax.swing.tree.TreePath(n.path))
-                if (k.isNotEmpty() && (k in expanded || (n.userObject is KindNode && k !in before))) tree.expandPath(javax.swing.tree.TreePath(n.path))
+                if (k.isNotEmpty() && (k in expanded || ((n.userObject is KindNode || n.userObject is EvRoot || n.userObject is EvBus || n.userObject is EvRule) && k !in before))) tree.expandPath(javax.swing.tree.TreePath(n.path))
                 if (k == selected) tree.selectionPath = javax.swing.tree.TreePath(n.path)
             }
         }

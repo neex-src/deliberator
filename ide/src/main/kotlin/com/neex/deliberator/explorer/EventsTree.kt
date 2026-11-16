@@ -54,7 +54,8 @@ internal class EventsTree(private val project: Project, private val model: Defau
         if (node.parent != null) {
             // buses and rules that appeared open (a search shows its hits); the ones the person collapsed stay as they are
             fresh.filter { it.userObject !is EvTarget && it.childCount > 0 }.forEach { tree.expandPath(TreePath(it.path)) }
-            if (q.isNotBlank()) { tree.expandPath(TreePath(node.path)); fresh.forEach { n -> n.parent?.let { tree.expandPath(TreePath((it as DefaultMutableTreeNode).path)) } } }
+            // a search shows its hits with their targets
+            if (q.isNotBlank()) { tree.expandPath(TreePath(node.path)); allRules().forEach { tree.expandPath(TreePath(it.path)) } }
         }
     }
 
@@ -79,6 +80,8 @@ internal class EventsTree(private val project: Project, private val model: Defau
             sync(n, w.children, fresh)
         }
     }
+
+    private fun allRules(): List<DefaultMutableTreeNode> = node.depthFirstEnumeration().toList().map { it as DefaultMutableTreeNode }.filter { it.userObject is EvRule || it.userObject is EvBus }
 
     /** The search field changed. EDT. */
     fun search(q: String) { if (q != query) show(map, q) }
