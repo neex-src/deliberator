@@ -21,11 +21,20 @@
       tasks that die is `failing` after three of them), is cancelled, or after `:timeout-ms`; a failure ends with the stop reasons and
       the container's last lines. The polls are quiet (`aws/invoke!` ctx `:poll`): a request and an answer are persisted when the
       answer's bytes changed.
+  CodeDeploy (piece 15b, `deliberator.codedeploy`): a CodeDeploy deployment is a row of `list!` (of an ECS service whose group names it, and of a
+      Lambda function whose alias the appspec moves) and `show!` / `follow!` take its id (`d-...`): the header (application, group,
+      status, error code and message, the appspec's task definition or alias versions, a rollback and why), `== targets` with the
+      lifecycle events of each target (status, times, diagnostics), `== hook log` (the lines of the hook functions the appspec names,
+      inside the deployment's window, each saying which function) and, for an ECS service, the plain view's events, tasks and container
+      lines. What the endpoint does not answer is said as `the endpoint gave none`.
+      CodeDeploy deployments are read as the real API answers them, but this has only been checked against the local emulator, not
+      against real CodeDeploy (the account is on AWS's Free plan, which refuses the service).
   `(by-commit ws sha)`, `(by-run-id ws run-id)`, `(commit-notes ws sha)`  the seam for `ci.*`: no AWS call, only the files of
       `cache/<env>/deployed.edn` (the current revision of every service) and `cache/<env>/deploy/**.edn` (what list and show saw)."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [deliberator.aws :as aws]
+            [deliberator.codedeploy :as cd]
             [deliberator.deployed :as deployed]
             [deliberator.env :as env]
             [deliberator.podman :as podman]
@@ -48,15 +57,7 @@
 
 ;; --- small pure things ----------------------------------------------------------------------------------
 
-(defn- ->inst [x]
-  (cond (nil? x) nil
-        (instance? Instant x) x
-        (instance? Date x) (.toInstant ^Date x)
-        (number? x) (Instant/ofEpochMilli (long (* 1000 x)))
-        (string? x) (or (try (Instant/parse x) (catch Exception _ nil))
-                        (try (.toInstant (OffsetDateTime/parse x (DateTimeFormatter/ofPattern "yyyy-MM-dd'T'HH:mm:ss.SSSxx")))
-                             (catch Exception _ nil)))
-        :else nil))
+(def ^:private ->inst cd/->inst)
 
 (defn- ms->inst [ms] (when ms (Instant/ofEpochMilli (long ms))))
 (defn- before? [a b] (and a b (.isBefore ^Instant a ^Instant b)))
@@ -222,36 +223,30 @@
                      older (assoc :before-id (:id older)))
                    (:taskDefinition older) (:taskDefinition d))))))
 
+(defn- cd-call
+  "The call function `deliberator.codedeploy` takes: this ctx's `call`; in a follow every call is a quiet poll under a key made of
+  the question."
+  [ctx]
+  (fn [svc op req & [pkey]]
+    (call ctx svc op req (or pkey (when (:poll-state ctx) (str "cd:" (name svc) ":" (name op) ":" (pr-str req)))))))
+
+(defn- cd-ecs-rows
+  "The rows of CodeDeploy deployments (newest first) with the revision and image the appspec's task definition stands for: after = the
+  task definition the appspec names, before = the one the next older deployment of the same group named."
+  [ctx rows]
+  (vec (map-indexed
+        (fn [i r]
+          (let [older (some #(when (and (= (:group %) (:group r)) (= (:application %) (:application r))) %) (drop (inc i) rows))]
+            (row-of ctx r (get-in older [:appspec :task-definition]) (get-in r [:appspec :task-definition]))))
+        rows)))
+
 (defn- codedeploy-rows!
-  "-> `{:rows :absent :errors}` of the CodeDeploy deployments of the groups whose `ecsServices` name the service."
+  "-> `{:rows :absent :errors :notes}` of the CodeDeploy deployments of the groups whose `ecsServices` name the service."
   [ctx cluster service]
-  (let [apps (paged ctx :codedeploy :ListApplications {} :applications :nextToken :nextToken)
-        absent? (fn [e] (contains? #{"SubscriptionRequiredException" "OptInRequired" "UnknownOperationException" "UnknownOperation"
-                                     "NotImplemented" "NotImplementedException" "UnsupportedOperation" "InvalidAction"} (:code e)))]
-    (if (:error apps)
-      (if (absent? (:error apps)) {:absent (:code (:error apps))} {:errors [{:op "ListApplications" :code (:code (:error apps)) :message (:message (:error apps))}]})
-      (let [rows (atom []) errors (atom [])]
-        (doseq [app (:items apps)
-                :let [gs (paged ctx :codedeploy :ListDeploymentGroups {:applicationName app} :deploymentGroups :nextToken :nextToken)]
-                g (:items gs)
-                :let [gi (call ctx :codedeploy :GetDeploymentGroup {:applicationName app :deploymentGroupName g})]]
-          (if (aws/error? gi)
-            (swap! errors conj {:op "GetDeploymentGroup" :code (:code gi) :message (:message gi)})
-            (when (some #(and (= service (:serviceName %)) (or (nil? cluster) (= cluster (:clusterName %))))
-                        (get-in gi [:deploymentGroupInfo :ecsServices]))
-              (let [ids (paged ctx :codedeploy :ListDeployments {:applicationName app :deploymentGroupName g} :deployments :nextToken :nextToken)]
-                (doseq [id (take 10 (:items ids))
-                        :let [d (call ctx :codedeploy :GetDeployment {:deploymentId id})
-                              i (:deploymentInfo d)]]
-                  (if (aws/error? d)
-                    (swap! errors conj {:op "GetDeployment" :code (:code d) :message (:message d)})
-                    (swap! rows conj
-                           (cond-> {:id (:deploymentId i) :source :codedeploy :application app :group g :status (:status i)
-                                    :rollout-state (case (:status i) "Succeeded" "COMPLETED" ("Failed" "Stopped") "FAILED" "IN_PROGRESS")
-                                    :started (->inst (or (:startTime i) (:createTime i))) :created (->inst (:createTime i))}
-                             (:completeTime i) (assoc :finished (->inst (:completeTime i)))
-                             (get-in i [:errorInformation :message]) (assoc :rollout-reason (get-in i [:errorInformation :message]))))))))))
-        {:rows @rows :errors @errors}))))
+  (let [r (cd/deployments! (cd-call ctx)
+                           (fn [gi] (some #(and (= service (:serviceName %)) (or (nil? cluster) (= cluster (:clusterName %)))) (:ecsServices gi)))
+                           (constantly true))]
+    (assoc r :rows (cd-ecs-rows ctx (:rows r)))))
 
 (defn- newest-first [rows]
   (vec (sort-by #(- (.toEpochMilli ^Instant (or (:started %) Instant/EPOCH))) rows)))
@@ -271,6 +266,12 @@
                  (:Description f) (assoc :description (:Description f))))]
     {:rows (vec rows) :latest config
      :notes (when (:error v) [(str "ListVersionsByFunction: " (:code (:error v)) " " (:message (:error v)))])}))
+
+;; A Lambda function's CodeDeploy deployments: those whose appspec moves an alias of the function (a group does not name the function).
+(defn- lambda-cd-rows! [ctx fname]
+  (cd/deployments! (cd-call ctx)
+                   (fn [gi] (and (empty? (:ecsServices gi)) (let [p (:computePlatform gi)] (or (nil? p) (= "Lambda" p)))))
+                   #(and (= "Lambda" (:platform %)) (= fname (:function %)))))
 
 ;; --- tasks, events -----------------------------------------------------------------------------------------------
 
@@ -470,8 +471,51 @@
         cd (codedeploy-rows! ctx cluster service)]
     {:rows (newest-first (into (vec rows) (:rows cd)))
      :source (if (:rows sd) :service-deployments :describe-services)
-     :notes (vec (concat (:notes sd) (when-not (:rows sd) ["the rows come from DescribeServices: only the deployments ECS still lists"])))
+     :notes (vec (concat (:notes sd) (:notes cd) (when-not (:rows sd) ["the rows come from DescribeServices: only the deployments ECS still lists"])))
      :absent (when-let [a (:absent cd)] {:codedeploy a}) :errors (:errors cd)}))
+
+(defn- cd-detail!
+  "What a CodeDeploy deployment `row` has beyond its row: its targets with their lifecycle events, the hook functions' log lines inside its
+  window and, for a Lambda, where the alias is now. -> `{:targets {...} :hook {...} :alias-now {...}}`."
+  [ctx row now]
+  (let [call* (cd-call ctx)
+        spec (:appspec row)
+        from (some-> (:started row) (.minusSeconds 5))
+        to (.plusSeconds ^Instant (or (:finished row) now) 30)
+        alias-r (when (and (:function row) (:alias row))
+                  (let [r (call ctx :lambda :GetAlias {:FunctionName (:function row) :Name (:alias row)} (str "alias:" (:function row) ":" (:alias row)))]
+                    (if (aws/error? r) {:error (str (:code r) " " (:message r))} {:version (:FunctionVersion r) :at now})))]
+    {:targets (cd/targets! call* (:id row) (str "cdt:" (:id row)))
+     :hook (when (and from (seq (:hooks spec))) (cd/hooks! call* (:hooks spec) (:id row) from to "cdh"))
+     :hooks-named? (boolean (seq (:hooks spec)))
+     :alias-now alias-r}))
+
+(defn- cd-id? [s] (boolean (re-matches #"d-[0-9A-Za-z]{9}" (str s))))
+
+(defn- collect-lambda!
+  "`collect!` for a Lambda function: one of its CodeDeploy deployments (`dep-id`, default the newest). There are no tasks and no container lines:
+  the targets and the hook's lines are the view."
+  [ctx target dep-id]
+  (let [fname (:function target)
+        now (store/now)
+        call* (cd-call ctx)
+        direct (when (cd-id? dep-id)
+                 (let [r (cd/get-deployment! call* dep-id)]
+                   (cond (:error r) (fail :deploy/not-found (str "no deployment " dep-id ": " (:code (:error r)) " " (:message (:error r))) :hint "dlb deploy list names them")
+                         (not= fname (:function (:row r)))
+                         (fail :deploy/not-found (str "deployment " dep-id " is not of function " fname " (it moves " (or (:function (:row r)) "no function") ")")
+                               :hint "dlb deploy list FUNCTION names its deployments")
+                         :else (:row r))))
+        listing (when-not direct (lambda-cd-rows! ctx fname))
+        row (or direct (pick (:rows listing) dep-id))]
+    (when-not row
+      (fail :deploy/not-found (str "no CodeDeploy deployment " (or dep-id "(newest)") " of function " fname)
+            :ids (mapv :id (:rows listing)) :hint "dlb deploy list FUNCTION names them; a function that was never deployed through CodeDeploy has only versions"))
+    (let [detail (cd-detail! ctx row now)]
+      {:env (:name (:env ctx)) :kind :lambda :cluster "lambda" :service fname :row row :rows (:rows listing) :source :codedeploy
+       :notes (:notes listing) :absent (when (:absent listing) {:codedeploy (:absent listing)}) :errors (:errors listing)
+       :events [] :event-count 0 :started [] :replaced [] :log {:entries []}
+       :cd detail :cd-events (cd/lifecycle-items (get-in detail [:targets :targets])) :fetched-at now})))
 
 (defn collect!
   "Everything one deployment's text needs, fetched now: -> a map for `render-show`. `lstate` is the log state atom (see `collect-logs!`)."
@@ -485,7 +529,8 @@
     (when-not row
       (fail :deploy/not-found (str "no deployment " (or dep-id "(newest)") " of " cluster "/" service)
             :ids (mapv :id (:rows listing)) :hint "dlb deploy list names them"))
-    (let [tasks (fetch-tasks! ctx cluster service)
+    (let [cd-d (when (= :codedeploy (:source row)) (cd-detail! ctx row now))
+          tasks (fetch-tasks! ctx cluster service)
           _ (doseq [t tasks] (td-info! ctx (:task-definition t)))
           {:keys [started replaced]} (tasks-of row tasks now)
           local? (= :local (:kind (:env ctx)))
@@ -495,6 +540,7 @@
        :notes (:notes listing) :absent (:absent listing) :errors (:errors listing)
        :events (events-in (:events svc) row now) :event-count (count (:events svc))
        :started started :replaced replaced :log lg
+       :cd cd-d :cd-events (when cd-d (cd/lifecycle-items (get-in cd-d [:targets :targets])))
        :service-state (select-keys svc [:desiredCount :runningCount :pendingCount])
        :fetched-at now})))
 
@@ -504,58 +550,79 @@
 
 (defn render-show
   "The deploy text (pure)."
-  [{:keys [env cluster service row source notes events event-count started replaced log fetched-at service-state absent errors]}]
-  (let [{:keys [id status rollout-state rollout-reason started-at finished]} row
+  [{:keys [env cluster service row source notes events event-count started replaced log fetched-at service-state absent errors cd kind]}]
+  (let [{:keys [id status rollout-state rollout-reason finished]} row
         begin (:started row)
+        lambda? (= :lambda kind)
         lines
         (concat
-         [(header-line "deploy" (str cluster "/" service "   " id))
+         [(header-line "deploy" (str (if lambda? "lambda " (str cluster "/")) service "   " id))
           (header-line "env" (str env "   fetched " (t-str fetched-at)))
           (header-line "status" (str status (when rollout-state (str "   rollout " rollout-state)) (when rollout-reason (str "   " rollout-reason))))
-          (header-line "window" (str (t-str begin) " .. " (if finished (str (t-str finished) "   (" (seconds begin finished) " s)") "still running")))
-          (header-line "revision" (str (or (:revision-before row) "-") " -> " (or (:revision-after row) "?")
-                                       (when (:family row) (str "   (" (:family row) ":" (or (:revision-before row) "-") " -> " (:family row) ":" (:revision-after row) ")"))))
-          (header-line "image" (str (or (:image-before row) "-") " -> " (or (:image-after row) "?")))
-          (header-line "commit" (if (:git-sha row) (str (:git-sha row) "   (" (:commit-source row) ")") "unknown   (no git-sha tag on the task definition, no commit-like image tag)"))
-          (header-line "ci run" (if (:run-id row) (str (:run-id row) "   (task definition tag run-id)") "unknown"))
-          (header-line "source" (name source))]
+          (header-line "window" (str (t-str begin) " .. " (if finished (str (t-str finished) "   (" (seconds begin finished) " s)") "still running")))]
+         (when-not lambda?
+           [(header-line "revision" (str (or (:revision-before row) "-") " -> " (or (:revision-after row) "?")
+                                         (when (:family row) (str "   (" (:family row) ":" (or (:revision-before row) "-") " -> " (:family row) ":" (:revision-after row) ")"))))
+            (header-line "image" (str (or (:image-before row) "-") " -> " (or (:image-after row) "?")))
+            (header-line "commit" (if (:git-sha row) (str (:git-sha row) "   (" (:commit-source row) ")") "unknown   (no git-sha tag on the task definition, no commit-like image tag)"))
+            (header-line "ci run" (if (:run-id row) (str (:run-id row) "   (task definition tag run-id)") "unknown"))])
+         [(header-line "source" (name source))]
          (when (:circuit-breaker row) [(header-line "breaker" (:circuit-breaker row))])
          (when (seq service-state)
            [(header-line "service" (str "desired " (:desiredCount service-state) "  running " (:runningCount service-state) "  pending " (:pendingCount service-state)))])
+         (when cd (cd/header-lines row (:alias-now cd)))
          (for [n notes] (header-line "note" n))
          (for [[k c] absent] (header-line "absent" (str (name k) " (" c ")")))
          (for [e errors] (header-line "error" (str (:op e) " " (:code e) " " (:message e))))
-         [""
-          (str "== events (" (count events) " inside the window; the service keeps its last " event-count ")")]
-         (for [e events] (str (t-str (:at e)) "  " (:message e)))
-         [""
-          (str "== tasks (started by this deployment: " (count started) "; replaced by it: " (count replaced) ")")]
-         (mapcat (fn [[kind t]]
-                   (cons (str (format "%-9s" kind) (short-id (:id t)) "  rev " (:revision t) "  " (:last-status t) "  created " (t-str (:created t))
-                              (when (:stopped t) (str "  stopped " (t-str (:stopped t)) "  " (:stop-code t) ": " (:stopped-reason t))))
-                         (for [c (:containers t)]
-                           (str "    container " (:name c) "  " (:last-status c)
-                                (when (some? (:exit-code c)) (str "  exit " (:exit-code c))) (when (:reason c) (str "  " (:reason c)))))))
-                 (concat (map vector (repeat "started") started) (map vector (repeat "replaced") replaced)))
-         [""
-          (str "== log (" (count (:entries log)) " lines of the containers of the started tasks, time order)")]
-         (for [n (:notes log)] (str "# " n))
-         (for [e (:entries log)] (str (t-str (:at e)) " [" (:container e) (when (:task e) (str "/" (:task e))) "] " (:text e))))]
+         (when cd
+           (concat [""] (cd/target-lines (:targets cd))
+                   (when (:hooks-named? cd) (cons "" (cd/hook-section (or (:hook cd) {}) true)))))
+         (when-not lambda?
+           (concat
+            [""
+             (str "== events (" (count events) " inside the window; the service keeps its last " event-count ")")]
+            (for [e events] (str (t-str (:at e)) "  " (:message e)))
+            [""
+             (str "== tasks (started by this deployment: " (count started) "; replaced by it: " (count replaced) ")")]
+            (mapcat (fn [[kind t]]
+                      (cons (str (format "%-9s" kind) (short-id (:id t)) "  rev " (:revision t) "  " (:last-status t) "  created " (t-str (:created t))
+                                 (when (:stopped t) (str "  stopped " (t-str (:stopped t)) "  " (:stop-code t) ": " (:stopped-reason t))))
+                            (for [c (:containers t)]
+                              (str "    container " (:name c) "  " (:last-status c)
+                                   (when (some? (:exit-code c)) (str "  exit " (:exit-code c))) (when (:reason c) (str "  " (:reason c)))))))
+                    (concat (map vector (repeat "started") started) (map vector (repeat "replaced") replaced)))
+            [""
+             (str "== log (" (count (:entries log)) " lines of the containers of the started tasks, time order)")]
+            (for [n (:notes log)] (str "# " n))
+            (for [e (:entries log)] (str (t-str (:at e)) " [" (:container e) (when (:task e) (str "/" (:task e))) "] " (:text e))))))]
     (str (str/join "\n" lines) "\n")))
 
 (defn render-lambda
-  "The text of a Lambda's versions (pure)."
-  [{:keys [env function rows latest fetched-at notes]}]
-  (str (str/join "\n"
-            (concat [(header-line "lambda" function) (header-line "env" (str env "   fetched " (t-str fetched-at)))
-                     (header-line "latest" (str (:State latest) "  update " (:LastUpdateStatus latest) (when (:LastUpdateStatusReason latest) (str ": " (:LastUpdateStatusReason latest)))
-                                                "  code " (:CodeSha256 latest) "  modified " (:LastModified latest)))]
-                    (for [n notes] (header-line "note" n))
-                    ["" "== versions (newest first)"]
-                    (for [r rows] (str (format "%-8s" (:version r)) (t-str (:started r)) "  " (:status r) "  update " (:rollout-state r)
+  "The text of a Lambda's versions and CodeDeploy deployments (pure)."
+  [{:keys [env function rows latest fetched-at notes absent errors]}]
+  (let [cds (filter #(= :codedeploy (:source %)) rows)
+        vs (remove #(= :codedeploy (:source %)) rows)]
+    (str (str/join "\n"
+              (concat [(header-line "lambda" function) (header-line "env" (str env "   fetched " (t-str fetched-at)))
+                       (header-line "latest" (str (:State latest) "  update " (:LastUpdateStatus latest) (when (:LastUpdateStatusReason latest) (str ": " (:LastUpdateStatusReason latest)))
+                                                  "  code " (:CodeSha256 latest) "  modified " (:LastModified latest)))]
+                      (for [n notes] (header-line "note" n))
+                      (for [[k c] absent] (header-line "absent" (str (name k) " (" c ")")))
+                      (for [e errors] (header-line "error" (str (:op e) " " (:code e) " " (:message e))))
+                      (when (seq cds) [(header-line "note" cd/emulator-note)])
+                      (when (seq cds)
+                        (concat ["" (str "== codedeploy deployments (" (count cds) ", newest first)")]
+                                (for [r cds]
+                                  (str (:id r) "  " (format "%-9s" (:status r)) " " (t-str (:started r)) " .. " (or (t-str (:finished r)) "running")
+                                       "  alias " (:alias r) " " (or (:revision-before r) "?") " -> " (or (:revision-after r) "?")
+                                       "  " (:application r) "/" (:group r)
+                                       (when (:error-code r) (str "  " (:error-code r) ": " (:rollout-reason r)))
+                                       (when (:description r) (str "  \"" (:description r) "\""))))))
+                      ["" "== versions (newest first)"]
+                      (for [r vs] (str (format "%-8s" (:version r)) (t-str (:started r)) "  " (:status r) "  update " (:rollout-state r)
                                        "  code " (:code-sha256 r) (when (:rollout-reason r) (str "  " (:rollout-reason r)))
                                        (when (:description r) (str "  \"" (:description r) "\""))))))
-            "\n"))
+         "\n")))
 
 (defn render-list
   "The table of `list!` (pure): one row per deployment."
@@ -567,7 +634,10 @@
                          (or (:revision-before r) "-") " -> " (or (:revision-after r) "?") "\t"
                          (or (:image-before r) "-") " -> " (or (:image-after r) "?") "\t"
                          (or (:git-sha r) "-") "\t" (or (:run-id r) "-")
+                         (when (= :codedeploy (:source r))
+                           (str "\tcodedeploy " (:application r) "/" (:group r) "  " (:platform r) (when (:error-code r) (str "  " (:error-code r)))))
                          (when (:rollout-reason r) (str "\t" (:rollout-reason r))) "\n")))
+       (when (some #(= :codedeploy (:source %)) rows) (str "# note: " cd/emulator-note "\n"))
        (apply str (for [n notes] (str "# note: " n "\n")))
        (apply str (for [[k c] absent] (str "# absent: " (name k) " (" c ")\n")))
        (apply str (for [e errors] (str "# error: " (:op e) " " (:code e) " " (:message e) "\n")))))
@@ -583,7 +653,8 @@
 
 (defn- keep-row [env-name cluster service row]
   (-> row (select-keys [:id :source :status :rollout-state :started :finished :revision-before :revision-after :image-before :image-after
-                        :git-sha :run-id :commit-source :family :rollout-reason :version :code-sha256 :description])
+                        :git-sha :run-id :commit-source :family :rollout-reason :version :code-sha256 :description
+                        :application :group :platform :error-code :function :alias :config :created])
       (assoc :env env-name :cluster cluster :service service)))
 
 (defn- age-of [^Instant at now] (deployed/age-text (- (.toEpochMilli ^Instant now) (.toEpochMilli at))))
@@ -625,8 +696,13 @@
         target (resolve-service! ctx service-spec)
         now (store/now)]
     (if (= :lambda (:kind target))
-      (let [{:keys [rows latest notes]} (lambda-rows! ctx (:function target) (:config target))
-            d {:env env-name :function (:function target) :rows rows :latest latest :notes notes :fetched-at now}
+      (let [{vrows :rows :keys [latest notes]} (lambda-rows! ctx (:function target) (:config target))
+            cdr (lambda-cd-rows! ctx (:function target))
+            rows (newest-first (into (vec vrows) (:rows cdr)))
+            notes (vec (concat notes (:notes cdr)))
+            absent (when (:absent cdr) {:codedeploy (:absent cdr)})
+            errors (:errors cdr)
+            d {:env env-name :function (:function target) :rows rows :latest latest :notes notes :absent absent :errors errors :fetched-at now}
             p (.resolve (store/path ws "cache" (store/safe-name env-name) "deploy" "lambda" (slug (:function target))) "list.txt")
             tbl (render-lambda d)
             lat {:state (:State latest) :update-status (:LastUpdateStatus latest) :reason (or (:LastUpdateStatusReason latest) (:StateReason latest))
@@ -634,10 +710,12 @@
         (write-text! p tbl)
         (store/write-edn! (.resolveSibling p "list.edn")
                           {:env env-name :function (:function target) :kind :lambda :source :lambda :fetched-at now
-                           :rows (mapv #(keep-row env-name nil (:function target) %) rows) :notes (vec notes)
+                           :rows (mapv #(keep-row env-name "lambda" (:function target) %) rows) :notes (vec notes)
                            :latest lat})
-        {:env env-name :service (:function target) :kind :lambda :latest lat :source :lambda :count (count rows) :rows (vec (take limit rows))
-         :path (str p) :text (str p) :table tbl :notes (vec notes) :raw (count @(:refs ctx))})
+        (cond-> {:env env-name :service (:function target) :kind :lambda :latest lat :source :lambda :count (count rows) :rows (vec (take limit rows))
+                 :path (str p) :text (str p) :table tbl :notes (vec notes) :raw (count @(:refs ctx)) :fetched-at now}
+          absent (assoc :absent absent)
+          (seq errors) (assoc :errors errors)))
       (let [{:keys [cluster service]} target
             listing (list-rows! ctx target limit)
             rows (vec (take limit (:rows listing)))
@@ -685,8 +763,15 @@
       (let [ctx (ctx-of ws env-name nil)
             target (resolve-service! ctx service-spec)]
         (if (= :lambda (:kind target))
-          (let [r (list! ws env-name service-spec {})]
-            {:path (:path r) :body (:table r) :kind :lambda :deployment (:id (first (:rows r))) :lines 0})
+          (if (str/blank? deployment)
+            (let [r (list! ws env-name service-spec {})]
+              {:path (:path r) :body (:table r) :kind :lambda :deployment (:id (first (:rows r))) :lines 0})
+            (let [d (collect-lambda! ctx target deployment)
+                  p (persist-show! ws env-name d)
+                  row (:row d)]
+              {:path (str p) :body (slurp (.toFile p)) :kind :lambda :deployment (:id row) :status (:status row) :rollout-state (:rollout-state row)
+               :started (:started row) :finished (:finished row) :error-code (:error-code row) :revision-before (:revision-before row)
+               :revision-after (:revision-after row) :tasks 0 :lines (count (get-in d [:cd :hook :entries])) :raw (count @(:refs ctx))}))
           (let [d (collect! ctx target deployment (atom {}) {})
                 p (persist-show! ws env-name d)
                 row (:row d)]
@@ -706,9 +791,15 @@
        (not-any? #(#{"RUNNING" "PENDING" "PROVISIONING" "ACTIVATING"} (:last-status %)) started)))
 
 (defn- failure-lines
-  "The last words of a failed rollout: every stopped task it started with its stop code, reason and exit codes, and the container's last lines."
-  [{:keys [started log]}]
-  (concat (for [t (take-last 3 (filter #(= "STOPPED" (:last-status %)) started))]
+  "The last words of a failed rollout: every stopped task it started with its stop code, reason and exit codes, and the container's last lines;
+  for a CodeDeploy deployment its error, the lifecycle events that failed and the hook's last lines."
+  [{:keys [started log cd row]}]
+  (concat (when (:error-code row)
+            [(str "codedeploy " (:id row) " " (:status row) ": " (:error-code row) " " (:rollout-reason row))])
+          (for [x (get-in cd [:targets :targets]) e (:events x) :when (= "Failed" (:status e))]
+            (str "lifecycle " (:name e) " of " (:id x) " failed" (when (:message e) (str ": " (:error-code e) " " (:message e)))))
+          (for [e (take-last 10 (get-in cd [:hook :entries]))] (str (t-str (:at e)) " [hook " (:function e) "] " (:text e)))
+          (for [t (take-last 3 (filter #(= "STOPPED" (:last-status %)) started))]
             (str "task " (short-id (:id t)) " stopped " (t-str (:stopped t)) " " (:stop-code t) ": " (:stopped-reason t)
                  (when-let [cs (seq (keep #(when (some? (:exit-code %)) (str (:name %) " exit " (:exit-code %))) (:containers t)))] (str "  (" (str/join ", " cs) ")"))))
           (for [e (take-last 20 (:entries log))] (str (t-str (:at e)) " [" (:container e) (when (:task e) (str "/" (:task e))) "] " (:text e)))))
@@ -725,6 +816,9 @@
                   (str (t-str at) " task   " (short-id (:id t)) " rev " (:revision t) " " (:last-status t)
                        (when (:stop-code t) (str "  " (:stop-code t) ": " (:stopped-reason t))))
                   :task [:task (:id t) (:last-status t)]])
+               (for [e (:cd-events d)] [(:at e) (str (t-str (:at e)) " event  " (:message e)) :event [:event (:id e) (:message e)]])
+               (for [e (get-in d [:cd :hook :entries])]
+                 [(:at e) (str (t-str (:at e)) " [hook " (:function e) "] " (:text e)) :log [:hook (:ts e) (:function e) (:text e)]])
                (let [n (volatile! {})]
                  (for [e (:entries (:log d))
                        :let [k [(:at e) (:container e) (:task e) (:text e)]
@@ -740,8 +834,6 @@
         emit! (or emit! (fn [_]))
         ctx (ctx-of ws env-name (atom {}))
         target (resolve-service! ctx service-spec)
-        _ (when (= :lambda (:kind target))
-            (fail :deploy/unsupported "deploy follow follows an ECS rollout" :hint "a Lambda has versions: dlb deploy list"))
         lstate (atom {})
         seen (atom #{})
         deadline (+ (System/currentTimeMillis) timeout-ms)
@@ -751,7 +843,9 @@
         waiting (atom false)
         wait-until (+ (System/currentTimeMillis) wait-ms)]
     (loop [dep-id deployment grace 0 patience 0]
-      (let [d (try (collect! ctx target dep-id lstate {:limit 5})
+      (let [d (try (if (= :lambda (:kind target))
+                     (collect-lambda! ctx target dep-id)
+                     (collect! ctx target dep-id lstate {:limit 5}))
                    (catch clojure.lang.ExceptionInfo e
                      ;; a deploy that has not started yet: nothing to follow until it appears (while we are waiting for it)
                      (if (and (= :deploy/not-found (:type (ex-data e))) (nil? dep-id) (< patience 3)) ::wait (throw e))))]
@@ -786,7 +880,7 @@
               (cond
                 ;; one more look: the last log lines come a moment after the rollout ends, and ECS writes "has reached a steady state" after it
                 (and done? (not fail?) (= :completed ended) (< grace 40)
-                     (or (< grace 1) (not-any? #(str/includes? (str (:message %)) "steady state") (:events d))))
+                     (or (< grace 1) (and (not= :codedeploy (:source row)) (not-any? #(str/includes? (str (:message %)) "steady state") (:events d)))))
                 (do (Thread/sleep 3000) (recur (:id row) (inc grace) 0))
                 (and done? (not fail?) (zero? grace) (not= :completed ended))
                 (do (Thread/sleep 3000) (recur (:id row) 1 0))
@@ -860,11 +954,64 @@
   (vec (distinct (for [r (by-commit ws sha)]
                    (str "deployed to " (:env r) ": " (:service r) (when (:revision r) (str " revision " (:revision r))))))))
 
+(defn- local-run-windows
+  "The windows of the local runs numbered like `run-id` (`local-<n>`; the number is per repository, so `repo` narrows): the deploy job's window (every job
+  when none is named like that) from the kept `run.edn`. -> `[{:repo :run :from :to :what}]`."
+  [ws run-id repo]
+  (when-let [[_ n] (re-matches #"local-(\d+)" (str run-id))]
+    (let [root (.toFile (store/path ws "ci" "local"))]
+      (vec (for [rd (or (.listFiles root) []) :when (and (.isDirectory rd) (or (str/blank? repo) (= (str/replace repo #"[^A-Za-z0-9._-]+" "-") (.getName rd))))
+                 af (or (.listFiles rd) []) :when (re-matches (re-pattern (str n "-\\d+")) (.getName af))
+                 :let [f (io/file af "run.edn")] :when (.isFile f)
+                 :let [m (try (store/read-edn (.toPath f)) (catch Throwable _ nil))
+                       jobs (:jobs m)
+                       dj (seq (filter #(re-find #"(?i)deploy" (str (:id %) " " (:name %))) jobs))
+                       js (or dj jobs)
+                       from (->> js (keep #(->inst (:started-at %))) sort first)
+                       to (->> js (keep #(->inst (:completed-at %))) sort last)]
+                 :when (and from to)]
+             {:repo (.getName rd) :run run-id :from from :to to :what (if dj "deploy job" "run")})))))
+
+(defn- cd-cache-rows
+  "The CodeDeploy rows the caches know (`deploy/**.edn`), a Lambda's with no cluster. No AWS call."
+  [ws]
+  (vec (for [e (env/names ws)
+             :let [root (.toFile (store/path ws "cache" (store/safe-name e) "deploy"))]
+             f (file-seq root)
+             :when (and (.isFile ^java.io.File f) (str/ends-with? (.getName ^java.io.File f) ".edn"))
+             :let [m (try (store/read-edn (.toPath ^java.io.File f)) (catch Throwable _ nil))]
+             r (concat (:rows m) (when (:row m) [(:row m)]))
+             :when (= :codedeploy (:source r))]
+         {:env (:env r) :cluster (when-not (= "lambda" (:cluster r)) (:cluster r)) :service (:service r) :revision (:revision-after r) :deployment (:id r)
+          :status (:status r) :rollout-state (:rollout-state r) :started (:started r) :created (:created r) :git-sha (:git-sha r) :run-id (:run-id r)
+          :platform (:platform r)})))
+
+(defn by-run-window
+  "The CodeDeploy deployments (from the caches) created inside the window of the deploy job of local run `run-id`: nothing but the time ties them
+  (a Lambda deployment's description is `run <GITHUB_RUN_ID>`, which is 1 under act; an ECS one has the commit through its task definition). Each row says so
+  in `:tied`. -> rows newest first."
+  [ws run-id repo]
+  (let [wins (local-run-windows ws run-id repo)
+        rows (cd-cache-rows ws)]
+    (->> (for [w wins r rows
+               :let [at (or (:created r) (:started r))]
+               :when (and at (not (before? at (.minusSeconds ^Instant (:from w) 2))) (not (before? (.plusSeconds ^Instant (:to w) 2) at)))]
+           (assoc r :tied (str "by time: created inside the window of the " (:what w) " of " run-id " (" (:repo w) ", " (:from w) " .. " (:to w) ")")))
+         (reduce (fn [m r] (assoc m [(:env r) (:service r) (:deployment r)] r)) {})
+         vals
+         (sort-by #(- (.toEpochMilli ^Instant (or (:started %) Instant/EPOCH))))
+         vec)))
+
 (defn where
   "`deploy.where`: the deployments that carry a commit (`:sha`) or were made by a CI run (`:run-id`), from the caches only: `{:rows [...] :notes [...]}`
-  (the rows of `by-commit` / `by-run-id`, the strings of `commit-notes`)."
-  [ws {:keys [sha run-id]}]
+  (the rows of `by-commit` / `by-run-id`, the strings of `commit-notes`). A run `local-<n>` also finds the CodeDeploy deployments created inside the
+  window of its deploy job (`:repo` narrows the run number to a repository), each marked `:tied`."
+  [ws {:keys [sha run-id repo]}]
   (cond (not (str/blank? sha)) {:rows (by-commit ws sha) :notes (commit-notes ws sha)}
-        (not (str/blank? run-id)) (let [rs (by-run-id ws run-id)]
-                                    {:rows rs :notes (vec (distinct (for [r rs] (str "deployed to " (:env r) ": " (:service r) (when (:revision r) (str " revision " (:revision r)))))))})
+        (not (str/blank? run-id)) (let [rs (by-run-id ws run-id)
+                                        ids (set (map :deployment rs))
+                                        ws* (remove #(contains? ids (:deployment %)) (by-run-window ws run-id repo))
+                                        rs (vec (concat rs ws*))]
+                                    {:rows rs :notes (vec (distinct (for [r rs] (str "deployed to " (:env r) ": " (:service r) (when (:revision r) (str " revision " (:revision r)))
+                                                                                    (when (:tied r) (str " (" (:tied r) ")"))))))})
         :else (fail :deploy/no-key "deploy.where needs a sha or a run-id" :hint "dlb deploy where --sha <commit>")))
