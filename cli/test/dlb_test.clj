@@ -693,7 +693,7 @@
 (deftest a-codedeploy-deployment-prints-as-the-daemons-text_and-its-follow-ends-by-name
   (let [body "deploy       lambda fn   d-1\nerror        HOOK_EXECUTION_FAILURE   Hook function reported failure\n"
         shown (str/split-lines (with-out-str (render/print-result "deploy.show" {:body body :path "/c/d-1.txt" :age "3 s"})))
-        followed (str/split-lines (with-out-str (render/print-result "deploy.follow" {:follow true :ended :failed :deployment "d-1" :status "Failed" :path "/c/d-1.txt"})))]
+        followed (str/split-lines (with-out-str (render/print-result "deploy.follow" {:follow true :ended "failed" :deployment "d-1" :status "Failed" :path "/c/d-1.txt"})))]
     (is (= ["deploy       lambda fn   d-1" "error        HOOK_EXECUTION_FAILURE   Hook function reported failure" "path: /c/d-1.txt   (cached, 3 s old)"] shown))
     (is (= ["failed  d-1  Failed" "path: /c/d-1.txt"] followed))
     (is (= "a hook line" (render/event-line (atom {}) {:event "deploy.line" :text "a hook line"})) "a streamed deploy.line is its text")))
