@@ -576,7 +576,7 @@
          (for [e errors] (header-line "error" (str (:op e) " " (:code e) " " (:message e))))
          (when cd
            (concat [""] (cd/target-lines (:targets cd))
-                   [""] (cd/hook-section (or (:hook cd) {}) (:hooks-named? cd))))
+                   (when (:hooks-named? cd) (cons "" (cd/hook-section (or (:hook cd) {}) true)))))
          (when-not lambda?
            (concat
             [""

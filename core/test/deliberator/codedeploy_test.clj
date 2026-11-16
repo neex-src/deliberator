@@ -175,7 +175,8 @@
     (is (str/includes? txt "acme:acme-billing   ECSTarget   Succeeded"))
     (is (str/includes? txt "lifecycle Install"))
     (is (str/includes? txt "task set ecs-svc/53a00868dc2541c38e8ce03b91a363d7  ACTIVE  desired 1 pending 0 running 0  traffic 0.0"))
-    (is (str/includes? txt "the appspec names no hook function"))))
+    (is (str/includes? txt "hook         the appspec names none"))
+    (is (not (str/includes? txt "== hook log")) "no hook named: no section of nothing")))
 
 ;; --- shapes from the descriptors only: the emulator does not answer them ---------------------------------------------
 
