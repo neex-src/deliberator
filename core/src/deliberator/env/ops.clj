@@ -65,7 +65,8 @@
 
 (def exceptions
   "`[service op]` pairs whose class differs from what their name suggests, with the reason."
-  {["logs" "StartQuery"] "starts a read-only Insights query, changes no resource"
+  {["eventbridge" "TestEventPattern"] "matches an event against a pattern, changes no resource (events.who ask)"
+   ["logs" "StartQuery"] "starts a read-only Insights query, changes no resource"
    ["logs" "StopQuery"] "stops an Insights query that was started to read, changes no resource (the cancel of logs.insights)"})
 
 (def generic-read-services
