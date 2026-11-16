@@ -31,7 +31,7 @@
                     "DeleteMessageBatch" "PurgeQueue" "DeleteQueue" "SetQueueAttributes"
                     "ChangeMessageVisibility" "TagQueue"))
      :eventbridge (merge (r "ListRules" "DescribeRule" "ListTargetsByRule" "DescribeEventBus"
-                       "ListEventBuses")
+                       "ListEventBuses" "TestEventPattern" "ListRuleNamesByTarget")
                     (m "PutEvents" "PutRule" "PutTargets" "CreateEventBus" "DeleteRule"
                        "RemoveTargets" "DeleteEventBus" "EnableRule" "DisableRule"))
      :lambda (merge (r "GetFunction" "ListFunctions" "GetFunctionConfiguration"
@@ -52,7 +52,7 @@
                      "GetQueryResults" "GetLogEvents" "StopQuery")
                   (m "CreateLogGroup" "CreateLogStream" "PutLogEvents" "DeleteLogGroup"
                      "DeleteLogStream"))
-     :sts (r "GetCallerIdentity")
+     :sts (r "GetCallerIdentity" "GetFederationToken")
      :ecs (merge (r "DescribeServices" "DescribeTaskDefinition" "ListServices" "ListTasks"
                     "DescribeTasks" "DescribeClusters" "ListClusters" "ListTaskDefinitions"
                     "ListServiceDeployments" "DescribeServiceDeployments" "DescribeServiceRevisions")
@@ -65,7 +65,8 @@
 
 (def exceptions
   "`[service op]` pairs whose class differs from what their name suggests, with the reason."
-  {["logs" "StartQuery"] "starts a read-only Insights query, changes no resource"
+  {["eventbridge" "TestEventPattern"] "matches an event against a pattern, changes no resource (events.who ask)"
+   ["logs" "StartQuery"] "starts a read-only Insights query, changes no resource"
    ["logs" "StopQuery"] "stops an Insights query that was started to read, changes no resource (the cancel of logs.insights)"})
 
 (def generic-read-services

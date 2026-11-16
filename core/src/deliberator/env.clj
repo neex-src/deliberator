@@ -72,7 +72,7 @@
   "`(local-for \"default\")`: the record of the default workspace; tests build on it."
   (local-for "default"))
 
-(def ^:private top-keys #{:name :kind :description :read-only :aws :targets :topology})
+(def ^:private top-keys #{:name :kind :description :read-only :aws :targets :topology :console})
 (def ^:private topology-keys #{:mode :url :container-url :log :fake})
 (def ^:private local-aws-keys #{:endpoint :region :account :credentials})
 (def ^:private remote-aws-keys #{:profile :region :account :endpoint})
@@ -169,6 +169,10 @@
         (when (and aws? (not (and (string? (:account aws)) (re-matches #"\d{12}" (:account aws)))))
           [":aws :account must be a 12-digit string"])
         (when (contains? m :topology) (topology-problems (:topology m)))
+        (when (contains? m :console)
+          (cond (not= :remote kind) [":console belongs to :remote environments (the emulator has no console)"]
+                (not (and (map? (:console m)) (every? #{:signin} (keys (:console m))) (boolean? (get (:console m) :signin true))))
+                [":console must be {:signin true|false}"]))
         (when-not (map? targets) [":targets must be a map"])
         (when (map? targets)
           (for [[k v] targets

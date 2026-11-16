@@ -31,7 +31,9 @@
     (is (not (ops/secret-bearing? :ssm "PutParameter")))
     (is (ops/secret-bearing? :secretsmanager :GetSecretValue)))
   (testing "the credential-minting rows (sts, iam, kms, cognito) are mutations: gated on a remote environment, redacted too"
-    (doseq [[s o] ops/secret-bearing :when (not (#{:ssm :secretsmanager} s))]
+    (doseq [[s o] ops/secret-bearing :when (not (#{:ssm :secretsmanager} s))
+            ;; the one exception: a short session of the SAME identity narrowed by a read-only policy, asked for by the record's `:console {:signin true}`
+            :when (not= [:sts "GetFederationToken"] [s o])]
       (is (= :mutate (ops/op-class s o)) (str s " " o))
       (is (ops/secret-bearing? s o))))
   (testing "the name rule"

@@ -121,7 +121,9 @@
             [clojure.string :as str]
             [deliberator.aws :as aws]
             [deliberator.config :as config]
+            [deliberator.console :as console]
             [deliberator.deploy :as deploy]
+            [deliberator.events :as events]
             [deliberator.deployed :as deployed]
             [deliberator.insights :as insights]
             [deliberator.ecsfollow :as ecsfollow]
@@ -1037,6 +1039,33 @@
     (when-not cached (verify-remote! ctx ws env-name))
     (deploy/list! ws env-name service (cond-> {} limit (assoc :limit limit) cached (assoc :cached true)))))
 
+;; piece 05: EventBridge as a map, a question and an experiment, and the console link (own block)
+(defn- events-map [ctx {:keys [env bus cached] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (if cached
+      (events/show ws env-name)
+      (do (verify-remote! ctx ws env-name) (events/map! ws env-name {:bus bus})))))
+
+(defn- events-who [ctx {:keys [env refresh ask] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (when (or refresh ask) (verify-remote! ctx ws env-name))
+    (events/who ws env-name (select-keys args [:event :detail-type :source :detail :bus :refresh :ask]))))
+
+(defn- events-feeds [ctx {:keys [env refresh] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (when refresh (verify-remote! ctx ws env-name))
+    (events/feeds ws env-name (select-keys args [:target :refresh]))))
+
+(defn- events-sample [ctx {:keys [env refresh] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (when refresh (verify-remote! ctx ws env-name))
+    (events/sample ws env-name (select-keys args [:rule :bus :refresh]))))
+
+(defn- console-url [ctx {:keys [env] :as args}]
+  (let [ws (ws-of args) env-name (or env "local")]
+    (verify-remote! ctx ws env-name)
+    (console/url ws env-name (select-keys args [:kind :name :reveal]))))
+
 (defn- deploy-where [_ {:keys [sha run-id] :as args}]
   (deploy/where (ws-of args) {:sha sha :run-id run-id}))
 
@@ -1304,6 +1333,38 @@
                                    :env {:type :string :doc "environment name; default local"}
                                    :limit {:type :int :doc "at most this many deployments; default 20"}
                                    :cached {:type :bool :doc "the answer of the last list from disk, with its age, no AWS call"})}
+   "events.map" {:fn events-map :class :mutate
+                  :doc "EventBridge of an environment as a map: bus -> rules (state, event pattern, schedule) -> targets (Lambda, queue, topic, state machine, API destination ...: kind, name, input transformer, dead-letter queue, role), every page, every call persisted raw first; writes cache/<env>/eventbridge.edn and .txt (one line per bus, rule and target, for grep). A call the profile may not make is listed in errors and the rest still answers. cached answers from the file with its age, no AWS call. bus narrows to one bus."
+                  :args (ws-schema :env {:type :string :doc "environment name; default local"}
+                                   :bus {:type :string :doc "only this bus"}
+                                   :cached {:type :bool :doc "the last map from disk, with its age, no AWS call"})}
+   "events.who" {:fn events-who :class :mutate
+                  :doc "Who listens: the rules an event would match and what they deliver to, matched here over the cached map (fetched when there is none, or with refresh) with its age; the matcher is held to the real TestEventPattern by a table. ask true asks the service instead, one TestEventPattern per rule. The event is JSON, or a detail-type and a source (and a detail). A rule that is DISABLED and matches is listed with listening false. bus narrows to the bus the event is put on."
+                  :args (ws-schema :env {:type :string :doc "environment name; default local"}
+                                   :event {:type :string :doc "the event as JSON (source, detail-type, detail ...)"}
+                                   :detail-type {:type :string :doc "detail-type, when no event JSON is given"}
+                                   :source {:type :string :doc "source, when no event JSON is given"}
+                                   :detail {:type :string :doc "detail as JSON, with detail-type and source"}
+                                   :bus {:type :string :doc "only the rules of this bus"}
+                                   :refresh {:type :bool :doc "fetch the map again first (read calls)"}
+                                   :ask {:type :bool :doc "ask the service (TestEventPattern) instead of matching here"})}
+   "events.feeds" {:fn events-feeds :class :mutate
+                    :doc "The other way round: the rules that deliver to a Lambda, queue or topic (its name or ARN), from the cached map with its age."
+                    :args (ws-schema :target {:type :string :required true :doc "function, queue or topic name, or its ARN"}
+                                     :env {:type :string :doc "environment name; default local"}
+                                     :refresh {:type :bool :doc "fetch the map again first (read calls)"})}
+   "events.sample" {:fn events-sample :class :mutate
+                     :doc "An event that matches a rule's pattern, as a scenario step of kind eventbridge (### eventbridge put <bus>, # @source, # @detail-type, the detail as the body): returned as step and written to cache/<env>/eventbridge/samples/. Run it from the editor; on a remote environment the PutEvents asks like any write. The step's result then says which rules of the cached map it matched."
+                     :args (ws-schema :rule {:type :string :required true :doc "rule name from events.map"}
+                                      :env {:type :string :doc "environment name; default local"}
+                                      :bus {:type :string :doc "the rule's bus when the name is on several"}
+                                      :refresh {:type :bool :doc "fetch the map again first (read calls)"})}
+   "console.url" {:fn console-url :class :mutate
+                  :doc "The AWS console's deep link for a thing of a remote environment (kind: ecs-service cluster/service, task-definition family:rev, lambda, log-group, bus, rule bus/rule, queue, table, parameter). When the environment's record says :console {:signin true} and reveal is true, signin-url signs the browser in through the federation endpoint with a 15 minute READ-ONLY session made from the record's credentials: the link is a secret, handed over here in memory only, never persisted or logged. Without reveal the answer says that the sign-in is available. A profile that may not ask for a federation token gets the plain link and signin-error."
+                  :args (ws-schema :kind {:type :string :required true :doc "ecs-service, task-definition, lambda, log-group, bus, rule, queue, table or parameter"}
+                                   :name {:type :string :required true :doc "the thing's name (cluster/service, family:revision, bus/rule ...)"}
+                                   :env {:type :string :doc "a remote environment"}
+                                   :reveal {:type :bool :doc "build the sign-in link (a secret) and include it"})}
    "deploy.where" {:fn deploy-where :class :read
                     :doc "The deployments that carry a commit (sha, a full commit or a prefix of at least 7 characters) or were made by a CI run (run-id), newest first, with the notes `deployed to <env>: <service> revision N`: read from the environments' caches (deployed.edn and the deploy lists), no AWS call."
                     :args (ws-schema :sha {:type :string :doc "commit"}
@@ -1655,7 +1716,7 @@
       (call-provider op ctx args)
       (let [args (validate-args op (:args entry) args)]
         (when (and (contains? (:args entry) :ws)
-                   (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (str/starts-with? op "deploy.") (str/starts-with? op "fake.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
+                   (or (str/starts-with? op "service.") (str/starts-with? op "config.") (str/starts-with? op "topology.") (str/starts-with? op "deployed.") (str/starts-with? op "deploy.") (str/starts-with? op "events.") (str/starts-with? op "console.") (str/starts-with? op "fake.") (= op "audit.show") (= op "logs.insights")   ; new families are strict, mutators too
                        (and (= :read (:class entry)) (not (#{"scenario.parse" "op.tools"} op)))))
           (require-workspace! (:ws args)))
         (when (agent? ctx)
