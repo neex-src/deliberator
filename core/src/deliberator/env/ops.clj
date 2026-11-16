@@ -31,7 +31,7 @@
                     "DeleteMessageBatch" "PurgeQueue" "DeleteQueue" "SetQueueAttributes"
                     "ChangeMessageVisibility" "TagQueue"))
      :eventbridge (merge (r "ListRules" "DescribeRule" "ListTargetsByRule" "DescribeEventBus"
-                       "ListEventBuses")
+                       "ListEventBuses" "TestEventPattern" "ListRuleNamesByTarget")
                     (m "PutEvents" "PutRule" "PutTargets" "CreateEventBus" "DeleteRule"
                        "RemoveTargets" "DeleteEventBus" "EnableRule" "DisableRule"))
      :lambda (merge (r "GetFunction" "ListFunctions" "GetFunctionConfiguration"
@@ -52,7 +52,7 @@
                      "GetQueryResults" "GetLogEvents" "StopQuery")
                   (m "CreateLogGroup" "CreateLogStream" "PutLogEvents" "DeleteLogGroup"
                      "DeleteLogStream"))
-     :sts (r "GetCallerIdentity")
+     :sts (r "GetCallerIdentity" "GetFederationToken")
      :ecs (merge (r "DescribeServices" "DescribeTaskDefinition" "ListServices" "ListTasks"
                     "DescribeTasks" "DescribeClusters" "ListClusters" "ListTaskDefinitions"
                     "ListServiceDeployments" "DescribeServiceDeployments" "DescribeServiceRevisions")

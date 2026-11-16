@@ -8,6 +8,7 @@
   assert `failed == 0`). `$` is the PutEvents response."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
+            [deliberator.events :as events]
             [deliberator.scenario.kinds :as kinds]
             [deliberator.steps.aws :as sa]
             [deliberator.steps.common :as c]))
@@ -34,17 +35,26 @@
                                 :Source (or (c/dir step "source") "deliberator")
                                 :DetailType (or (c/dir step "detail-type") "scenario")
                                 :Detail (with-correlation (some-> (:body step) c/text) (:step-correlation ctx))}]})
+        ;; which rules of the cached map the event matches (no AWS call: the map was fetched by events.map; none cached, none said)
+        matched (try (events/matched-rules (:ws ctx) (:name (:env ctx)) bus
+                                           {"source" (or (c/dir step "source") "deliberator") "detail-type" (or (c/dir step "detail-type") "scenario")
+                                            "detail" (sa/parse-json (.getBytes ^String (with-correlation (some-> (:body step) c/text) (:step-correlation ctx)) "UTF-8"))})
+                     (catch Exception _ nil))
         res (sa/result ctx r "PutEvents"
-                       {:facts {"eventId" (some-> r :Entries first :EventId)
-                                "failed" (:FailedEntryCount r)
-                                "elapsed" (sa/elapsed r)}})]
+                       (cond-> {:facts (cond-> {"eventId" (some-> r :Entries first :EventId)
+                                                "failed" (:FailedEntryCount r)
+                                                "elapsed" (sa/elapsed r)}
+                                         matched (assoc "matched" (count matched) "rules" (clojure.string/join "," (map :rule matched))))}
+                         matched (assoc :display (if (seq matched)
+                                                   (str "matches " (clojure.string/join ", " (map #(str (:rule %) (when-not (:listening %) " (disabled: not listening)")) matched)) " of the cached map")
+                                                   "matches no rule of the cached map"))))]
     (assoc res :body-json (sa/parse-json (:response-bytes res)))))
 
 (def kind
   {:kind "eventbridge" :verbs #{"put"} :target :required
    :directives [{:name "source" :hint "<source>" :values ["deliberator"] :doc "event source (default deliberator)"}
                 {:name "detail-type" :hint "<type>" :doc "event detail-type (default scenario)"}]
-   :facts [{:name "eventId" :type :id} {:name "failed" :type :number}]
+   :facts [{:name "eventId" :type :id} {:name "failed" :type :number} {:name "matched" :type :number} {:name "rules" :type :string}]
    :capture-roots #{"$"} :concurrent? false
    :run run})
 
