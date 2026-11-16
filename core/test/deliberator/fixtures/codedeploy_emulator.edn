@@ -1,0 +1,453 @@
+{:batch-get-deployments
+ {:deploymentsInfo
+  [{:description "run 1",
+    :creator "user",
+    :deploymentId "d-803973498",
+    :revision
+    {:revisionType "AppSpecContent",
+     :appSpecContent
+     {:content
+      "{\"version\":\"0.0\",\"Resources\":[{\"TargetService\":{\"Type\":\"AWS::ECS::Service\",\"Properties\":{\"TaskDefinition\":\"arn:aws:ecs:eu-central-1:000000000000:task-definition/acme-billing:2\",\"LoadBalancerInfo\":{\"ContainerName\":\"billing\",\"ContainerPort\":8082}}}}]}"}},
+    :startTime #inst "2026-11-16T05:40:15.000-00:00",
+    :computePlatform "ECS",
+    :applicationName "acme",
+    :createTime #inst "2026-11-16T05:40:15.000-00:00",
+    :deploymentConfigName "CodeDeployDefault.ECSAllAtOnce",
+    :status "Succeeded",
+    :completeTime #inst "2026-11-16T05:40:15.000-00:00",
+    :deploymentGroupName "billing"}
+   {:description "run 1",
+    :creator "user",
+    :deploymentId "d-86DA1FAC1",
+    :revision
+    {:revisionType "AppSpecContent",
+     :appSpecContent
+     {:content
+      "{\"version\":\"0.0\",\"Resources\":[{\"fn\":{\"Type\":\"AWS::Lambda::Function\",\"Properties\":{\"Name\":\"acme-maintenance-down\",\"Alias\":\"live\",\"CurrentVersion\":\"1\",\"TargetVersion\":\"2\"}}}],\"Hooks\":[{\"BeforeAllowTraffic\":\"acme-codedeploy-hook\"}]}"}},
+    :startTime #inst "2026-11-16T05:42:16.000-00:00",
+    :computePlatform "Lambda",
+    :applicationName "acme-lambda",
+    :createTime #inst "2026-11-16T05:42:16.000-00:00",
+    :deploymentConfigName "CodeDeployDefault.LambdaAllAtOnce",
+    :status "Succeeded",
+    :completeTime #inst "2026-11-16T05:42:18.000-00:00",
+    :deploymentGroupName "maintenance-down"}
+   {:description "run 1 FAIL_HOOK",
+    :creator "user",
+    :deploymentId "d-8B094564A",
+    :revision
+    {:revisionType "AppSpecContent",
+     :appSpecContent
+     {:content
+      "{\"version\":\"0.0\",\"Resources\":[{\"fn\":{\"Type\":\"AWS::Lambda::Function\",\"Properties\":{\"Name\":\"acme-maintenance-down\",\"Alias\":\"live\",\"CurrentVersion\":\"2\",\"TargetVersion\":\"3\"}}}],\"Hooks\":[{\"BeforeAllowTraffic\":\"acme-codedeploy-hook\"}]}"}},
+    :startTime #inst "2026-11-16T05:43:11.000-00:00",
+    :computePlatform "Lambda",
+    :applicationName "acme-lambda",
+    :createTime #inst "2026-11-16T05:43:11.000-00:00",
+    :deploymentConfigName "CodeDeployDefault.LambdaAllAtOnce",
+    :status "Failed",
+    :completeTime #inst "2026-11-16T05:43:11.000-00:00",
+    :deploymentGroupName "maintenance-down",
+    :errorInformation
+    {:code "HOOK_EXECUTION_FAILURE",
+     :message "Hook function reported failure: BeforeAllowTraffic"}}]},
+ :get-deployment
+ {"d-803973498"
+  {:deploymentInfo
+   {:description "run 1",
+    :creator "user",
+    :deploymentId "d-803973498",
+    :revision
+    {:revisionType "AppSpecContent",
+     :appSpecContent
+     {:content
+      "{\"version\":\"0.0\",\"Resources\":[{\"TargetService\":{\"Type\":\"AWS::ECS::Service\",\"Properties\":{\"TaskDefinition\":\"arn:aws:ecs:eu-central-1:000000000000:task-definition/acme-billing:2\",\"LoadBalancerInfo\":{\"ContainerName\":\"billing\",\"ContainerPort\":8082}}}}]}"}},
+    :startTime #inst "2026-11-16T05:40:15.000-00:00",
+    :computePlatform "ECS",
+    :applicationName "acme",
+    :createTime #inst "2026-11-16T05:40:15.000-00:00",
+    :deploymentConfigName "CodeDeployDefault.ECSAllAtOnce",
+    :status "Succeeded",
+    :completeTime #inst "2026-11-16T05:40:15.000-00:00",
+    :deploymentGroupName "billing"}},
+  "d-86DA1FAC1"
+  {:deploymentInfo
+   {:description "run 1",
+    :creator "user",
+    :deploymentId "d-86DA1FAC1",
+    :revision
+    {:revisionType "AppSpecContent",
+     :appSpecContent
+     {:content
+      "{\"version\":\"0.0\",\"Resources\":[{\"fn\":{\"Type\":\"AWS::Lambda::Function\",\"Properties\":{\"Name\":\"acme-maintenance-down\",\"Alias\":\"live\",\"CurrentVersion\":\"1\",\"TargetVersion\":\"2\"}}}],\"Hooks\":[{\"BeforeAllowTraffic\":\"acme-codedeploy-hook\"}]}"}},
+    :startTime #inst "2026-11-16T05:42:16.000-00:00",
+    :computePlatform "Lambda",
+    :applicationName "acme-lambda",
+    :createTime #inst "2026-11-16T05:42:16.000-00:00",
+    :deploymentConfigName "CodeDeployDefault.LambdaAllAtOnce",
+    :status "Succeeded",
+    :completeTime #inst "2026-11-16T05:42:18.000-00:00",
+    :deploymentGroupName "maintenance-down"}},
+  "d-8B094564A"
+  {:deploymentInfo
+   {:description "run 1 FAIL_HOOK",
+    :creator "user",
+    :deploymentId "d-8B094564A",
+    :revision
+    {:revisionType "AppSpecContent",
+     :appSpecContent
+     {:content
+      "{\"version\":\"0.0\",\"Resources\":[{\"fn\":{\"Type\":\"AWS::Lambda::Function\",\"Properties\":{\"Name\":\"acme-maintenance-down\",\"Alias\":\"live\",\"CurrentVersion\":\"2\",\"TargetVersion\":\"3\"}}}],\"Hooks\":[{\"BeforeAllowTraffic\":\"acme-codedeploy-hook\"}]}"}},
+    :startTime #inst "2026-11-16T05:43:11.000-00:00",
+    :computePlatform "Lambda",
+    :applicationName "acme-lambda",
+    :createTime #inst "2026-11-16T05:43:11.000-00:00",
+    :deploymentConfigName "CodeDeployDefault.LambdaAllAtOnce",
+    :status "Failed",
+    :completeTime #inst "2026-11-16T05:43:11.000-00:00",
+    :deploymentGroupName "maintenance-down",
+    :errorInformation
+    {:code "HOOK_EXECUTION_FAILURE",
+     :message "Hook function reported failure: BeforeAllowTraffic"}}}},
+ :get-target
+ {"d-803973498"
+  {:__type "InvalidAction",
+   :message "Action GetDeploymentTarget is not supported",
+   :cognitect.aws.http/status 400,
+   :cognitect.anomalies/category :cognitect.anomalies/incorrect,
+   :cognitect.aws.error/code "InvalidAction"},
+  "d-86DA1FAC1"
+  {:__type "InvalidAction",
+   :message "Action GetDeploymentTarget is not supported",
+   :cognitect.aws.http/status 400,
+   :cognitect.anomalies/category :cognitect.anomalies/incorrect,
+   :cognitect.aws.error/code "InvalidAction"},
+  "d-8B094564A"
+  {:__type "InvalidAction",
+   :message "Action GetDeploymentTarget is not supported",
+   :cognitect.aws.http/status 400,
+   :cognitect.anomalies/category :cognitect.anomalies/incorrect,
+   :cognitect.aws.error/code "InvalidAction"}},
+ :describe-task-definition
+ {"arn:aws:ecs:eu-central-1:000000000000:task-definition/acme-billing:2"
+  {:taskDefinition
+   {:taskDefinitionArn
+    "arn:aws:ecs:eu-central-1:000000000000:task-definition/acme-billing:2",
+    :registeredAt #inst "2026-11-16T05:40:12.000-00:00",
+    :family "acme-billing",
+    :requiresCompatibilities ["FARGATE"],
+    :revision 2,
+    :requiresAttributes
+    [{:name "com.amazonaws.ecs.capability.docker-remote-api.1.18"}
+     {:name "ecs.capability.task-eni"}
+     {:name "com.amazonaws.ecs.capability.task-iam-role"}
+     {:name "com.amazonaws.ecs.capability.logging-driver.awslogs"}],
+    :memory "512",
+    :taskRoleArn "arn:aws:iam::000000000000:role/acme-billing",
+    :containerDefinitions
+    [{:logConfiguration
+      {:logDriver "awslogs",
+       :options
+       {:awslogs-group "/acme/billing",
+        :awslogs-region "eu-central-1",
+        :awslogs-stream-prefix "ecs"}},
+      :secrets
+      [{:name "BUS_NAME",
+        :valueFrom
+        "arn:aws:ssm:eu-central-1:000000000000:parameter/acme/billing/bus-name"}
+       {:name "DB_PASSWORD",
+        :valueFrom
+        "arn:aws:secretsmanager:eu-central-1:000000000000:secret:acme/billing/db-password-EDWFEG"}
+       {:name "DB_URL",
+        :valueFrom
+        "arn:aws:ssm:eu-central-1:000000000000:parameter/acme/billing/db-url"}
+       {:name "DB_USER",
+        :valueFrom
+        "arn:aws:ssm:eu-central-1:000000000000:parameter/acme/billing/db-user"}
+       {:name "IDM_BASE_URL",
+        :valueFrom
+        "arn:aws:ssm:eu-central-1:000000000000:parameter/acme/billing/idm-base-url"}
+       {:name "IDM_CLIENT_SECRET",
+        :valueFrom
+        "arn:aws:secretsmanager:eu-central-1:000000000000:secret:acme/billing/idm-client-secret-CM9VNW"}
+       {:name "INBOX_QUEUE",
+        :valueFrom
+        "arn:aws:ssm:eu-central-1:000000000000:parameter/acme/billing/inbox-queue"}],
+      :name "billing",
+      :portMappings
+      [{:containerPort 8082, :hostPort 0, :protocol "tcp"}],
+      :image "acme/billing:b508c373ed6d",
+      :environment
+      [{:name "AWS_ACCESS_KEY_ID", :value "test"}
+       {:name "AWS_ENDPOINT_URL",
+        :value "http://deliberator-acme-floci:4566"}
+       {:name "AWS_REGION", :value "eu-central-1"}
+       {:name "AWS_SECRET_ACCESS_KEY", :value "test"}],
+      :essential true}],
+    :compatibilities ["EC2" "FARGATE"],
+    :registeredBy "arn:aws:iam:eu-central-1:000000000000:root",
+    :status "ACTIVE",
+    :networkMode "awsvpc",
+    :cpu "256",
+    :executionRoleArn
+    "arn:aws:iam::000000000000:role/acme-task-execution"},
+   :tags
+   [{:key "git-sha", :value "b508c373ed6d8bcbdf9902ac2a6882e03e14aa65"}
+    {:key "run-id", :value "1"}]},
+  "arn:aws:ecs:eu-central-1:000000000000:task-definition/acme-billing:1"
+  {:taskDefinition
+   {:taskDefinitionArn
+    "arn:aws:ecs:eu-central-1:000000000000:task-definition/acme-billing:1",
+    :registeredAt #inst "2026-11-16T05:30:37.000-00:00",
+    :family "acme-billing",
+    :requiresCompatibilities ["FARGATE"],
+    :revision 1,
+    :requiresAttributes
+    [{:name "com.amazonaws.ecs.capability.docker-remote-api.1.18"}
+     {:name "ecs.capability.task-eni"}
+     {:name "com.amazonaws.ecs.capability.task-iam-role"}
+     {:name "com.amazonaws.ecs.capability.logging-driver.awslogs"}],
+    :memory "512",
+    :taskRoleArn "arn:aws:iam::000000000000:role/acme-billing",
+    :containerDefinitions
+    [{:logConfiguration
+      {:logDriver "awslogs",
+       :options
+       {:awslogs-group "/acme/billing",
+        :awslogs-region "eu-central-1",
+        :awslogs-stream-prefix "ecs"}},
+      :secrets
+      [{:name "BUS_NAME",
+        :valueFrom
+        "arn:aws:ssm:eu-central-1:000000000000:parameter/acme/billing/bus-name"}
+       {:name "DB_PASSWORD",
+        :valueFrom
+        "arn:aws:secretsmanager:eu-central-1:000000000000:secret:acme/billing/db-password-EDWFEG"}
+       {:name "DB_URL",
+        :valueFrom
+        "arn:aws:ssm:eu-central-1:000000000000:parameter/acme/billing/db-url"}
+       {:name "DB_USER",
+        :valueFrom
+        "arn:aws:ssm:eu-central-1:000000000000:parameter/acme/billing/db-user"}
+       {:name "IDM_BASE_URL",
+        :valueFrom
+        "arn:aws:ssm:eu-central-1:000000000000:parameter/acme/billing/idm-base-url"}
+       {:name "IDM_CLIENT_SECRET",
+        :valueFrom
+        "arn:aws:secretsmanager:eu-central-1:000000000000:secret:acme/billing/idm-client-secret-CM9VNW"}
+       {:name "INBOX_QUEUE",
+        :valueFrom
+        "arn:aws:ssm:eu-central-1:000000000000:parameter/acme/billing/inbox-queue"}],
+      :name "billing",
+      :portMappings
+      [{:containerPort 8082, :hostPort 0, :protocol "tcp"}],
+      :image "acme/billing:local",
+      :environment
+      [{:name "AWS_ACCESS_KEY_ID", :value "test"}
+       {:name "AWS_ENDPOINT_URL",
+        :value "http://deliberator-acme-floci:4566"}
+       {:name "AWS_REGION", :value "eu-central-1"}
+       {:name "AWS_SECRET_ACCESS_KEY", :value "test"}],
+      :essential true}],
+    :compatibilities ["EC2" "FARGATE"],
+    :registeredBy "arn:aws:iam:eu-central-1:000000000000:root",
+    :status "ACTIVE",
+    :networkMode "awsvpc",
+    :cpu "256",
+    :executionRoleArn
+    "arn:aws:iam::000000000000:role/acme-task-execution"}}},
+ :list-targets
+ {"d-803973498" {:targetIds ["acme:acme-billing"]},
+  "d-86DA1FAC1" {:targetIds ["acme-maintenance-down:live"]},
+  "d-8B094564A" {:targetIds ["acme-maintenance-down:live"]}},
+ :batch-get-targets
+ {"d-803973498"
+  {:deploymentTargets
+   [{:deploymentTargetType "ECSTarget",
+     :ecsTarget
+     {:deploymentId "d-803973498",
+      :targetId "acme:acme-billing",
+      :targetArn
+      "arn:aws:ecs:eu-central-1:000000000000:service/acme/acme-billing",
+      :lastUpdatedAt #inst "2026-11-16T05:40:15.000-00:00",
+      :lifecycleEvents
+      [{:lifecycleEventName "Install",
+        :startTime #inst "2026-11-16T05:40:15.000-00:00",
+        :endTime #inst "2026-11-16T05:40:15.000-00:00",
+        :status "Succeeded"}
+       {:lifecycleEventName "AllowTraffic",
+        :startTime #inst "2026-11-16T05:40:15.000-00:00",
+        :endTime #inst "2026-11-16T05:40:15.000-00:00",
+        :status "Succeeded"}],
+      :status "Succeeded",
+      :taskSetsInfo
+      [{:identifer "ecs-svc/53a00868dc2541c38e8ce03b91a363d7",
+        :desiredCount 1,
+        :pendingCount 0,
+        :runningCount 0,
+        :status "ACTIVE",
+        :trafficWeight 0.0}]}}]},
+  "d-86DA1FAC1"
+  {:deploymentTargets
+   [{:deploymentTargetType "LambdaFunction",
+     :lambdaTarget
+     {:deploymentId "d-86DA1FAC1",
+      :targetId "acme-maintenance-down:live",
+      :targetArn
+      "arn:aws:lambda:eu-central-1:000000000000:function:acme-maintenance-down:live",
+      :status "Succeeded",
+      :lastUpdatedAt #inst "2026-11-16T05:42:18.000-00:00",
+      :lifecycleEvents
+      [{:lifecycleEventName "BeforeAllowTraffic",
+        :startTime #inst "2026-11-16T05:42:16.000-00:00",
+        :endTime #inst "2026-11-16T05:42:18.000-00:00",
+        :status "Succeeded"}
+       {:lifecycleEventName "AllowTraffic",
+        :startTime #inst "2026-11-16T05:42:18.000-00:00",
+        :endTime #inst "2026-11-16T05:42:18.000-00:00",
+        :status "Succeeded"}]}}]},
+  "d-8B094564A"
+  {:deploymentTargets
+   [{:deploymentTargetType "LambdaFunction",
+     :lambdaTarget
+     {:deploymentId "d-8B094564A",
+      :targetId "acme-maintenance-down:live",
+      :targetArn
+      "arn:aws:lambda:eu-central-1:000000000000:function:acme-maintenance-down:live",
+      :status "Failed",
+      :lastUpdatedAt #inst "2026-11-16T05:43:11.000-00:00",
+      :lifecycleEvents
+      [{:lifecycleEventName "BeforeAllowTraffic",
+        :diagnostics
+        {:errorCode "UnknownError",
+         :message
+         "Lambda function acme-codedeploy-hook reported that lifecycle event BeforeAllowTraffic failed"},
+        :startTime #inst "2026-11-16T05:43:11.000-00:00",
+        :endTime #inst "2026-11-16T05:43:11.000-00:00",
+        :status "Failed"}]}}]}},
+ :get-group
+ {"acme/billing"
+  {:deploymentGroupInfo
+   {:loadBalancerInfo
+    {:targetGroupPairInfoList
+     [{:targetGroups
+       [{:name "acme-billing-blue"}
+        {:name "acme-billing-green"}],
+       :prodTrafficRoute
+       {:listenerArns
+        ["arn:aws:elasticloadbalancing:eu-central-1:000000000000:listener/app/acme/1/2"]}}]},
+    :applicationName "acme",
+    :deploymentGroupId "b39ec02c-a0a3-43c7-83db-b09ec601a4a1",
+    :serviceRoleArn
+    "arn:aws:iam::000000000000:role/acme-codedeploy",
+    :outdatedInstancesStrategy "UPDATE",
+    :ecsServices
+    [{:serviceName "acme-billing", :clusterName "acme"}],
+    :deploymentConfigName "CodeDeployDefault.ECSAllAtOnce",
+    :blueGreenDeploymentConfiguration
+    {:terminateBlueInstancesOnDeploymentSuccess {:action "TERMINATE"},
+     :deploymentReadyOption {:actionOnTimeout "CONTINUE_DEPLOYMENT"}},
+    :deploymentStyle
+    {:deploymentType "BLUE_GREEN",
+     :deploymentOption "WITH_TRAFFIC_CONTROL"},
+    :deploymentGroupName "billing"}},
+  "acme-lambda/maintenance-down"
+  {:deploymentGroupInfo
+   {:applicationName "acme-lambda",
+    :deploymentGroupId "b9d941b0-7ba9-4173-821c-0814f594c2a2",
+    :serviceRoleArn
+    "arn:aws:iam::000000000000:role/acme-codedeploy",
+    :outdatedInstancesStrategy "UPDATE",
+    :deploymentConfigName "CodeDeployDefault.LambdaAllAtOnce",
+    :deploymentStyle
+    {:deploymentType "BLUE_GREEN",
+     :deploymentOption "WITH_TRAFFIC_CONTROL"},
+    :deploymentGroupName "maintenance-down"}}},
+ :hook-config
+ {:Environment
+  {:Variables
+   {:AWS_ENDPOINT_URL "http://deliberator-acme-floci:4566"}},
+  :LastModified "2026-11-16T05:29:31.551+0000",
+  :CodeSha256 "PVpK0UwOlvnnwG0swG7qpvqlWQrboz0T8vnVQbG1Hqw=",
+  :Timeout 60,
+  :RuntimeVersionConfig
+  {:RuntimeVersionArn
+   "arn:aws:lambda:eu-central-1::runtime:0a306665fb0b30630599db6a1ba7dcd7ee45abfa256a16fb574789f9aa4df3aa"},
+  :EphemeralStorage {:Size 512},
+  :LastUpdateStatus "Successful",
+  :FunctionName "acme-codedeploy-hook",
+  :SnapStart {:ApplyOn "None", :OptimizationStatus "Off"},
+  :TracingConfig {:Mode "PassThrough"},
+  :FunctionArn
+  "arn:aws:lambda:eu-central-1:000000000000:function:acme-codedeploy-hook",
+  :RevisionId "002fc257-fcb7-4cf8-b371-b3498d7587d7",
+  :Description "",
+  :CodeSize 6224,
+  :PackageType "Zip",
+  :Architectures ["x86_64"],
+  :State "Active",
+  :Runtime "nodejs20.x",
+  :Role "arn:aws:iam::000000000000:role/acme-codedeploy-hook",
+  :MemorySize 128,
+  :Version "$LATEST",
+  :Handler "index.handler",
+  :LoggingConfig
+  {:LogFormat "Text",
+   :LogGroup "/aws/lambda/acme-codedeploy-hook"}},
+ :get-alias
+ {:AliasArn
+  "arn:aws:lambda:eu-central-1:000000000000:function:acme-maintenance-down:live",
+  :Name "live",
+  :FunctionVersion "2",
+  :Description "",
+  :RevisionId "f6da1476-eefc-4b95-974e-418e58ca698b"},
+ :list-deployments
+ {"acme/billing" {:deployments ["d-803973498"]},
+  "acme-lambda/maintenance-down"
+  {:deployments ["d-86DA1FAC1" "d-8B094564A"]},
+  :all {:deployments ["d-803973498" "d-86DA1FAC1" "d-8B094564A"]}},
+ :list-groups
+ {"acme"
+  {:applicationName "acme", :deploymentGroups ["billing"]},
+  "acme-lambda"
+  {:applicationName "acme-lambda",
+   :deploymentGroups ["maintenance-down"]}},
+ :list-applications {:applications ["acme-lambda" "acme"]},
+ :hook-log-events
+ {:events
+  [{:logStreamName "2026/11/16/[$LATEST]f26ffedc",
+    :timestamp 1794807738059,
+    :message
+    "2026-11-16T05:42:17.941Z\t0cf18cba-d9cb-4975-86b8-a9b6df661f46\tINFO\t2026-11-16T05:42:17.941Z INFO  codedeploy-hook [d-86DA1FAC1] hook BeforeAllowTraffic for Lambda deployment application=acme-lambda group=maintenance-down",
+    :ingestionTime 1794807738059,
+    :eventId "8baf04e7-1cae-4332-b77c-1914c0f2fffc"}
+   {:logStreamName "2026/11/16/[$LATEST]f26ffedc",
+    :timestamp 1794807738809,
+    :message
+    "2026-11-16T05:42:18.727Z\t0cf18cba-d9cb-4975-86b8-a9b6df661f46\tINFO\t2026-11-16T05:42:18.727Z INFO  codedeploy-hook [d-86DA1FAC1] probe of acme-maintenance-down:2 answer={\"probe\":\"ok\",\"function\":\"maintenance-down\",\"version\":\"2\"}",
+    :ingestionTime 1794807738809,
+    :eventId "b8add067-cf71-414c-b64c-a72bff62de8a"}
+   {:logStreamName "2026/11/16/[$LATEST]f26ffedc",
+    :timestamp 1794807738810,
+    :message
+    "2026-11-16T05:42:18.727Z\t0cf18cba-d9cb-4975-86b8-a9b6df661f46\tINFO\t2026-11-16T05:42:18.727Z INFO  codedeploy-hook [d-86DA1FAC1] hook Succeeded: the target version answered the probe",
+    :ingestionTime 1794807738810,
+    :eventId "c0529bab-5276-4253-a32a-94695d7a8f15"}
+   {:logStreamName "2026/11/16/[$LATEST]f26ffedc",
+    :timestamp 1794807792130,
+    :message
+    "2026-11-16T05:43:11.881Z\tf532b6b1-ba91-4f6e-a750-f6277b3dea9f\tINFO\t2026-11-16T05:43:11.881Z INFO  codedeploy-hook [d-8B094564A] hook BeforeAllowTraffic for Lambda deployment application=acme-lambda group=maintenance-down",
+    :ingestionTime 1794807792130,
+    :eventId "9ea733fa-6a81-4d1e-bd16-136ac0a71b87"}
+   {:logStreamName "2026/11/16/[$LATEST]f26ffedc",
+    :timestamp 1794807792131,
+    :message
+    "2026-11-16T05:43:11.885Z\tf532b6b1-ba91-4f6e-a750-f6277b3dea9f\tINFO\t2026-11-16T05:43:11.885Z WARN  codedeploy-hook [d-8B094564A] failing on purpose: the deployment's description says so description=run 1 FAIL_HOOK",
+    :ingestionTime 1794807792131,
+    :eventId "1418e07f-9887-4b15-bd6e-b952801d3a12"}
+   {:logStreamName "2026/11/16/[$LATEST]f26ffedc",
+    :timestamp 1794807792131,
+    :message
+    "2026-11-16T05:43:11.885Z\tf532b6b1-ba91-4f6e-a750-f6277b3dea9f\tINFO\t2026-11-16T05:43:11.885Z ERROR codedeploy-hook [d-8B094564A] hook Failed: failing on purpose (FAIL_HOOK in the deployment description)",
+    :ingestionTime 1794807792131,
+    :eventId "efa3de8f-88e6-4712-b11f-0f79abb292d3"}]}}

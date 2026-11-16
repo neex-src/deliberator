@@ -1073,8 +1073,8 @@
                (assoc (console/url ws env-name (select-keys args [:kind :name])) :signin-error (str "no sign-in: " (ex-message e))))))
       (console/url ws env-name (select-keys args [:kind :name])))))
 
-(defn- deploy-where [_ {:keys [sha run-id] :as args}]
-  (deploy/where (ws-of args) {:sha sha :run-id run-id}))
+(defn- deploy-where [_ {:keys [sha run-id repo] :as args}]
+  (deploy/where (ws-of args) {:sha sha :run-id run-id :repo repo}))
 
 (defn- deploy-show [ctx {:keys [service deployment env cached] :as args}]
   (let [ws (ws-of args) env-name (or env "local")]
@@ -1335,7 +1335,7 @@
                     :args (ws-schema :service {:type :string :positional true :doc "service or function name, or cluster/name; default all"}
                                      :env {:type :string :doc "environment name; default local"})}
    "deploy.list" {:fn deploy-list :class :mutate
-                  :doc "The deployments of an ECS service (newest first): id, status, rollout state and reason, started, finished, revision and image before -> after, the commit and CI run of the revision (task definition tags git-sha and run-id). From ECS's service-deployment calls, else (the call is not there or not allowed) the service's deployments from DescribeServices; plus the CodeDeploy deployments of its group where the account has CodeDeploy. For a Lambda function: its versions and last update. Read calls only, every response persisted raw; writes cache/<env>/deploy/<cluster>/<service>/list.txt."
+                  :doc "The deployments of an ECS service (newest first): id, status, rollout state and reason, started, finished, revision and image before -> after, the commit and CI run of the revision (task definition tags git-sha and run-id). From ECS's service-deployment calls, else (the call is not there or not allowed) the service's deployments from DescribeServices; plus the CodeDeploy deployments of its group where the account has CodeDeploy (id d-..., application and group, status, what it deployed: the ECS revision and image, or the Lambda versions the alias moves between, the error code and message of a failed one). For a Lambda function: its CodeDeploy deployments (the ones whose appspec moves an alias of the function), its versions and last update. Read calls only, every response persisted raw; writes cache/<env>/deploy/<cluster>/<service>/list.txt. CodeDeploy deployments are read as the real API answers them, but this has only been checked against the local emulator, not against real CodeDeploy."
                   :args (ws-schema :service {:type :string :required true :doc "ECS service (name or cluster/name) or Lambda function"}
                                    :env {:type :string :doc "environment name; default local"}
                                    :limit {:type :int :doc "at most this many deployments; default 20"}
@@ -1373,19 +1373,20 @@
                                    :env {:type :string :doc "a remote environment"}
                                    :reveal {:type :bool :doc "build the sign-in link (a secret) and include it"})}
    "deploy.where" {:fn deploy-where :class :read
-                    :doc "The deployments that carry a commit (sha, a full commit or a prefix of at least 7 characters) or were made by a CI run (run-id), newest first, with the notes `deployed to <env>: <service> revision N`: read from the environments' caches (deployed.edn and the deploy lists), no AWS call."
+                    :doc "The deployments that carry a commit (sha, a full commit or a prefix of at least 7 characters) or were made by a CI run (run-id), newest first, with the notes `deployed to <env>: <service> revision N`: read from the environments' caches (deployed.edn and the deploy lists), no AWS call. A local run (local-<n>) also finds the CodeDeploy deployments created inside the window of its deploy job: nothing else ties a Lambda deployment to a run on the emulator, and such a row says `tied` by time."
                     :args (ws-schema :sha {:type :string :doc "commit"}
-                                     :run-id {:type :string :doc "CI run id"})}
+                                     :run-id {:type :string :doc "CI run id"}
+                                     :repo {:type :string :doc "owner/name: narrows a local run number (local-<n> counts per repository)"})}
    "deploy.show" {:fn deploy-show :class :mutate
-                   :doc "ONE text file for a deployment (default the newest): the header (status, rollout, window, revision and image before -> after, commit and CI run), the service's events inside the deployment's window, the tasks it started and replaced (stop code, reason, exit codes) and the log lines of the started tasks' containers in time order, each line naming its container (CloudWatch from the task definition's awslogs options; on a local environment the runtime's container logs). cache/<env>/deploy/<cluster>/<service>/<deployment>.txt. cached answers from that file with its age, no AWS call. Read calls only."
+                   :doc "ONE text file for a deployment (default the newest): the header (status, rollout, window, revision and image before -> after, commit and CI run), the service's events inside the deployment's window, the tasks it started and replaced (stop code, reason, exit codes) and the log lines of the started tasks' containers in time order, each line naming its container (CloudWatch from the task definition's awslogs options; on a local environment the runtime's container logs). cache/<env>/deploy/<cluster>/<service>/<deployment>.txt. A CodeDeploy deployment (id d-..., of an ECS service or of a Lambda function) adds: the application, group, config and error code and message, the appspec's task definition or alias versions, a rollback and why, `== targets` with each target's lifecycle events (name, status, start, end, the diagnostics' error code, message and log tail), and `== hook log` (the log lines of the hook functions the appspec names, inside the deployment's window, each saying which function); what the endpoint does not answer is said as `the endpoint gave none`. cached answers from that file with its age, no AWS call. Read calls only. CodeDeploy deployments are read as the real API answers them, but this has only been checked against the local emulator, not against real CodeDeploy."
                    :args (ws-schema :service {:type :string :required true :doc "ECS service (name or cluster/name) or Lambda function"}
                                     :deployment {:type :string :positional true :doc "ecs-svc/<n>, <n>, a service-deployment ARN or a CodeDeploy id; default the newest"}
                                     :env {:type :string :doc "environment name; default local"}
                                     :cached {:type :bool :doc "the file of the last show, from disk, with its age"})}
    "deploy.follow" {:fn deploy-follow :class :mutate
-                     :doc "The deploy text of a rollout while it runs: the same file rewritten after every change, every new event, task state and log line streamed as deploy.line; ends when the rollout completes or fails (a rollout that keeps starting tasks that die is failing after three) or after timeout seconds; a failure ends with the stop reasons and the container's last lines. Quiet polls: an unchanged answer is persisted once."
+                     :doc "The deploy text of a rollout while it runs: the same file rewritten after every change, every new event, task state and log line streamed as deploy.line; ends when the rollout completes or fails (a rollout that keeps starting tasks that die is failing after three) or after timeout seconds; a failure ends with the stop reasons and the container's last lines. A CodeDeploy deployment (d-..., also of a Lambda function) is followed too: its lifecycle events and its hook function's lines stream as deploy.line, a failure ends with its error code, the failed lifecycle events and the hook's last lines. Quiet polls: an unchanged answer is persisted once. CodeDeploy deployments are read as the real API answers them, but this has only been checked against the local emulator, not against real CodeDeploy."
                      :events ["deploy.line"]
-                     :args (ws-schema :service {:type :string :required true :doc "ECS service (name or cluster/name)"}
+                     :args (ws-schema :service {:type :string :required true :doc "ECS service (name or cluster/name), or a Lambda function for its CodeDeploy deployments"}
                                       :deployment {:type :string :positional true :doc "ecs-svc/<n> ...; default the newest"}
                                       :env {:type :string :doc "environment name; default local"}
                                       :timeout {:type :int :doc "stop following after this many seconds; default 900"}

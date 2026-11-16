@@ -954,11 +954,64 @@
   (vec (distinct (for [r (by-commit ws sha)]
                    (str "deployed to " (:env r) ": " (:service r) (when (:revision r) (str " revision " (:revision r))))))))
 
+(defn- local-run-windows
+  "The windows of the local runs numbered like `run-id` (`local-<n>`; the number is per repository, so `repo` narrows): the deploy job's window (every job
+  when none is named like that) from the kept `run.edn`. -> `[{:repo :run :from :to :what}]`."
+  [ws run-id repo]
+  (when-let [[_ n] (re-matches #"local-(\d+)" (str run-id))]
+    (let [root (.toFile (store/path ws "ci" "local"))]
+      (vec (for [rd (or (.listFiles root) []) :when (and (.isDirectory rd) (or (str/blank? repo) (= (str/replace repo #"[^A-Za-z0-9._-]+" "-") (.getName rd))))
+                 af (or (.listFiles rd) []) :when (re-matches (re-pattern (str n "-\\d+")) (.getName af))
+                 :let [f (io/file af "run.edn")] :when (.isFile f)
+                 :let [m (try (store/read-edn (.toPath f)) (catch Throwable _ nil))
+                       jobs (:jobs m)
+                       dj (seq (filter #(re-find #"(?i)deploy" (str (:id %) " " (:name %))) jobs))
+                       js (or dj jobs)
+                       from (->> js (keep #(->inst (:started-at %))) sort first)
+                       to (->> js (keep #(->inst (:completed-at %))) sort last)]
+                 :when (and from to)]
+             {:repo (.getName rd) :run run-id :from from :to to :what (if dj "deploy job" "run")})))))
+
+(defn- cd-cache-rows
+  "The CodeDeploy rows the caches know (`deploy/**.edn`), a Lambda's with no cluster. No AWS call."
+  [ws]
+  (vec (for [e (env/names ws)
+             :let [root (.toFile (store/path ws "cache" (store/safe-name e) "deploy"))]
+             f (file-seq root)
+             :when (and (.isFile ^java.io.File f) (str/ends-with? (.getName ^java.io.File f) ".edn"))
+             :let [m (try (store/read-edn (.toPath ^java.io.File f)) (catch Throwable _ nil))]
+             r (concat (:rows m) (when (:row m) [(:row m)]))
+             :when (= :codedeploy (:source r))]
+         {:env (:env r) :cluster (when-not (= "lambda" (:cluster r)) (:cluster r)) :service (:service r) :revision (:revision-after r) :deployment (:id r)
+          :status (:status r) :rollout-state (:rollout-state r) :started (:started r) :created (:created r) :git-sha (:git-sha r) :run-id (:run-id r)
+          :platform (:platform r)})))
+
+(defn by-run-window
+  "The CodeDeploy deployments (from the caches) created inside the window of the deploy job of local run `run-id`: nothing but the time ties them
+  (a Lambda deployment's description is `run <GITHUB_RUN_ID>`, which is 1 under act; an ECS one has the commit through its task definition). Each row says so
+  in `:tied`. -> rows newest first."
+  [ws run-id repo]
+  (let [wins (local-run-windows ws run-id repo)
+        rows (cd-cache-rows ws)]
+    (->> (for [w wins r rows
+               :let [at (or (:created r) (:started r))]
+               :when (and at (not (before? at (.minusSeconds ^Instant (:from w) 2))) (not (before? (.plusSeconds ^Instant (:to w) 2) at)))]
+           (assoc r :tied (str "by time: created inside the window of the " (:what w) " of " run-id " (" (:repo w) ", " (:from w) " .. " (:to w) ")")))
+         (reduce (fn [m r] (assoc m [(:env r) (:service r) (:deployment r)] r)) {})
+         vals
+         (sort-by #(- (.toEpochMilli ^Instant (or (:started %) Instant/EPOCH))))
+         vec)))
+
 (defn where
   "`deploy.where`: the deployments that carry a commit (`:sha`) or were made by a CI run (`:run-id`), from the caches only: `{:rows [...] :notes [...]}`
-  (the rows of `by-commit` / `by-run-id`, the strings of `commit-notes`)."
-  [ws {:keys [sha run-id]}]
+  (the rows of `by-commit` / `by-run-id`, the strings of `commit-notes`). A run `local-<n>` also finds the CodeDeploy deployments created inside the
+  window of its deploy job (`:repo` narrows the run number to a repository), each marked `:tied`."
+  [ws {:keys [sha run-id repo]}]
   (cond (not (str/blank? sha)) {:rows (by-commit ws sha) :notes (commit-notes ws sha)}
-        (not (str/blank? run-id)) (let [rs (by-run-id ws run-id)]
-                                    {:rows rs :notes (vec (distinct (for [r rs] (str "deployed to " (:env r) ": " (:service r) (when (:revision r) (str " revision " (:revision r)))))))})
+        (not (str/blank? run-id)) (let [rs (by-run-id ws run-id)
+                                        ids (set (map :deployment rs))
+                                        ws* (remove #(contains? ids (:deployment %)) (by-run-window ws run-id repo))
+                                        rs (vec (concat rs ws*))]
+                                    {:rows rs :notes (vec (distinct (for [r rs] (str "deployed to " (:env r) ": " (:service r) (when (:revision r) (str " revision " (:revision r)))
+                                                                                    (when (:tied r) (str " (" (:tied r) ")"))))))})
         :else (fail :deploy/no-key "deploy.where needs a sha or a run-id" :hint "dlb deploy where --sha <commit>")))
