@@ -284,6 +284,23 @@
                 text="Open Deployment" description="deploy.where: the deployment that carries this run's commit; its deploy text opens">
             <add-to-group group-id="deliberator.ci" anchor="last"/>
         </action>
+        <!-- piece 05 stage 2: EventBridge in the AWS tab, the console link, the two scenario actions (own file explorer/EventsActions.kt) -->
+        <action id="deliberator.explorer.console" icon="AllIcons.General.Web" class="com.neex.deliberator.explorer.OpenInConsoleAction"
+                text="Open in AWS Console" description="console.url: the AWS console's page for this row (remote environments only); with :console {:signin true} in the record the browser is signed in with a 15 minute READ-ONLY session">
+            <add-to-group group-id="deliberator.explorer" anchor="last"/>
+        </action>
+        <action id="deliberator.explorer.newEvent" icon="AllIcons.Actions.Lightning" class="com.neex.deliberator.explorer.NewEventForRuleAction"
+                text="New Event for This Rule" description="events.sample: an event that matches the rule's pattern as an eventbridge put step, at the caret of the open scenario">
+            <add-to-group group-id="deliberator.explorer" anchor="last"/>
+        </action>
+        <action id="deliberator.explorer.targetLogs" icon="AllIcons.Actions.ShowAsTree" class="com.neex.deliberator.explorer.OpenTargetLogsAction"
+                text="Open Logs of This Target" description="A Lambda target: the newest events of its log group as a read step">
+            <add-to-group group-id="deliberator.explorer" anchor="last"/>
+        </action>
+        <action id="deliberator.scenario.whoReceives" icon="AllIcons.Actions.Find" class="com.neex.deliberator.explorer.WhoReceivesAction"
+                text="Who Receives This" description="events.who: the rules of the cached EventBridge map the PutEvents step at the caret would match, and what they deliver to">
+            <add-to-group group-id="deliberator.scenario" anchor="last"/>
+        </action>
         <group id="deliberator.toolwindow.actions">
             <action id="deliberator.workspace.create" icon="AllIcons.General.Add" class="com.neex.deliberator.actions.CreateWorkspaceAction" text="Open Workspace" description="The workspace of this project does not exist yet: workspace.open creates it"/>
             <action id="deliberator.workspace.refresh" icon="AllIcons.Actions.Refresh" class="com.neex.deliberator.actions.RefreshAction" text="Refresh" description="Re-read the workspace from the daemon"/>

@@ -50,6 +50,10 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     private val root = DefaultMutableTreeNode("environment")
     private val model = DefaultTreeModel(root)
     private val tree = Tree(model)
+    /** The EventBridge node: bus -> rule -> target, reconciled in place (piece 05). */
+    internal val events = EventsTree(project, model, tree)
+    private val search = com.intellij.ui.components.JBTextField(20).apply { emptyText.text = "Search EventBridge: bus, rule, pattern, target"; toolTipText = "Filters the EventBridge node: the bus, the rule's name, its pattern text, its targets" }
+    private var rendered = false
     private val status = JBLabel(" ")
     private val envBox = JComboBox<String>()
     private var loadingEnvs = false
@@ -86,7 +90,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                         u.link?.let { append("   -> ${it.text()}", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
                     }
                     is MissingNode -> { append(u.name, SimpleTextAttributes(SimpleTextAttributes.STYLE_STRIKEOUT, java.awt.Color.GRAY)); append("   declared, not in the environment" + (u.address?.let { "  ($it)" } ?: ""), SimpleTextAttributes.ERROR_ATTRIBUTES) }
-                    else -> append(u.toString())
+                    else -> if (!events.paint(this, u)) append(u.toString())
                 }
             }
         }
@@ -106,11 +110,38 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
         envBox.addActionListener { if (!loadingEnvs) (envBox.selectedItem as? String)?.let { pick -> WorkspaceService.getInstance(project).selectEnv(pick.substringBefore("  ")); refresh() } }
         add(JPanel(BorderLayout()).apply {
             add(JPanel(BorderLayout()).apply { add(envBox, BorderLayout.WEST); add(status, BorderLayout.CENTER) }, BorderLayout.CENTER)
-            add(JPanel().apply { add(refreshState); add(driftButton); add(planButton); add(applyButton); add(refresh) }, BorderLayout.EAST)
+            add(JPanel().apply { add(search); add(refreshState); add(driftButton); add(planButton); add(applyButton); add(refresh) }, BorderLayout.EAST)
         }, BorderLayout.NORTH)
         add(JBScrollPane(tree), BorderLayout.CENTER)
+        search.document.addDocumentListener(object : javax.swing.event.DocumentListener {
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = events.search(search.text)
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = events.search(search.text)
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = events.search(search.text)
+        })
         refresh()
     }
+
+    /** Types into the search field (tests, a clip). EDT. */
+    internal fun searchFor(text: String) { search.text = text }
+
+    private fun keyOf(u: Any?): String = when (u) {
+        is KindNode -> "k:${u.kind}"; is ResNode -> "r:${u.kind}:${u.r.name}"; is MissingNode -> "m:${u.name}"; is EvKey -> u.key; else -> u.toString()
+    }
+    private fun pathKey(p: javax.swing.tree.TreePath) = p.path.drop(1).joinToString("/") { keyOf((it as DefaultMutableTreeNode).userObject) }
+
+    /** The path of keys of the selected node (tests). */
+    internal fun selectedKeyForTests(): String = tree.selectionPath?.let { pathKey(it) } ?: ""
+
+    /** Selects the node of the tree whose path of keys is [key] (tests, and a target leading to its own row). EDT. */
+    internal fun selectKey(key: String): Boolean {
+        val n = root.depthFirstEnumeration().toList().map { it as DefaultMutableTreeNode }.firstOrNull { pathKey(javax.swing.tree.TreePath(it.path)) == key } ?: return false
+        val path = javax.swing.tree.TreePath(n.path)
+        tree.expandPath(path.parentPath); tree.selectionPath = path; tree.scrollPathToVisible(path)
+        return true
+    }
+
+    /** The row of explorer kind [kind] named [name]: selected when it is there. EDT. */
+    internal fun selectResource(kind: String, name: String): Boolean = selectKey("k:$kind/r:$kind:$name")
 
     private fun env() = WorkspaceService.getInstance(project).selectedEnv
 
@@ -120,6 +151,9 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     /** The row's service (M6.4) and, for a drift row, its address: the data of the popup actions. */
     override fun uiDataSnapshot(sink: com.intellij.openapi.actionSystem.DataSink) {
         val u = (tree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject
+        sink[EventsTree.RULE] = (u as? EvRule)?.rule ?: (u as? EvTarget)?.rule
+        sink[EventsTree.TARGET] = (u as? EvTarget)?.target
+        sink[EventsTree.CONSOLE] = consoleThing(u)
         sink[ServiceLinks.LINK] = (u as? ResNode)?.link
         sink[DRIFT_ADDRESS] = (u as? MissingNode)?.address
         sink[EXPLORER] = this
@@ -146,6 +180,18 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                 failed("Terraform locate", "locate", e)
             }
         }
+    }
+
+    /** What Open in AWS Console opens for a node: the console's kind and name, null for a row with no page of its own. */
+    private fun consoleThing(u: Any?): ConsoleThing? = when (u) {
+        is ResNode -> when (u.kind) {
+            "sqs" -> "queue"; "dynamodb" -> "table"; "lambda" -> "lambda"; "logs" -> "log-group"; "ssm" -> "parameter"; "eventbridge" -> "bus"
+            "ecs-services" -> "ecs-service"; "ecs-taskdefs" -> "task-definition"; else -> null
+        }?.let { ConsoleThing(it, u.r.name) }
+        is EvBus -> ConsoleThing("bus", u.bus.name)
+        is EvRule -> ConsoleThing("rule", u.rule.key)
+        is EvTarget -> when (u.target.kind) { "lambda" -> ConsoleThing("lambda", u.target.name); "sqs" -> ConsoleThing("queue", u.target.name); else -> null }
+        else -> null
     }
 
     /** The status line (tests). */
@@ -271,11 +317,15 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
             val res = AwsResources.getInstance().fetchNow(project)
             ApplicationManager.getApplication().invokeLater({ render(res) }, ModalityState.any())
         }
+        events.load(env())
     }
 
     fun render(res: Map<String, List<LiveResource>>) {
         fillEnvs()
         refreshState.isEnabled = remote()
+        val before = root.depthFirstEnumeration().toList().map { pathKey(javax.swing.tree.TreePath((it as DefaultMutableTreeNode).path)) }.toSet()
+        val expanded = (0 until tree.rowCount).mapNotNull { tree.getPathForRow(it) }.filter { tree.isExpanded(it) }.map { pathKey(it) }.toSet()
+        val selected = tree.selectionPath?.let { pathKey(it) }
         root.removeAllChildren()
         var total = 0
         val dr = drift?.takeIf { it.env == env() }
@@ -290,8 +340,17 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
                 root.add(n)
             }
         }
+        root.add(events.node)
         model.reload()
-        for (i in 0 until tree.rowCount) tree.expandRow(i)
+        if (!rendered) { rendered = true; for (i in 0 until tree.rowCount) tree.expandRow(i) }
+        else {
+            // the tree was rebuilt by the kinds' refresh: what was open stays open, what was selected stays selected (the EventBridge subtree is the same nodes)
+            root.depthFirstEnumeration().toList().map { it as DefaultMutableTreeNode }.forEach { n ->
+                val k = pathKey(javax.swing.tree.TreePath(n.path))
+                if (k.isNotEmpty() && (k in expanded || (n.userObject is KindNode && k !in before))) tree.expandPath(javax.swing.tree.TreePath(n.path))
+                if (k == selected) tree.selectionPath = javax.swing.tree.TreePath(n.path)
+            }
+        }
         // found with a profile that may read nothing: "is the runtime up?" is the answer for a local environment only
         val errs = if (remote()) AwsResources.getInstance().errors(project) else emptyMap()
         status.toolTipText = errs.entries.joinToString("\n") { "${it.key}: ${it.value}" }.ifEmpty { null }
@@ -303,7 +362,7 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
     }
 
     /** Text of the tree as lines `kind: name` (for tests); drift marks as ` [undeclared]` / ` [missing]`. */
-    fun lines(): List<String> = (0 until root.childCount).flatMap { k ->
+    fun lines(): List<String> = (0 until root.childCount).filter { (root.getChildAt(it) as DefaultMutableTreeNode).userObject is KindNode }.flatMap { k ->
         val kn = root.getChildAt(k) as DefaultMutableTreeNode
         val kind = (kn.userObject as KindNode).kind
         (0 until kn.childCount).map {
@@ -317,11 +376,31 @@ class AwsExplorerPanel(private val project: Project) : JPanel(BorderLayout()), D
 
     private fun open() {
         val sel = (tree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject
+        if (sel is EvRule) { openRule(sel.rule); return }
+        if (sel is EvTarget) { openTarget(sel.target); return }
         if (sel is MissingNode) { sel.address?.let(::openDeclaration); return }
         if (sel is ResNode && sel.changed != null) { openDeclaration(sel.changed.address); return }   // a resource changed by hand: its declaration
         val n = sel as? ResNode ?: return
         val step = ExplorerSteps.step(n.kind, n.r) ?: return
         openStep(env(), step)
+    }
+
+    /** Enter on a rule: the rule as text (the pattern as JSON, its targets), written by the daemon (`explore.write`) and opened. */
+    fun openRule(rule: RuleRow) {
+        val e = env()
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val text = rule.text(e, events.map?.age)
+                val path = writeText("events-$e-${rule.bus}--${rule.name}.txt".replace(Regex("[^A-Za-z0-9._-]"), "-"), text)
+                Ui.openFileLater(project, path)
+            } catch (x: Exception) { failed("EventBridge", "open rule", x) }
+        }
+    }
+
+    /** Enter on a target: the explorer's own row for what it delivers to (the function, the queue, the topic ...), selected; a target with no row here says so. */
+    fun openTarget(t: TargetRow) {
+        val kind = when (t.kind) { "lambda" -> "lambda"; "sqs" -> "sqs"; "sns" -> "sns"; "states" -> "states"; "kinesis" -> "kinesis"; "events" -> "eventbridge"; else -> null }
+        if (kind == null || !selectResource(kind, t.name)) status.text = "${t.kind} ${t.name}: no row of its own in this view (${t.arn})"
     }
 
     override fun dispose() {}

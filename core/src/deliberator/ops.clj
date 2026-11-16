@@ -1061,10 +1061,17 @@
     (when refresh (verify-remote! ctx ws env-name))
     (events/sample ws env-name (select-keys args [:rule :bus :refresh]))))
 
-(defn- console-url [ctx {:keys [env] :as args}]
+(defn- console-url [ctx {:keys [env reveal] :as args}]
   (let [ws (ws-of args) env-name (or env "local")]
-    (verify-remote! ctx ws env-name)
-    (console/url ws env-name (select-keys args [:kind :name :reveal]))))
+    ;; the plain link needs no AWS call; the sign-in uses the record's credentials, so the account is checked first: a profile that cannot be checked gets the plain link and why
+    (if reveal
+      (try (verify-remote! ctx ws env-name)
+           (console/url ws env-name (select-keys args [:kind :name :reveal]))
+           (catch clojure.lang.ExceptionInfo e
+             (if (#{:console/no-console :console/bad-kind :console/bad-name :console/no-thing :env/not-found} (:type (ex-data e)))
+               (throw e)
+               (assoc (console/url ws env-name (select-keys args [:kind :name])) :signin-error (str "no sign-in: " (ex-message e))))))
+      (console/url ws env-name (select-keys args [:kind :name])))))
 
 (defn- deploy-where [_ {:keys [sha run-id] :as args}]
   (deploy/where (ws-of args) {:sha sha :run-id run-id}))
