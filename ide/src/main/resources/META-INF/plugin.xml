@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>com.neex.deliberator</id>
     <name>Deliberator</name>
-    <vendor email="dev@neex.dev">NEEX</vendor>
+    <vendor url="https://neex.dev" email="dev@neex.dev">NEEX</vendor>
     <description><![CDATA[
         Deliberating a microservice and event-driven AWS estate from the IDE: the plugin talks to the
         <code>deliberatord</code> daemon it ships, which runs on the IDE's own runtime.
