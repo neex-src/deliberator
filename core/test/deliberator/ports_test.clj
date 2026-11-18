@@ -66,3 +66,15 @@
         (let [cfg (#'runtime/allocate-service-ports! c "third" (runtime/read-config "third"))]
           (is (= 39999 (get-in cfg [:services "a" :ports fp])))
           (is (not= 39999 (get-in cfg [:services "a" :ports (+ fp 3)]))))))))
+
+(deftest a-port-that-fails-at-bind-is-found-in-the-error-and-in-runtime-edn
+  (testing "the engine's error names the host port"
+    (is (= 8081 (runtime/failed-host-port {8081 8081 5005 5005}
+                                          "starting service-a failed on a host port: podman POST /v5.0.0/libpod/containers/33990e15e4dc/start -> 500: something went wrong with the request: \"listen tcp 127.0.0.1:8081: bind: address already in use\\n\"")))
+    (is (= 18081 (runtime/failed-host-port {8081 18081} "Bind for 0.0.0.0:18081 failed: port is already allocated")))
+    (is (nil? (runtime/failed-host-port {8081 8081} "no such image"))))
+  (testing "runtime.edn says where the port is: an infrastructure container's or a service's"
+    (let [cfg {:containers {:floci {:ports {4566 4666}}} :services {"a" {:ports {8081 8081 5005 5005}}}}]
+      (is (= [:containers :floci :ports 4566] (runtime/port-path cfg 4666)))
+      (is (= [:services "a" :ports 8081] (runtime/port-path cfg 8081)))
+      (is (nil? (runtime/port-path cfg 9999))))))

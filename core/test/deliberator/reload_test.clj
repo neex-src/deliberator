@@ -94,8 +94,16 @@
   (testing "the hotswap image needs a main class"
     (is (= :service/invalid (:type (ex-data (try (description/validate (dissoc base :main)) (catch clojure.lang.ExceptionInfo e e))))))
     (is (some? (description/validate (assoc (dissoc base :main) :image description/plain-image)))))
-  (testing "image.edn and the core default name the same image"
-    (is (= description/hotswap-image (:image (edn/read-string (slurp "../estate/images/jbr21/image.edn")))))))
+  (testing "every hotswap image of image.edn is hotswap, whatever its Java major"
+    (is (= :hotswap (description/image-kind (assoc base :image "localhost/deliberator/jbr21-hotswap:21.0.11"))))
+    (is (= :plain (description/image-kind (assoc base :image "localhost/other/jbr21-hotswap:1")))))
+  (testing "image.edn's default and the core default name the same image; every image has an archive for amd64 and arm64"
+    (let [{:keys [default jbr]} (edn/read-string (slurp "../estate/images/hotswap/image.edn"))]
+      (is (= description/hotswap-image (:image (get jbr default))))
+      (doseq [[major m] jbr arch ["amd64" "arm64"]]
+        (is (description/hotswap-image? (:image m)) major)
+        (is (re-find (if (= arch "amd64") #"linux-x64" #"linux-aarch64") (:file (get m arch))) (str major " " arch))
+        (is (= 128 (count (:sha512 (get m arch)))) (str major " " arch))))))
 
 (deftest reload-command-is-derived-from-the-build
   (let [rc (description/reload-config base)]

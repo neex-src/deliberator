@@ -35,8 +35,14 @@
            (java.nio.file Files LinkOption Path)))
 
 (def hotswap-image
-  "The service image of the estate (JBR + HotswapAgent, `estate/images/jbr21/`, built by `bb estate:build`)."
-  "localhost/deliberator/jbr21-hotswap:21.0.11")
+  "The default service image of the estate (JBR 25 + HotswapAgent, `estate/images/hotswap/`, built by `bb estate:build` for the
+  architecture of the podman that runs it)."
+  "localhost/deliberator/jbr25-hotswap:25.0.5")
+
+(defn hotswap-image?
+  "A hotswap service image of any Java major: `localhost/deliberator/jbr<N>-hotswap:<version>` (image.edn names them)."
+  [image]
+  (boolean (and image (re-find #"^localhost/deliberator/jbr\d+-hotswap:" image))))
 (def plain-image "docker.io/library/eclipse-temurin:21-jre")
 (def default-image hotswap-image)
 (def kinds #{:spring-boot :node-lambda :container})
@@ -45,9 +51,9 @@
 
 (defn image-kind
   "`:hotswap` (JBR + HotswapAgent, exploded classpath, in-process reload) or `:plain` (a JRE running the fat jar, JDWP
-  reload). `:image-kind` says it; else an absent `:image` or the hotswap image is hotswap and any other image is plain."
+  reload). `:image-kind` says it; else an absent `:image` or a hotswap image (`hotswap-image?`) is hotswap and any other image is plain."
   [{:keys [image image-kind]}]
-  (or image-kind (if (or (nil? image) (= image hotswap-image)) :hotswap :plain)))
+  (or image-kind (if (or (nil? image) (hotswap-image? image)) :hotswap :plain)))
 
 (defn dir [ws] (store/path ws "services"))
 (defn path [ws name] (store/path ws "services" (str (store/safe-name name) ".edn")))
