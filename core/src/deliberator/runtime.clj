@@ -560,7 +560,7 @@
        (catch clojure.lang.ExceptionInfo e
          (if (re-find #"(?i)address already in use|port is already allocated|bind" (str (ex-message e)))
            (throw (ex-info (str "starting " (:role d) " failed on a host port: " (ex-message e))
-                           {:type :runtime/port-conflict :role (:role d) :ports (:ports d)} e))
+                           {:type :runtime/port-conflict :role (:role d) :ports (:ports d) :at-start true} e))
            (throw e)))))
 
 (defn- reconcile! [c ws d socket-path sink]
@@ -629,13 +629,13 @@
 
 (declare status)
 
-(defn ensure!
+(defn- ensure-once!
   "Reconciles the runtime of `ws` with its `runtime.edn` and the service descriptions and waits until it is healthy.
   Idempotent. `:only` (role labels such as \"service-a\") reconciles just those. `:skip-unbuilt` leaves a service whose jar or exploded
   classpath is not built alone (a `runtime.skipped` event) instead of failing with `runtime/missing-jar`. `:secrets-from` `{role {:env \"local2\"
   :values {ENV value}}}` creates that role with those real secret values instead of the local fakes.
   -> `(status ws)`."
-  ([ws] (ensure! ws {}))
+  ([ws] (ensure-once! ws {}))
   ([ws {:keys [sink timeout-ms infra-only only secrets-from skip-unbuilt] :or {timeout-ms default-timeout-ms}}]
    (let [cfg (load-config! ws sink)
          cfg (if infra-only cfg (allocate-service-ports! (connect-client ws cfg) ws cfg))
@@ -696,6 +696,61 @@
          (doseq [{:keys [d id]} started]
            (await-healthy! c ws d id sink timeout-ms))))
      (status ws))))
+
+;; a host port that cannot be bound -------------------------------------------------------------------------
+;; `check-ports!` and `pick-port` look at the host the daemon can see. With the engine behind something else (a podman machine
+;; on a Mac, with the daemon in a container next to it) a port can be free there and taken on the machine in front: the bind
+;; fails only when the container starts. Then the port is moved, as allocation would have done had it known: the next free
+;; candidate (+100 ...), written to runtime.edn, the `local` environment follows, and the start is tried again.
+
+(defn failed-host-port
+  "The host port of `ports` ({container-port host-port}) that the engine's start error `msg` names (`listen tcp 127.0.0.1:8081:
+  bind: address already in use`, `Bind for 0.0.0.0:8081 failed: port is already allocated`), or nil."
+  [ports msg]
+  (some (set (vals ports)) (map #(parse-long (second %)) (re-seq #":(\d{2,5})\b" (str msg)))))
+
+(defn port-path
+  "Where runtime.edn `cfg` holds host port `hp`: `[:containers role :ports cp]` or `[:services name :ports cp]`, or nil (a
+  port the service description pins is not runtime.edn's to move)."
+  [cfg hp]
+  (or (some (fn [[role spec]] (some (fn [[cp p]] (when (= p hp) [:containers role :ports cp])) (:ports spec))) (:containers cfg))
+      (some (fn [[n spec]] (some (fn [[cp p]] (when (= p hp) [:services n :ports cp])) (:ports spec))) (:services cfg))))
+
+(defn- move-port!
+  "After a start that failed on a host port (`e`): that port moved to the next free candidate in runtime.edn. -> the new port,
+  nil when the error names no port runtime.edn holds."
+  [ws sink e]
+  (let [{:keys [ports role]} (ex-data e)
+        cfg (read-config ws)
+        hp (failed-host-port ports (str (ex-message e) " " (some-> (ex-cause e) ex-message)))
+        path (when hp (port-path cfg hp))]
+    (when path
+      (let [p (pick-port (connect-client ws cfg) ws (+ hp port-step) (conj (into (claimed-ports ws) (cfg-host-ports cfg)) hp))
+            cfg' (assoc-in cfg path p)]
+        (store/write-edn! (config-path ws) cfg')
+        (sync-local-env! ws cfg')
+        (emit sink {:event "runtime.port-moved" :role role :from hp :to p
+                    :reason "the host port could not be bound when the container started"})
+        p))))
+
+(defn ensure!
+  "Reconciles the runtime of `ws` with its `runtime.edn` and the service descriptions and waits until it is healthy.
+  Idempotent. `:only` (role labels such as \"service-a\") reconciles just those. `:skip-unbuilt` leaves a service whose jar or exploded
+  classpath is not built alone (a `runtime.skipped` event) instead of failing with `runtime/missing-jar`. `:secrets-from` `{role {:env \"local2\"
+  :values {ENV value}}}` creates that role with those real secret values instead of the local fakes.
+  A host port that fails at bind when its container starts is moved (a `runtime.port-moved` event, runtime.edn rewritten) and the
+  reconcile runs again, at most 5 times.
+  -> `(status ws)`."
+  ([ws] (ensure! ws {}))
+  ([ws opts]
+   (loop [n 0]
+     (let [r (try (ensure-once! ws opts)
+                  (catch clojure.lang.ExceptionInfo e
+                    (if (and (< n 5) (= :runtime/port-conflict (:type (ex-data e))) (:at-start (ex-data e))
+                             (move-port! ws (:sink opts) e))
+                      ::again
+                      (throw e))))]
+       (if (= ::again r) (recur (inc n)) r)))))
 
 (defn- since-instant [ctr]
   (let [s (:StartedAt ctr)]
