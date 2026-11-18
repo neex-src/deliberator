@@ -5,6 +5,9 @@
   core:test {:doc "Run the core tests (clojure -M:test in core/). Pass A of the full recipe: with the estate DOWN the runtime tests own host ports 14566/15432; tests that need an already running Floci (DLB_TEST_FLOCI_URL, default :14566) skip. `bb core:test:all` runs both passes."
              :requires ([core-build])
              :task (do (core-build/ensure-jar!) (shell {:dir "core" :extra-env {"DELIBERATOR_LOCAL_ENDPOINT" (or (System/getenv "DLB_TEST_FLOCI_URL") "http://localhost:19")}} "clojure -M:test"))}
+  floci:measure {:doc "Which aws resource types the running Floci supports, MEASURED with real terraform runs (apply, refresh plan, destroy of a generated root per type of the AWS provider schema); raw output per type under .scratch/floci-measure/<date>/; --write FILE writes the data file the survey reads (core/resources/deliberator/floci-aws-types.edn); --classify-only re-derives the classes from the raw files; see bb/floci_measure.clj"
+                 :requires ([floci-measure])
+                 :task (apply floci-measure/-main *command-line-args*)}
   core:test:all {:doc "Both passes of the core suite: A = bb core:test with the estate down (its SKIPs are the estate-gated tests, counted); B = estate up (--ws W, default \"default\"), then every namespace that uses deftest-floci or estate-ws (derived, not listed) against it, red on any SKIP; estate down again unless --keep"
                  :requires ([core-test-all])
                  :task (apply core-test-all/-main *command-line-args*)}
