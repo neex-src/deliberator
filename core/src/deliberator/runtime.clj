@@ -477,9 +477,18 @@
   (some (fn [ctr] (when (some #(= port (:host_port %)) (:Ports ctr)) (first (:Names ctr))))
         (podman/list-containers c :all false)))
 
+(defn- still-open?
+  "`port-open?` that gives a port up to 3 s to close first: one this workspace's own container held a moment ago (removed for a
+  recreate) can still answer for a second, where a forwarder in front of the engine follows its listeners with a delay."
+  [host port]
+  (loop [n 0]
+    (cond (not (port-open? host port)) false
+          (>= n 15) true
+          :else (do (Thread/sleep 200) (recur (inc n))))))
+
 (defn- check-ports! [c d]
   (doseq [[cp hp] (:ports d)]
-    (when (port-open? (probe-host c) hp)
+    (when (still-open? (probe-host c) hp)
       (let [holder (port-holder c hp)]
         (throw (ex-info (str "host port " hp " (" (:role d) " :" cp ") is already in use"
                              (if holder (str " by container " holder) " by another process")
