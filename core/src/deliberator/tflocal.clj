@@ -24,7 +24,7 @@
             [deliberator.tfroot :as tfroot])
   (:import (java.io File)))
 
-(defn- declared-vars
+(defn declared-vars
   "The names of the variables the .tf files of `dir` declare."
   [^File dir]
   (set (mapcat #(map second (re-seq #"(?m)^\s*variable\s+\"([^\"]+)\"" (slurp %)))
@@ -42,22 +42,39 @@
         explicit (into {} (map (fn [[k v]] [(name k) (str v)])) vars)]
     (into (sorted-map) (merge (select-keys derived (declared-vars dir)) explicit))))
 
-(defn- scrubbed-env [ws data-dir]
-  (.mkdirs (.toFile (store/path ws "terraform-plugin-cache")))
-  (cond-> (-> (into {} (remove (fn [[k _]] (or (str/starts-with? k "AWS_") (str/starts-with? k "TF_DATA_DIR")))) (System/getenv))
-              (assoc "AWS_CONFIG_FILE" "/dev/null" "AWS_SHARED_CREDENTIALS_FILE" "/dev/null" "TF_IN_AUTOMATION" "1"
-                     "TF_PLUGIN_CACHE_DIR" (str (store/path ws "terraform-plugin-cache"))))
-    data-dir (assoc "TF_DATA_DIR" data-dir)))
+(def ^:private env-allowed
+  "What a Terraform run of the local runtime inherits from the daemon's environment: the shell basics, proxies, the ssh agent (a
+  git module of a private repository is fetched as the user's `terraform init` would), `TF_VAR_*` and `TF_CLI_*`. Nothing else:
+  a Datadog, GitHub, Vault or cloud token of the user's shell never reaches a provider that is not the emulator."
+  #"^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_[A-Z_]+|TERM|TMPDIR|TZ|SSH_AUTH_SOCK|XDG_[A-Z_]+|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|SSL_CERT_(FILE|DIR)|GIT_SSH_COMMAND|TF_VAR_.+|TF_CLI_.+|TF_REGISTRY_.+)$")
 
-(defn- run-streaming!
-  "`terraform args` in `dir` through `process/run!`: scrubbed environment, lines streamed as `tf.line`, the tree killed on
-  cancel or after `budget-ms` (`:process/timeout`, a `terraform apply` waiting on a state lock does not hold the request for ever)."
-  [ws ^File dir data-dir args sink on-cancel! budget-ms]
-  (process/run! (into ["terraform"] args)
-                {:dir dir :env (scrubbed-env ws data-dir) :on-cancel! on-cancel! :budget-ms budget-ms :what (str "terraform " (first args))
-                 :line! (fn [l] (when sink (sink {:event "tf.line" :line l})))}))
+(defn scrubbed-env
+  "The environment of a Terraform process: `env-allowed` only, plus what keeps it on the emulator and off every prompt: fake
+  AWS keys, `AWS_ENDPOINT_URL` (every aws service not named in the override's `endpoints` goes to the emulator too, never to the
+  real AWS), no metadata lookups, no shared config, git and ssh that never ask."
+  ([ws data-dir] (scrubbed-env ws data-dir nil))
+  ([ws data-dir endpoint]
+   (.mkdirs (.toFile (store/path ws "terraform-plugin-cache")))
+   (let [base (into {} (filter (fn [[k _]] (re-matches env-allowed k))) (System/getenv))]
+     (cond-> (assoc base
+                    "AWS_CONFIG_FILE" "/dev/null" "AWS_SHARED_CREDENTIALS_FILE" "/dev/null" "TF_IN_AUTOMATION" "1"
+                    "AWS_ACCESS_KEY_ID" "test" "AWS_SECRET_ACCESS_KEY" "test" "AWS_EC2_METADATA_DISABLED" "true"
+                    "GIT_TERMINAL_PROMPT" "0" "TF_PLUGIN_CACHE_DIR" (str (store/path ws "terraform-plugin-cache")))
+       (not (contains? base "GIT_SSH_COMMAND")) (assoc "GIT_SSH_COMMAND" "ssh -o BatchMode=yes -o ConnectTimeout=15")
+       endpoint (assoc "AWS_ENDPOINT_URL" endpoint)
+       data-dir (assoc "TF_DATA_DIR" data-dir)))))
 
-(defn- persist! [ws e action dir lines]
+(defn run-streaming!
+  "`terraform args` in `dir` through `process/run!`: scrubbed environment (`endpoint` as AWS_ENDPOINT_URL when given), lines
+  streamed as `tf.line`, the tree killed on cancel or after `budget-ms` (`:process/timeout`, a `terraform apply` waiting on a state
+  lock does not hold the request for ever)."
+  ([ws dir data-dir args sink on-cancel! budget-ms] (run-streaming! ws dir data-dir args sink on-cancel! budget-ms nil))
+  ([ws ^File dir data-dir args sink on-cancel! budget-ms endpoint]
+   (process/run! (into ["terraform"] args)
+                 {:dir dir :env (scrubbed-env ws data-dir endpoint) :on-cancel! on-cancel! :budget-ms budget-ms :what (str "terraform " (first args))
+                  :line! (fn [l] (when sink (sink {:event "tf.line" :line l})))})))
+
+(defn persist! [ws e action dir lines]
   (let [text (str/join "\n" lines)]
     (assoc (store/raw-put! ws (.getBytes ^String text "UTF-8")
                            {:source :file :op (str "terraform." action "-local") :env (:name e) :at (java.time.Instant/now)
@@ -72,7 +89,7 @@
          (case (:exit r) 0 true 1 false nil))
        (catch Exception _ nil)))
 
-(defn- prepare!
+(defn prepare!
   "Everything before `init`: the override file of root `d` (written when it is not the user's own and its text changed),
   its coverage check (`:tf/no-override` when an `aws` provider is left uncovered), the gitignore check. A root that already points
   its own providers at an emulator needs and gets no file. -> `{:exempt? :file :written? :services :state :data-dir :warnings
@@ -122,20 +139,21 @@
            :state (tfroot/state-path ws d) :data-dir (tfroot/data-dir ws d) :warnings warnings
            :pre-lines (mapv #(str "WARNING: " %) warnings)})))))
 
-(defn- run-action! [ws e dir ^File d prep action var-args all-vars sink on-cancel! budget-ms]
+(defn- run-action! [ws e dir ^File d prep action var-args all-vars sink on-cancel! budget-ms targets notes]
   (let [init-lines (volatile! [])
-        pre (:pre-lines prep)
+        pre (vec (concat (:pre-lines prep) notes))
+        endpoint (get-in e [:aws :endpoint])
         _ (when sink (doseq [l pre] (sink {:event "tf.line" :line l})))
         data-dir (:data-dir prep)
         [init res]
         (try
-          (let [init (run-streaming! ws d data-dir ["init" "-input=false" "-no-color"] sink on-cancel! budget-ms)
+          (let [init (run-streaming! ws d data-dir ["init" "-input=false" "-no-color"] sink on-cancel! budget-ms endpoint)
                 _ (vreset! init-lines (:lines init))]
             [init (if (zero? (:exit init))
                     (run-streaming! ws d data-dir (concat [action "-input=false" "-no-color"]
                                                           (when (and (:exempt? prep) (:state prep)) [(str "-state=" (:state prep))])
-                                                          (when (#{"apply" "destroy"} action) ["-auto-approve"]) var-args)
-                                    sink on-cancel! budget-ms)
+                                                          (when (#{"apply" "destroy"} action) ["-auto-approve"]) (map #(str "-target=" %) targets) var-args)
+                                    sink on-cancel! budget-ms endpoint)
                     init)])
           (catch clojure.lang.ExceptionInfo ex
             ;; killed (budget or cancel): what terraform printed so far is persisted before the typed error leaves
@@ -159,9 +177,11 @@
   `only-declared?` drops the explicit `vars` the root does not declare (several roots, one map).
   `on-cancel!` (the protocol's) kills terraform's process tree when the request is cancelled; `budget-ms` (default
   `process/default-budget-ms`, 10 min) bounds each terraform run (`:process/timeout`, the output so far persisted, `:sha`).
+  `targets` (resource addresses) becomes one `-target=` each, `notes` (text lines) are put in front of the persisted output
+  (`deliberator.tfsurvey/run-supported!` gives both: the resources that can run here and why the others do not).
   Throws `{:type :tf/local-only}` unless the environment is `:local`, `{:type :tf/no-root}` for a directory without .tf files,
   `{:type :tf/no-override}` for a root the override cannot cover."
-  [ws env-name {:keys [dir action vars sink on-cancel! budget-ms siblings only-declared?] :or {action "plan"}}]
+  [ws env-name {:keys [dir action vars sink on-cancel! budget-ms siblings only-declared? targets notes] :or {action "plan"}}]
   (let [e (env/load ws env-name)
         d (io/file (str dir))]
     (when-not (= :local (:kind e))
@@ -182,4 +202,4 @@
                      (cond-> {:action action :dir (str dir) :env (:name e) :exempt (boolean (:exempt? prep))
                               :override (select-keys prep [:file :written? :user-owned? :services :state])}
                        (seq (:warnings prep)) (assoc :warnings (:warnings prep))))
-        (run-action! ws e dir d (prepare! ws e d siblings) action var-args all-vars sink on-cancel! budget-ms)))))
+        (run-action! ws e dir d (prepare! ws e d siblings) action var-args all-vars sink on-cancel! budget-ms targets notes)))))
