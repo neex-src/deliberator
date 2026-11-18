@@ -92,6 +92,11 @@
         (let [k (slots pos)]
           (recur more (assoc args (keyword k) (coerce k (:type (schema k)) w)) (inc pos)))
 
+        ;; the last positional slot of type string[] takes every further word (`dlb terraform survey DIR1 DIR2 ...`)
+        (and (seq slots) (= "string[]" (:type (schema (peek slots)))))
+        (let [k (peek slots)]
+          (recur more (update args (keyword k) (fnil into []) (coerce k "string[]" w)) pos))
+
         :else (fail (str (:op entry) ": unexpected argument " (pr-str w))
                     :hint (str "positionals: " (if (seq slots) (str/join " " (map #(str "<" % ">") slots)) "none")
                                "; other arguments are --key value"))))))

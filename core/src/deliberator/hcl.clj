@@ -3,7 +3,8 @@
   literal string attributes in them. Enough to answer questions like \"which `provider \\\"aws\\\"` blocks does this root have\",
   \"what does this `terraform_remote_state` point at\", \"on which line is `aws_sqs_queue.inbox` declared\" without running
   Terraform. Comments and heredocs are skipped, strings with `${…}` are marked as templates and are never
-  literals, every expression that is not a plain string or an object is opaque (`{}`)."
+  literals, every expression that is not a plain string, a boolean or an object is opaque (`{}`, with `:expr` the source text of a short one:
+  a variable's `type = list(string)`)."
   (:require [clojure.java.io :as io]
             [clojure.string :as str])
   (:import (java.io File)))
@@ -106,7 +107,7 @@
             (and (= 1 (count expr)) (= :ident (:t (first expr))) (#{"true" "false"} (:v (first expr)))) {:bool (= "true" (:v (first expr)))}
             (and (seq expr) (punct? (first expr) "{") (punct? (peek expr) "}"))
             {:obj (:attrs (first (parse-body (subvec expr 1 (dec (count expr))) 0)))}
-            :else {})]
+            :else (if (and (seq expr) (<= (count expr) 24)) {:expr (str/join (map #(case (:t %) :str (str "\"" (:v %) "\"") :nl "" (:v %)) expr))} {}))]
     [(assoc v :line (:line (nth toks i (peek toks)))) end]))
 
 (defn- parse-body

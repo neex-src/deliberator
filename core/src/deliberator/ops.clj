@@ -76,6 +76,7 @@
     aws.discover env ws                            -> {env resources{kind [{name ref}]} errors}
     terraform.drift env file dir plan ws           -> {env source region declared matching missing[] undeclared[] errors}
     terraform.local dir* action env vars ws         -> {action dir env ok exit summary sha path output vars [override warnings]}   [tf.line]   (action vars: {action dir env vars} only; override: writes the override file, runs nothing)
+    terraform.survey dirs* env vars budget-s parallel latest ws -> {dirs env stamp folder roots[{name dir verdict problems[{class subject detail where source}] resources skipped[] folder}] not-roots[] summary table}   [survey.root survey.stage tf.line]   (finds the roots, reads the text, real init + plan against the local environment; never fails for a root)
     terraform.graph roots*                          -> {roots[{name dir}] edges[{from to via ref file line}] order[dir] unresolved[]}   (reads .tf files, evaluates nothing)
     terraform.apply-all roots* action env vars ws   -> {action env order ok failed skipped results[{dir ok exit summary sha path}]}   [tf.root tf.line]
     terraform.locate root* address*                 -> {file line address root}   (where a drift row's address is declared)
@@ -139,6 +140,7 @@
             [deliberator.ecstarget :as ecstarget]
             [deliberator.tfdrift :as tfdrift]
             [deliberator.tflocal :as tflocal]
+            [deliberator.tfsurvey :as tfsurvey]
             [deliberator.tfroot :as tfroot]
             [deliberator.awsmodel :as awsmodel]
             [deliberator.markers :as markers]
@@ -901,8 +903,20 @@
     (tfdrift/drift! ws env-name (cond-> {} file (assoc :file file) dir (assoc :dir dir) plan (assoc :plan plan)
                                         refresh (assoc :refresh true :vars vars :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx))))))
 
-(defn- terraform-local [ctx {:keys [env dir action vars] :as args}]
-  (tflocal/run! (ws-of args) (or env "local") {:dir dir :action (or action "plan") :vars vars :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)}))
+(defn- terraform-local [ctx {:keys [env dir action vars supported-only budget-s] :as args}]
+  (if supported-only
+    (tfsurvey/run-supported! (ws-of args) (or env "local") {:dir dir :action (or action "apply") :vars vars :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)
+                                                           :budget-ms (some-> budget-s (* 1000))})
+    (tflocal/run! (ws-of args) (or env "local") {:dir dir :action (or action "plan") :vars vars :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)})))
+
+(defn- terraform-survey [ctx {:keys [dirs env vars budget-s parallel latest] :as args}]
+  (let [ws (ws-of args)]
+    (if latest
+      (or (tfsurvey/latest ws) (fail :not-found "no terraform survey has been run in this workspace" :hint "dlb terraform survey DIR..."))
+      (do (when-not (seq dirs)
+            (fail :bad-args "terraform.survey: give at least one directory" :problems ["dirs"]))
+          (tfsurvey/survey! ws (or env "local") {:dirs dirs :vars vars :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)
+                                                 :budget-ms (some-> budget-s (* 1000)) :parallel parallel})))))
 
 (defn- terraform-graph [_ {:keys [roots]}]
   (when-not (seq roots)
@@ -911,8 +925,9 @@
 
 (defn- terraform-apply-all
   "`terraform.local` of every root in the order `terraform.graph` finds (reverse for destroy), stopping at the first root that
-  fails; the roots after it are `:skipped`. Explicit `vars` go to the roots that declare them."
-  [ctx {:keys [roots env action vars] :as args}]
+  fails; the roots after it are `:skipped`. Explicit `vars` go to the roots that declare them. `supported-only`: each root applies
+  only the resources that run on the local runtime (`tfsurvey/run-supported!`), a root where none can is reported (its skipped list and why) and the next root goes on."
+  [ctx {:keys [roots env action vars supported-only] :as args}]
   (when-not (seq roots)
     (fail :bad-args "terraform.apply-all: give at least one root directory" :problems ["roots"]))
   (let [ws (ws-of args)
@@ -925,11 +940,14 @@
         {:action action :env (or env "local") :order order :edges (:edges g) :ok true :results results}
         (do
           (when-let [emit! (:emit! ctx)] (emit! {:event "tf.root" :dir d :index i :of n :action action}))
-          (let [r (tflocal/run! ws (or env "local") {:dir d :action action :vars vars :only-declared? true :siblings order
-                                                      :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)})
-                row (select-keys r [:ok :exit :summary :sha :path :warnings])
+          (let [r (if supported-only
+                    (tfsurvey/run-supported! ws (or env "local") {:dir d :action action :vars (let [decl (tflocal/declared-vars (io/file d))] (into {} (filter (fn [[k _]] (decl (name k)))) vars))
+                                                                :siblings (remove #{d} order) :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)})
+                    (tflocal/run! ws (or env "local") {:dir d :action action :vars vars :only-declared? true :siblings order
+                                                       :sink (:emit! ctx) :on-cancel! (:on-cancel! ctx)}))
+                row (select-keys r [:ok :exit :summary :sha :path :warnings :skipped :verdict])
                 results (conj results (assoc row :dir d))]
-            (if (:ok r)
+            (if (or (:ok r) (and supported-only (:supported-only r) (empty? (:targets r))))
               (recur more results (inc i))
               {:action action :env (or env "local") :order order :edges (:edges g) :ok false :failed d :skipped (vec more) :results results})))))))
 
@@ -1525,7 +1543,17 @@
                           :args (ws-schema :roots {:type :strings :required true :positional true :doc "Terraform root directories, comma separated"}
                                            :action {:type :string :doc "apply (default), plan or destroy"}
                                            :env {:type :string :doc "local environment name (default local)"}
+                                           :supported-only {:type :bool :doc "apply/destroy only what runs on the local runtime in each root (terraform.local supported-only); every skipped resource is listed with its class"}
                                            :vars {:type :object :doc "explicit -var name value pairs for the roots that declare them"})}
+   "terraform.survey" {:fn terraform-survey :class :mutate
+                       :doc "Given ANY Terraform, what runs on the local runtime and what does not, and why. DIRs are repositories, folders of repositories or roots; every root is found (a directory with .tf files that no other directory of the scan calls as a module with a local source; a library module under modules/ that nobody calls and that has no provider or backend block is listed, not run), its text is read (providers, backend, resource and data types, variables without default, modules local / registry / git; nothing evaluated), then real `terraform init` and `plan` run against the local environment with the override file terraform.local writes (a variable without a default gets a placeholder, the row says so), `terraform graph` gives the dependencies, and `plan -target` of exactly the resources that can run is tried until it passes. Every root is ONE row: verdict runs / runs-partly / does-not-run and per problem a class: other-provider <name>, unsupported-service <aws type> (from the list measured against Floci, bb floci:measure), lookup <data address>, missing-var <name>, module-fetch <source>, other <first error line>. A root that crashes terraform, hangs (budget-s per terraform run, then the process tree is killed and the data source it waited for is named) or cannot init is a row, never an error. All raw output is persisted first under <ws>/terraform-survey/<stamp>/<root>/ (init.jsonl, graph.dot, plan-*.jsonl, row.json), with survey.txt (the table) and survey.json. `latest` answers the newest persisted survey with its age and runs nothing."
+                       :events ["survey.root" "survey.stage" "tf.line"]
+                       :args (ws-schema :dirs {:type :strings :required false :positional true :doc "directories: repositories, folders of repositories or roots, comma separated"}
+                                        :env {:type :string :doc "local environment name (default local)"}
+                                        :vars {:type :object :doc "explicit -var name value pairs for the roots that declare them"}
+                                        :budget-s {:type :int :doc "seconds per terraform run before it is killed (default 180)"}
+                                        :parallel {:type :int :doc "roots analysed at a time (default 1)"}
+                                        :latest {:type :bool :doc "show the newest persisted survey (with its age) and run nothing"})}
    "terraform.locate" {:fn terraform-locate :class :read
                        :doc "Where a Terraform address is declared in a root: the .tf file and the line (a cheap read of the files, no Terraform run). The address is a drift row's (aws_sqs_queue.inbox, module.stack.aws_sqs_queue.inbox[0], data.aws_vpc.default); a module with a local source is followed, a registry module answers its own block with module-only."
                        :args {:root {:type :string :required true :positional true :doc "Terraform root directory"}
@@ -1536,6 +1564,8 @@
                       :args (ws-schema :dir {:type :string :required true :doc "Terraform root directory"}
                                        :action {:type :string :doc "plan (default), apply, destroy, vars (only return the final -var values, run nothing) or override (only write the override file)"}
                                        :env {:type :string :doc "local environment name (default local)"}
+                                       :supported-only {:type :bool :doc "apply or destroy only the resources that run on the local runtime (type measured against Floci, dependencies all in; -target per resource); every skipped resource is listed with its class from terraform.survey"}
+                                       :budget-s {:type :int :doc "supported-only: seconds per analysis terraform run (default 180)"}
                                        :vars {:type :object :doc "explicit -var name value pairs, win over the derived ones"})}
    "aws.describe" {:fn aws-describe :class :read
                    :doc "The request shape of an AWS operation from the bundled service models (members, required, enums, nesting), for completion in step bodies of the aws kind."

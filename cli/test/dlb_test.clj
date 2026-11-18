@@ -511,6 +511,29 @@
     (is (str/includes? h "dlb terraform apply-all <roots>") h)
     (is (str/includes? h "[--action string]"))))
 
+(deftest terraform-survey-from-the-shell
+  ;; two roots that fail at `init` before any provider is downloaded: a row each, never an error, no network, no emulator
+  (let [roots "core/test/fixtures/tf-survey/roots"
+        r (dlb *home* "terraform" "survey" (str roots "/broken-syntax") (str roots "/git-module"))]
+    (testing "several directories are several words; the table is the daemon's text, exit 0 for a finished survey"
+      (is (zero? (:exit r)) (:err r))
+      (is (re-find #"VERDICT\s+ROOT\s+RUN/ALL\s+PROBLEMS" (:out r)) (:out r))
+      (is (re-find #"does-not-run\s+broken-syntax" (:out r)) (:out r))
+      (is (re-find #"does-not-run\s+git-module\s+-\s+module-fetch git::https://127.0.0.1:9/nobody/terraform-shared.git" (:out r)) (:out r))
+      (is (str/includes? (:out r) "2 root(s): 0 runs, 0 runs-partly, 2 does-not-run") (:out r)))
+    (testing "the survey is in the daemon's workspace as text, and `--latest` shows it again with its age"
+      (let [l (dlb *home* "terraform" "survey" "--latest")]
+        (is (zero? (:exit l)) (:err l))
+        (is (str/includes? (:out l) "cached: the survey of") (:out l))
+        (is (str/includes? (:out l) "module-fetch") (:out l))))
+    (testing "--json: the rows"
+      (let [j (:result (json-line (:out (dlb *home* "terraform" "survey" (str roots "/git-module") "--json"))))]
+        (is (= ["does-not-run"] (map :verdict (:roots j))))
+        (is (= "module-fetch" (get-in j [:roots 0 :problems 0 :class])))
+        (is (.exists (java.io.File. ^String (get-in j [:roots 0 :folder] "") "init.jsonl")) "the raw output of init is a file")))
+    (testing "no directory is a usage error"
+      (is (= 2 (:exit (dlb *home* "terraform" "survey")))))))
+
 ;; --- piece 10: explicit workspaces, typed log errors, ws ignored by ws-less ops ------------------------
 
 (deftest workspace-open-is-the-only-way-in-for-reads

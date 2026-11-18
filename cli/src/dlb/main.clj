@@ -60,7 +60,7 @@
   {"scenario.run" [:path] "scenario.generate" [:path] "scenario.parse" [:path] "logs.match" [:path] "repo.attach" [:path]
    "marker.add" [:file] "marker.remove" [:file] "marker.list" [:file]
    "terraform.local" [:dir] "terraform.drift" [:dir :file] "terraform.locate" [:root]
-   "terraform.graph" [:roots] "terraform.apply-all" [:roots]
+   "terraform.graph" [:roots] "terraform.apply-all" [:roots] "terraform.survey" [:dirs]
    "fake.replay" [:from] "fake.commit" [:repo :recording]})
 
 (defn- absolutize-path
