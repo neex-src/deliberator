@@ -1,7 +1,8 @@
 (ns estate
   "The estate on the local runtime: `bb estate:build|deploy|up|status|down [--ws W]`.
 
-  - build:  the hotswap service image when missing (estate/images/jbr21, `bb estate:image` rebuilds it), Maven (Java 21 JDK from
+  - build:  the hotswap service image when missing (estate/images/hotswap: Java 25, for this podman's architecture; `bb estate:image`
+            rebuilds it), Maven (Java 21 JDK from
             /usr/lib/jvm or $ESTATE_JAVA_HOME) -> estate/services/*/target/*.jar and target/dependency (the exploded classpath)
   - deploy: Floci must be up. Points the workspace's `local` environment at the runtime's host ports,
             `terraform apply` of estate/terraform/floci (scrubbed environment, fake credentials, plugin
@@ -79,14 +80,37 @@
         (loop [] (let [n (.read in buf)] (when (pos? n) (.update md buf 0 n) (recur))))))
     (apply str (map #(format "%02x" %) (.digest md)))))
 
-(def image-dir (str repo "/estate/images/jbr21"))
-(def image-ctx (str repo "/.scratch/images/jbr21/ctx"))
+(def image-dir (str repo "/estate/images/hotswap"))
+(def image-ctx (str repo "/.scratch/images/hotswap/ctx"))
+
+(defn engine-arch
+  "The architecture of the podman that builds and runs the image, as image.edn names it: amd64 or arm64. It is asked of
+  podman, not of this program: on a Mac the engine is the podman machine."
+  []
+  (let [a (str/trim (:out (p/shell {:continue true :out :string :err :string} "podman" "info" "--format" "{{.Host.Arch}}")))]
+    (case a
+      ("amd64" "x86_64") "amd64"
+      ("arm64" "aarch64") "arm64"
+      (throw (ex-info (str "image.edn has no JBR archive for the architecture podman reports: " (pr-str a)) {})))))
+
+(defn image-spec
+  "What to build for `major` (nil = image.edn's :default) on `arch`: {:image :jbr {:file :url :sha512} :hsa {..}}."
+  [major arch]
+  (let [{:keys [default jbr hsa]} (edn/read-string (slurp (str image-dir "/image.edn")))
+        major (str (or major default))
+        m (or (get jbr major)
+              (throw (ex-info (str "image.edn has no Java " major " image; it has: " (str/join ", " (sort (keys jbr)))) {})))]
+    {:image (:image m)
+     :jbr (or (get m arch) (throw (ex-info (str "image.edn has no Java " major " archive for " arch) {})))
+     :hsa hsa}))
 
 (defn image
-  "Builds the hotswap service image of image.edn (JBR + HotswapAgent) unless `podman image exists`; `force` rebuilds.
-  The archives are downloaded into .scratch/images/jbr21/ctx and verified there before the build."
-  [force]
-  (let [{:keys [image jbr hsa]} (edn/read-string (slurp (str image-dir "/image.edn")))]
+  "Builds a hotswap service image of image.edn (JBR + HotswapAgent) unless `podman image exists`; `force` rebuilds.
+  `major`: \"25\", \"21\"; nil = the default. The archives for this podman's architecture are downloaded into
+  .scratch/images/hotswap/ctx and verified there before the build."
+  [force & [major]]
+  (let [arch (engine-arch)
+        {:keys [image jbr hsa]} (image-spec major arch)]
     (if (and (not force) (zero? (:exit (p/shell {:continue true :out :string :err :string} "podman" "image" "exists" image))))
       (println "image" image "present")
       (do
@@ -98,7 +122,7 @@
             (when-not (= want (sha512 f))
               (fs/delete f)
               (throw (ex-info (str "checksum mismatch for " url) {})))))
-        (step (str "podman build " image)
+        (step (str "podman build " image " (" arch ")")
               #(p/shell "podman" "build" "-t" image "-f" (str image-dir "/Containerfile")
                         "--build-arg" (str "JBR_FILE=" (:file jbr)) "--build-arg" (str "JBR_SHA512=" (:sha512 jbr))
                         "--build-arg" (str "HSA_FILE=" (:file hsa)) "--build-arg" (str "HSA_SHA512=" (:sha512 hsa))

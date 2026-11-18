@@ -1,6 +1,6 @@
 # Service image of the estate: JetBrains Runtime (jbrsdk, -XX:+AllowEnhancedClassRedefinition) + HotswapAgent
-# (decision 43). Built by `bb estate:build` from the build context .scratch/images/jbr21/ctx, which holds the two
-# archives named by image.edn (downloaded and checksum-verified on the host).
+# (decision 43). Built by `bb estate:build` from the build context .scratch/images/hotswap/ctx, which holds the two
+# archives image.edn names for the Java major and this podman's architecture (downloaded and checksum-verified on the host).
 FROM docker.io/library/debian:stable-slim AS fetch
 ARG JBR_FILE
 ARG JBR_SHA512

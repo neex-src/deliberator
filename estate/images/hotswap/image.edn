@@ -1,0 +1,22 @@
+;; The one record of the hotswap service images (JBR + HotswapAgent): their names (core's default image carries the name of
+;; the :default one) and the archives `bb estate:build` downloads into .scratch/images/hotswap/ctx and verifies.
+;; One JBR archive per major and per architecture: the image is built for the architecture of the podman that builds it
+;; (`podman info`: amd64 on a PC, arm64 on an Apple Silicon Mac). `bb estate:image` builds the default, `bb estate:image 21` that one.
+{:default "25"
+ :hsa {:file "hotswap-agent-2.0.5.jar"
+       :url "https://github.com/HotswapProjects/HotswapAgent/releases/download/RELEASE-2.0.5/hotswap-agent-2.0.5.jar"
+       :sha512 "35cafe222b314c00c4bdd3c505d5867def6840a65a85285b86b28851bdc4aa76c3fa6649ac53db43bcbe04f87e1abb395e869cd61a7954bd48fbcbf8ee72e7a7"}
+ :jbr {"25" {:image "localhost/deliberator/jbr25-hotswap:25.0.5"
+             "amd64" {:file "jbrsdk-25.0.5.0.3-linux-x64-b700.17.tar.gz"
+                      :url "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-25.0.5.0.3-linux-x64-b700.17.tar.gz"
+                      :sha512 "517ecc8fc4fc6937ec4b0c2063dcd56dff9b79c497b1b73ff3c2c2cd2f3cda8ea58e034dfaca8087389281c68cf2a5f5fff5f29d0a619c0715b52aa919dd5885"}
+             "arm64" {:file "jbrsdk-25.0.5.0.3-linux-aarch64-b700.17.tar.gz"
+                      :url "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-25.0.5.0.3-linux-aarch64-b700.17.tar.gz"
+                      :sha512 "f5e306e008037f8118419bdcf1e0c70f42f549e946f285a9f592c7a59eefee0b0c0c4e5fc1a29534bcf727d72e42dd6eb622e7540479c1741daecfe0c941981f"}}
+       "21" {:image "localhost/deliberator/jbr21-hotswap:21.0.11"
+             "amd64" {:file "jbrsdk-21.0.11-linux-x64-b1163.116.tar.gz"
+                      :url "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-21.0.11-linux-x64-b1163.116.tar.gz"
+                      :sha512 "13d0aab4bcfa9e4f77a696b97d3998f7e82e22f7f1362d8ce97f0d50d69dddd9331a66ada3fe92c04e544795fc247bcbaf586ad0415df4eda5e0e0505753888f"}
+             "arm64" {:file "jbrsdk-21.0.11-linux-aarch64-b1163.116.tar.gz"
+                      :url "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-21.0.11-linux-aarch64-b1163.116.tar.gz"
+                      :sha512 "88a1d5cabcdb258bcf2d9fc3fa3695e2321ed46633596e979250966a14a93ec08e2f285d3a5dbd2510965e5a9ef9c1f3b87a1b43b19d643caa5f1726f8f02958"}}}}

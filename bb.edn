@@ -32,9 +32,9 @@
   runtime:down {:doc "Remove this workspace's runtime containers (through the daemon; --no-daemon for a one-shot JVM)"
                 :requires ([daemon-client])
                 :task (apply daemon-client/-main "down" *command-line-args*)}
-  estate:image {:doc "Rebuild the hotswap service image (JBR 21 + HotswapAgent, estate/images/jbr21); estate:build builds it only when missing"
+  estate:image {:doc "Rebuild the hotswap service image (JBR + HotswapAgent, estate/images/hotswap/image.edn) for this podman's architecture (amd64, arm64); arg: the Java major, 25 (default) or 21; estate:build builds the default only when missing"
                 :requires ([estate])
-                :task (estate/image true)}
+                :task (estate/image true (first *command-line-args*))}
   estate:build {:doc "Build the hotswap service image when missing, then the estate services (Maven, JDK 21)"
                 :requires ([estate])
                 :task (estate/build)}
