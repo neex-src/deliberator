@@ -1,0 +1,89 @@
+# Chapter 15: any Terraform: what runs on this machine, what does not, and why
+#
+# Deliberator will be pointed at a company's real Terraform: other providers (Datadog, Zscaler, Vault), AWS services the emulator
+# does not have, `data` lookups of things that only exist in the real account, variables without defaults, modules in git
+# repositories that cannot be fetched, data sources that never answer. None of it runs cleanly, and none of it may crash the tool.
+# `terraform.survey` finds every root under the directories it is given, reads its text, then makes REAL Terraform say it: init, plan
+# (with the override file `terraform.local` writes), the dependency graph, and a plan of exactly the resources that can run. One row per
+# root: a verdict (runs / runs-partly / does-not-run) and per problem a class (other-provider, unsupported-service, lookup, missing-var,
+# module-fetch, other). The raw output of every Terraform call is kept first, in the survey's folder, as text.
+# Then `terraform.local` with `supported-only` applies only what runs and lists every skipped resource with its class.
+# The fixtures are the repository's own (core/test/fixtures/tf-survey), one root per class, copied so nothing is written into them.
+# In the IDE: the same operations are in the Operations form (terraform.survey, terraform.local).
+# @env local
+
+### shell paths
+# @cwd ..
+# @capture root = out
+pwd | tr -d '\n'
+
+### shell copy-the-fixtures
+# A folder of "repositories" (one root per class, one module they share, one library module nobody calls).
+# @capture copy = out
+d="{{root}}/.scratch/tour15"
+rm -rf "$d" && mkdir -p "$d"
+cp -r "{{root}}/core/test/fixtures/tf-survey/." "$d/"
+git init -q "$d"
+printf %s "$d"
+
+### op terraform.survey survey
+# Nine roots in the folder (the module `queue` is a module of `with-module`, `unused-library` is a library nobody calls: both listed,
+# neither run). The `hang` root has a data source that sleeps for ten minutes: every Terraform run has 60 s here, then its process
+# tree is killed and the data source it was waiting for is named.
+# @timeout 15m
+# @capture folder = $.folder
+# @assert $.summary.runs == 2
+# @assert $.summary.runs-partly == 5
+# @assert $.summary.does-not-run == 2
+# @assert $.roots[0].verdict == does-not-run
+# @assert $.roots[1].verdict == does-not-run
+# @assert $.roots[2].verdict == runs-partly
+# @assert $.roots[3].verdict == runs-partly
+# @assert $.roots[3].skipped[0].via == data.aws_vpc.main
+# @assert $.roots[4].verdict == runs-partly
+# @assert $.roots[5].verdict == runs-partly
+# @assert $.roots[6].verdict == runs
+# @assert $.roots[7].verdict == runs-partly
+# @assert $.roots[8].verdict == runs
+# @assert $.table contains unsupported-service aws_xray_group
+# @assert $.table contains other-provider datadog
+# @assert $.table contains missing-var environment
+# @assert $.table contains module-fetch
+# @assert $.table contains lookup data.external.slow
+{"dirs": ["{{copy}}"], "budget-s": 60}
+
+### shell the-table
+# The table is a text file in the survey's folder, with the raw output of every Terraform call beside it (init.jsonl, graph.dot, plan-*.jsonl).
+# @assert out contains VERDICT
+# @assert out contains lookup data.aws_vpc.main
+cat "{{folder}}/survey.txt" | head -40
+
+### op terraform.survey again
+# Asking for the latest answers at once from the persisted copy, with its age, and runs nothing.
+# @assert $.table contains VERDICT
+{"latest": true}
+
+### op terraform.local apply-what-runs
+# `supported-only`: the root `unsupported-type` has a queue and an X-Ray group; Floci has no X-Ray. Only the queue is applied
+# (`-target`), the group is listed as skipped with its class.
+# @timeout 8m
+# @assert $.ok == true
+# @assert $.summary contains Apply complete! Resources: 1 added
+# @assert $.skipped[0].address == aws_xray_group.slow
+# @assert $.skipped[0].class == unsupported-service
+{"dir": "{{copy}}/roots/unsupported-type", "action": "apply", "supported-only": true, "budget-s": 120}
+
+### aws sqs.ListQueues the-queue
+# It really is on the emulator.
+# @assert $.QueueUrls[0] contains svy-unsupported-plain
+{"QueueNamePrefix": "svy-unsupported"}
+
+### op terraform.local destroy-what-runs
+# Destroy works the same way.
+# @timeout 8m
+# @assert $.ok == true
+# @assert $.summary contains Destroy complete! Resources: 1 destroyed
+{"dir": "{{copy}}/roots/unsupported-type", "action": "destroy", "supported-only": true, "budget-s": 120}
+
+### shell clean-up
+rm -rf "{{copy}}"
