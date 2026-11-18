@@ -479,12 +479,17 @@
 
 (defn- still-open?
   "`port-open?` that gives a port up to 3 s to close first: one this workspace's own container held a moment ago (removed for a
-  recreate) can still answer for a second, where a forwarder in front of the engine follows its listeners with a delay."
+  recreate) can still answer for a second, where a forwarder in front of the engine follows its listeners with a delay.
+  Only a refused connection counts as closed: a port that stops answering (a listener whose backlog is full) is still taken."
   [host port]
-  (loop [n 0]
-    (cond (not (port-open? host port)) false
-          (>= n 15) true
-          :else (do (Thread/sleep 200) (recur (inc n))))))
+  (let [state (fn [] (try (with-open [s (Socket.)] (.connect s (InetSocketAddress. ^String host (int port)) 300) :open)
+                          (catch java.net.SocketTimeoutException _ :silent)
+                          (catch java.io.IOException _ :closed)))]
+    (and (port-open? host port)
+         (loop [n 0]
+           (cond (= :closed (state)) false
+                 (>= n 14) true
+                 :else (do (Thread/sleep 200) (recur (inc n))))))))
 
 (defn- check-ports! [c d]
   (doseq [[cp hp] (:ports d)]
