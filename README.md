@@ -1,5 +1,7 @@
 # Deliberator
 
+All the code here is written by AI (Claude Code) and has not been reviewed.
+
 Deliberator runs a system of AWS microservices on your own machine, and lets you drive it from
 IntelliJ.
 
@@ -25,7 +27,7 @@ The parts:
 ## What you need
 
 - git, bb, Podman (`brew install podman`, then once `podman machine init && podman machine start`)
-- Java 21 or newer and the Clojure CLI, to build the daemon
+- Java 21 or newer (the example estate is Java 21) and the Clojure CLI
 - Maven and Terraform, for the example estate
 - IntelliJ IDEA 2026.2 or 2026.3
 - `act`, only for chapter 14 (a GitHub Actions workflow run locally)
@@ -66,6 +68,6 @@ Plugin from Disk, pick the zip, restart.
   confirmation (or is refused when the environment is read only), every call is written to
   `audit.log` and secret values are blanked out before they reach the disk.
 - The Generate action (scenario steps from a description) runs `claude -p` from Claude Code. Only
-  when you use it; without Claude Code it just fails.
+  when you use it; without Claude Code it fails.
 
 How it is built inside: `docs/architecture.md`.
