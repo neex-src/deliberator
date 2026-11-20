@@ -26,7 +26,7 @@ The parts:
 
 ## What you need
 
-- git, bb, Podman (`brew install podman`, then once `podman machine init && podman machine start`)
+- git, bb ([babashka](https://babashka.org)), [Podman](https://podman.io)
 - Java 21 or newer (the example estate is Java 21) and the Clojure CLI
 - Maven and Terraform, for the example estate
 - IntelliJ IDEA 2026.2 or 2026.3
